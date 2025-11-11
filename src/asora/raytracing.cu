@@ -10,22 +10,11 @@
 #include <cuda/std/utility>
 #include <exception>
 
-// ========================================================================
-// Define macros. Could be passed as parameters but are kept as
-// compile-time constants for now
-// ========================================================================
-#define FOURPI 12.566370614359172463991853874177  // 4π
-#define INV4PI 0.079577471545947672804111050482   // 1/4π
-#define SQRT3 1.73205080757                       // Square root of 3
-#define SQRT2 1.41421356237                       // Square root of 2
-#define MAX_COLDENSH 2e30    // Column density limit (rates are set to zero above this)
 #define CUDA_BLOCK_SIZE 256  // Size of blocks used to treat sources
 
-// ========================================================================
-// Utility Device Functions
-// ========================================================================
-
 namespace {
+
+    constexpr double max_coldensh = 2e30;
 
     // Fortran-type modulo function (C modulo is signed)
     __host__ __device__ int modulo(int a, int b) { return (a % b + b) % b; }
@@ -106,7 +95,7 @@ namespace asora {
         //  radius. Currently, this is set s.t. the radius equals the distance from
         //  the source to the middle of the faces of the octahedron. To raytrace the
         //  whole box, the octahedron bust be 1.5*N in size
-        int max_q = std::ceil(SQRT3 * min(R, SQRT3 * m1 / 2.0));
+        int max_q = std::ceil(c::sqrt3<> * min(R, c::sqrt3<> * m1 / 2.0));
 
         // CUDA Grid size: since 1 block = 1 source, this sets the number of sources
         // treated in parallel
@@ -239,6 +228,7 @@ namespace asora {
 
                 auto dist2 =
                     (dr * i) * (dr * i) + (dr * j) * (dr * j) + (dr * k) * (dr * k);
+                const bool at_origin = (i == 0) && (j == 0) && (k == 0);
 
                 // Center to source
                 i += i0;
@@ -250,7 +240,7 @@ namespace asora {
                 if (!in_box_gpu(i, j, k, m1)) continue;
 #endif
                 // Map to periodic grid
-                auto offset = mem_offst_gpu(i, j, k, m1);
+                const auto offset = mem_offst_gpu(i, j, k, m1);
 
                 // Get local ionization fraction & neutral Hydrogen density in the cell
                 double nHI_p = ndens[offset] * (1.0 - xh_av[offset]);
@@ -266,14 +256,13 @@ namespace asora {
                 auto [coldensh_in, path] =
                     cinterp_gpu(i, j, k, i0, j0, k0, coldensh_out, sig, m1);
                 path *= dr;
-                auto vol_ph = (i == i0 && j == j0 && k == k0) ? dr * dr * dr
-                                                              : dist2 * path * FOURPI;
+                auto vol_ph = (at_origin) ? dr * dr * dr : 4 * c::pi<> * dist2 * path;
 
                 // Compute outgoing column density and add to array for
                 // subsequent interpolations
                 coldensh_out[offset] = coldensh_in + nHI_p * path;
 
-                if (coldensh_in > MAX_COLDENSH) continue;
+                if (coldensh_in > max_coldensh) continue;
 
                 // Reducing the following calculation changes the numerical precision of
                 // the result, albeit the physical result doesn't.
@@ -397,9 +386,9 @@ namespace asora {
 
         // Take care of diagonals
         if (ak == 1 && ai == 1 && aj == 1)
-            cdensi *= SQRT3;
+            cdensi *= c::sqrt3<>;
         else if (ak == 1 && (ai == 1 || aj == 1))
-            cdensi *= SQRT2;
+            cdensi *= c::sqrt2<>;
 
         return cuda::std::make_pair(cdensi, path);
     }
