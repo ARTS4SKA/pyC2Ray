@@ -23,7 +23,7 @@ endif
 
 py = import('python').find_installation(pure: false)
 py_dep = py.dependency()
-np_dep = dependency('numpy')
+np_dep = dependency('numpy', version: '>=2', method: 'config-tool')
 
 subdir('src/c2ray')
 subdir('src/asora')
