@@ -1,5 +1,7 @@
 #pragma once
 
+#include "utils.cuh"
+
 namespace asora {
 
     // Allocate grid memory
@@ -8,14 +10,14 @@ namespace asora {
     // Deallocate grid memory
     void device_close();
 
-    // Copy density grid to device memory
-    void density_to_device(double *, int);
-
-    // Copy radiation tables to device memory
-    void photo_table_to_device(double *, double *, int);
-
-    // Copy source positions & fluxes to device memory
-    void source_data_to_device(int *, double *, int);
+    template <typename T>
+    void array_to_device(T *&dst, const T *src, size_t nbytes) {
+        try {
+            safe_cuda(cudaMalloc(&dst, nbytes));
+            safe_cuda(cudaMemcpy(dst, src, nbytes, cudaMemcpyHostToDevice));
+        } catch (const std::exception &) {
+        }
+    }
 
     // Pointers to device memory
     extern double *cdh_dev;

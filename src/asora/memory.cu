@@ -86,53 +86,6 @@ namespace asora {
     }
 
     // ========================================================================
-    // Utility functions to copy data to device
-    // ========================================================================
-    void density_to_device(double *ndens, int N) {
-        try {
-            safe_cuda(cudaMemcpy(
-                n_dev, ndens, N * N * N * sizeof(double), cudaMemcpyHostToDevice
-            ));
-        } catch (const std::exception &) {
-        }
-    }
-
-    void photo_table_to_device(double *thin_table, double *thick_table, int num_tau) {
-        auto bytesize = num_tau * sizeof(double);
-        try {
-            // Copy thin table
-            safe_cuda(cudaMalloc(&photo_thin_table_dev, bytesize));
-            safe_cuda(cudaMemcpy(
-                photo_thin_table_dev, thin_table, bytesize, cudaMemcpyHostToDevice
-            ));
-            // Copy thick table
-            safe_cuda(cudaMalloc(&photo_thick_table_dev, bytesize));
-            safe_cuda(cudaMemcpy(
-                photo_thick_table_dev, thick_table, bytesize, cudaMemcpyHostToDevice
-            ));
-        } catch (const std::exception &) {
-        }
-    }
-
-    void source_data_to_device(int *pos, double *flux, int num_src) {
-        // Free arrays from previous evolve call
-        try {
-            // Copy positions
-            safe_cuda(cudaMalloc(&src_pos_dev, 3 * num_src * sizeof(int)));
-            safe_cuda(cudaMemcpy(
-                src_pos_dev, pos, 3 * num_src * sizeof(int), cudaMemcpyHostToDevice
-            ));
-
-            // Copy strengths
-            safe_cuda(cudaMalloc(&src_flux_dev, num_src * sizeof(double)));
-            safe_cuda(cudaMemcpy(
-                src_flux_dev, flux, num_src * sizeof(double), cudaMemcpyHostToDevice
-            ));
-        } catch (const std::exception &) {
-        }
-    }
-
-    // ========================================================================
     // Deallocate device memory at the end of a run
     // ========================================================================
     void device_close() {

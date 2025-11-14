@@ -7,9 +7,8 @@ namespace asora {
 
     // Raytrace all sources and compute photoionization rates
     void do_all_sources_gpu(
-        double R, double *coldensh_out, double sig, double dr, double *ndens,
-        double *xh_av, double *phi_ion, int num_src, int m1, double minlogtau,
-        double dlogtau, int num_tau
+        double R, double sig, double dr, const double *xh_av, double *phi_ion,
+        int num_src, int m1, double minlogtau, double dlogtau, int num_tau
     );
 
     // Raytracing kernel, called by do_all_sources

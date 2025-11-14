@@ -24,23 +24,6 @@ namespace {
         return N * N * modulo(i, N) + N * modulo(j, N) + modulo(k, N);
     }
 
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 600
-    // atomicAdd definition for GPUs with compute capability < 6.0
-    __inline__ __device__ double atomicAdd(double *address, double val) {
-        unsigned long long int *address_as_ull = (unsigned long long int *)address;
-        unsigned long long int old = *address_as_ull, assumed;
-        if (val == 0.0) return __longlong_as_double(old);
-        do {
-            assumed = old;
-            old = atomicCAS(
-                address_as_ull, assumed,
-                __double_as_longlong(val + __longlong_as_double(assumed))
-            );
-        } while (assumed != old);
-        return __longlong_as_double(old);
-    }
-#endif
-
 #if !defined(PERIODIC)
     // Check if point is in domain
     __device__ bool in_box_gpu(int i, int j, int k, int N) {
@@ -84,9 +67,8 @@ namespace asora {
     // Raytrace all sources and add up ionization rates
     // ========================================================================
     void do_all_sources_gpu(
-        double R, double *coldensh_out, double sig, double dr, double *ndens,
-        double *xh_av, double *phi_ion, int num_src, int m1, double minlogtau,
-        double dlogtau, int num_tau
+        double R, double sig, double dr, const double *xh_av, double *phi_ion,
+        int num_src, int m1, double minlogtau, double dlogtau, int num_tau
     ) {
         // Byte-size of grid data
         auto meshsize = m1 * m1 * m1 * sizeof(double);
@@ -149,9 +131,6 @@ namespace asora {
             // Copy the accumulated ionization fraction back to the host
             // Memcpy blocks until last kernel has finished
             safe_cuda(cudaMemcpy(phi_ion, phi_dev, meshsize, cudaMemcpyDeviceToHost));
-            safe_cuda(
-                cudaMemcpy(coldensh_out, cdh_dev, meshsize, cudaMemcpyDeviceToHost)
-            );
         } catch (const std::exception &) {
         }
     }
