@@ -54,16 +54,15 @@ def setup_do_all_sources(
         )
 
         # Allocate tables to GPU device
-        asora.photo_table_to_device(photo_thin_table, photo_thick_table, num_tau)
+        asora.photo_table_to_device(photo_thin_table, photo_thick_table)
 
         size = mesh_size**3
-        coldensh_out = np.zeros(size, dtype=np.float64)
-        phi_ion = np.zeros(size, dtype=np.float64)
+        phi_ion = np.empty(size, dtype=np.float64)
         ndens = np.full(size, 1e-3, dtype=np.float64)
         xHII = np.full(size, 1e-4, dtype=np.float64)
 
         # Copy density field to GPU device
-        asora.density_to_device(ndens, mesh_size)
+        asora.density_to_device(ndens)
 
         # Efficiency factor (converting mass to photons)
         f_gamma = 100.0
@@ -75,7 +74,7 @@ def setup_do_all_sources(
         norm_flux *= f_gamma / 1e48
 
         # Copy source list to GPU device
-        asora.source_data_to_device(src_pos, norm_flux, num_sources)
+        asora.source_data_to_device(src_pos, norm_flux)
 
         # Size of a cell
         box = 50.0 * u.pc
@@ -83,10 +82,8 @@ def setup_do_all_sources(
 
         yield (
             R_max,
-            coldensh_out,
             sigma_HI_at_ion_freq,
             dr,
-            ndens,
             xHII,
             phi_ion,
             num_sources,
@@ -103,7 +100,7 @@ def test_do_all_sources():
 
         expected_phi_ion = np.load("tests/data/photo_ionization_rate.npy")
 
-        phi_ion = args[6] * 1e40
+        phi_ion = args[4] * 1e40
         expected_phi_ion *= 1e40
 
         assert np.allclose(phi_ion, expected_phi_ion)

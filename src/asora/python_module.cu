@@ -15,15 +15,46 @@
 // is passed directly to the C++ functions without additional type checking.
 // ===========================================================================
 
+namespace {
+
+    template <typename T>
+    NPY_TYPES getNpyType();
+
+    template <>
+    NPY_TYPES getNpyType<double>() {
+        return NPY_DOUBLE;
+    }
+
+    template <>
+    NPY_TYPES getNpyType<int>() {
+        return NPY_INT;
+    }
+
+    template <typename T>
+    PyObject *numpy_array_to_device(const PyArrayObject *array, T *&dst_dev) {
+        if (!PyArray_Check(array) || PyArray_TYPE(array) != getNpyType<T>()) {
+            using namespace std::string_literals;
+            std::string msg =
+                "array must be a numpy NDArray of type "s + typeid(T).name();
+            PyErr_SetString(PyExc_TypeError, msg.c_str());
+            return NULL;
+        }
+
+        auto data = static_cast<T *>(PyArray_DATA(array));
+        auto size = static_cast<size_t>(PyArray_NBYTES(array));
+        asora::array_to_device(dst_dev, data, size);
+        return Py_None;
+    }
+
+}  // namespace
+
 // ========================================================================
 // Raytrace all sources and compute photoionization rates
 // ========================================================================
 static PyObject *asora_do_all_sources(PyObject *self, PyObject *args) {
     double R;
-    PyArrayObject *coldensh_out;
     double sig;
     double dr;
-    PyArrayObject *ndens;
     PyArrayObject *xh_av;
     PyArrayObject *phi_ion;
     int NumSrc;
@@ -33,26 +64,27 @@ static PyObject *asora_do_all_sources(PyObject *self, PyObject *args) {
     int num_tau;
 
     if (!PyArg_ParseTuple(
-            args, "dOddOOOiiddi", &R, &coldensh_out, &sig, &dr, &ndens, &xh_av,
-            &phi_ion, &NumSrc, &m1, &minlogtau, &dlogtau, &num_tau
+            args, "dddOOiiddi", &R, &sig, &dr, &xh_av, &phi_ion, &NumSrc, &m1,
+            &minlogtau, &dlogtau, &num_tau
         ))
         return NULL;
 
     // Error checking
-    if (!PyArray_Check(coldensh_out) || PyArray_TYPE(coldensh_out) != NPY_DOUBLE) {
-        PyErr_SetString(PyExc_TypeError, "coldensh_out must be Array of type double");
+    if (!PyArray_Check(xh_av) || PyArray_TYPE(xh_av) != NPY_DOUBLE) {
+        PyErr_SetString(PyExc_TypeError, "xh_av must be Array of type double");
+        return NULL;
+    }
+    if (!PyArray_Check(phi_ion) || PyArray_TYPE(phi_ion) != NPY_DOUBLE) {
+        PyErr_SetString(PyExc_TypeError, "phi_ion must be Array of type double");
         return NULL;
     }
 
     // Get Array data
-    auto coldensh_out_data = static_cast<double *>(PyArray_DATA(coldensh_out));
-    auto ndens_data = static_cast<double *>(PyArray_DATA(ndens));
-    auto phi_ion_data = static_cast<double *>(PyArray_DATA(phi_ion));
     auto xh_av_data = static_cast<double *>(PyArray_DATA(xh_av));
+    auto phi_ion_data = static_cast<double *>(PyArray_DATA(phi_ion));
 
     asora::do_all_sources_gpu(
-        R, coldensh_out_data, sig, dr, ndens_data, xh_av_data, phi_ion_data, NumSrc, m1,
-        minlogtau, dlogtau, num_tau
+        R, sig, dr, xh_av_data, phi_ion_data, NumSrc, m1, minlogtau, dlogtau, num_tau
     );
 
     return Py_None;
@@ -85,12 +117,10 @@ static PyObject *asora_device_close(PyObject *self, PyObject *args) {
 // Copy density grid to GPU
 // ========================================================================
 static PyObject *asora_density_to_device(PyObject *self, PyObject *args) {
-    int N;
     PyArrayObject *ndens;
-    if (!PyArg_ParseTuple(args, "Oi", &ndens, &N)) return NULL;
+    if (!PyArg_ParseTuple(args, "O", &ndens)) return NULL;
 
-    auto ndens_data = static_cast<double *>(PyArray_DATA(ndens));
-    asora::density_to_device(ndens_data, N);
+    if (auto ret = numpy_array_to_device(ndens, asora::n_dev); !ret) return nullptr;
 
     return Py_None;
 }
@@ -99,15 +129,15 @@ static PyObject *asora_density_to_device(PyObject *self, PyObject *args) {
 // Copy radiation table to GPU
 // ========================================================================
 static PyObject *asora_photo_table_to_device(PyObject *self, PyObject *args) {
-    int num_tau;
     PyArrayObject *thin_table;
     PyArrayObject *thick_table;
-    if (!PyArg_ParseTuple(args, "OOi", &thin_table, &thick_table, &num_tau))
-        return NULL;
+    if (!PyArg_ParseTuple(args, "OO", &thin_table, &thick_table)) return NULL;
 
-    auto thin_table_data = static_cast<double *>(PyArray_DATA(thin_table));
-    auto thick_table_data = static_cast<double *>(PyArray_DATA(thick_table));
-    asora::photo_table_to_device(thin_table_data, thick_table_data, num_tau);
+    if (auto ret = numpy_array_to_device(thin_table, asora::photo_thin_table_dev); !ret)
+        return nullptr;
+    if (auto ret = numpy_array_to_device(thick_table, asora::photo_thick_table_dev);
+        !ret)
+        return nullptr;
 
     return Py_None;
 }
@@ -116,15 +146,13 @@ static PyObject *asora_photo_table_to_device(PyObject *self, PyObject *args) {
 // Copy source data to GPU
 // ========================================================================
 static PyObject *asora_source_data_to_device(PyObject *self, PyObject *args) {
-    int NumSrc;
     PyArrayObject *pos;
     PyArrayObject *flux;
-    if (!PyArg_ParseTuple(args, "OOi", &pos, &flux, &NumSrc)) return NULL;
+    if (!PyArg_ParseTuple(args, "OO", &pos, &flux)) return NULL;
 
-    auto pos_data = static_cast<int *>(PyArray_DATA(pos));
-    auto flux_data = static_cast<double *>(PyArray_DATA(flux));
-
-    asora::source_data_to_device(pos_data, flux_data, NumSrc);
+    if (auto ret = numpy_array_to_device(pos, asora::src_pos_dev); !ret) return nullptr;
+    if (auto ret = numpy_array_to_device(flux, asora::src_flux_dev); !ret)
+        return nullptr;
 
     return Py_None;
 }
