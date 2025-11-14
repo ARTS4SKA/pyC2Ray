@@ -9,6 +9,7 @@ import yaml
 from astropy import constants as cst
 from astropy import units as u
 from astropy.cosmology import FlatLambdaCDM, z_at_value
+from mpi4py import MPI
 
 try:
     from yaml import CSafeLoader as SafeLoader
@@ -109,8 +110,6 @@ class C2Ray:
 
         # MPI setup
         if self.mpi:
-            from mpi4py import MPI
-
             self.mpi = MPI
             self.comm = self.mpi.COMM_WORLD
             self.rank = self.comm.Get_rank()
@@ -247,75 +246,43 @@ class C2Ray:
             )
 
         NumSrc = src_flux.shape[0]
-        # TODO: this is a bit ugly but it works:
-        # if the number of sources exceed the number of MPI processors then call the evolve designed for the MPI source splitting.
-        # otherwise: all ranks are calling (independently) the evolve with no source splitting until the condition above is meet.
-        if NumSrc >= self.nprocs and self.mpi:
-            self.xh, self.phi_ion, self.coldens = evolve3D(
-                dt=dt,
-                dr=self.dr,
-                src_flux=src_flux,
-                src_pos=src_pos,
-                use_gpu=self.gpu,
-                max_subbox=self.max_subbox,
-                subboxsize=self.subboxsize,
-                loss_fraction=self.loss_fraction,
-                use_mpi=self.mpi,
-                comm=self.comm,
-                rank=self.rank,
-                nprocs=self.nprocs,
-                temp=self.temp,
-                ndens=self.ndens,
-                xh=self.xh,
-                clump=self.clumping_factor,
-                photo_thin_table=self.photo_thin_table,
-                photo_thick_table=self.photo_thick_table,
-                minlogtau=self.minlogtau,
-                dlogtau=self.dlogtau,
-                R_max_LLS=self.R_max_LLS,
-                convergence_fraction=self.convergence_fraction,
-                sig=self.sig,
-                bh00=self.bh00,
-                albpow=self.albpow,
-                colh0=self.colh0,
-                temph0=self.temph0,
-                abu_c=self.abu_c,
-                logfile=self.logfile,
-                quiet=False,
-            )
-        else:
-            self.xh, self.phi_ion, self.coldens = evolve3D(
-                dt=dt,
-                dr=self.dr,
-                src_flux=src_flux,
-                src_pos=src_pos,
-                use_gpu=self.gpu,
-                max_subbox=self.max_subbox,
-                subboxsize=self.subboxsize,
-                loss_fraction=self.loss_fraction,
-                use_mpi=False,
-                comm=None,
-                rank=0,
-                nprocs=1,  # mpi flag, comm, rank=0, nproc=1
-                temp=self.temp,
-                ndens=self.ndens,
-                xh=self.xh,
-                clump=self.clumping_factor,
-                photo_thin_table=self.photo_thin_table,
-                photo_thick_table=self.photo_thick_table,
-                minlogtau=self.minlogtau,
-                dlogtau=self.dlogtau,
-                R_max_LLS=self.R_max_LLS,
-                convergence_fraction=self.convergence_fraction,
-                sig=self.sig,
-                bh00=self.bh00,
-                albpow=self.albpow,
-                colh0=self.colh0,
-                temph0=self.temph0,
-                abu_c=self.abu_c,
-                logfile=self.logfile,
-                quiet=False,
-            )
+        # If the number of sources exceed the number of MPI processors
+        # then call the evolve designed for the MPI source splitting.
+        # Otherwise all ranks are calling (independently) the evolve
+        # with no source splitting until the condition above is meet.
+        use_mpi = NumSrc >= self.nprocs and self.mpi
+        self.xh, self.phi_ion = evolve3D(
+            dt=dt,
+            dr=self.dr,
+            src_flux=src_flux,
+            src_pos=src_pos,
+            use_gpu=self.gpu,
+            max_subbox=self.max_subbox,
+            subboxsize=self.subboxsize,
+            loss_fraction=self.loss_fraction,
+            use_mpi=use_mpi,
+            comm=self.comm if use_mpi else None,
+            rank=self.rank if use_mpi else 0,
+            nprocs=self.nprocs if use_mpi else 1,
+            temp=self.temp,
+            ndens=self.ndens,
+            xh=self.xh,
+            clump=self.clumping_factor,
+            photo_thin_table=self.photo_thin_table,
+            photo_thick_table=self.photo_thick_table,
+            minlogtau=self.minlogtau,
+            dlogtau=self.dlogtau,
+            R_max_LLS=self.R_max_LLS,
+            convergence_fraction=self.convergence_fraction,
+            sig=self.sig,
+            bh00=self.bh00,
+            albpow=self.albpow,
+            colh0=self.colh0,
+            temph0=self.temph0,
+            abu_c=self.abu_c,
+            logfile=self.logfile,
+            quiet=False,
+        )
 
     def cosmo_evolve(self, dt):
         """Evolve cosmology over a timestep

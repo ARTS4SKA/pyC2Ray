@@ -1,14 +1,14 @@
 #pragma once
 
+#include <cuda/std/array>
 #include <cuda/std/utility>
 
 namespace asora {
 
     // Raytrace all sources and compute photoionization rates
     void do_all_sources_gpu(
-        double R, double *coldensh_out, double sig, double dr, double *ndens,
-        double *xh_av, double *phi_ion, int num_src, int m1, double minlogtau,
-        double dlogtau, int num_tau
+        double R, double sig, double dr, const double *xh_av, double *phi_ion,
+        int num_src, int m1, double minlogtau, double dlogtau, int num_tau
     );
 
     // Raytracing kernel, called by do_all_sources
@@ -25,5 +25,7 @@ namespace asora {
         int i, int j, int k, int i0, int j0, int k0, const double *coldensh_out,
         double sigma_HI_at_ion_freq, int m1
     );
+
+    __host__ __device__ cuda::std::array<int, 3> linthrd2cart(int s, int q);
 
 }  // namespace asora
