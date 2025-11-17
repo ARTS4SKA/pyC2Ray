@@ -143,6 +143,7 @@ namespace asora {
             safe_cuda(cudaFree(x_dev));
             safe_cuda(cudaFree(phi_dev));
             safe_cuda(cudaFree(photo_thin_table_dev));
+            safe_cuda(cudaFree(photo_thick_table_dev));
             safe_cuda(cudaFree(src_pos_dev));
             safe_cuda(cudaFree(src_flux_dev));
         } catch (const std::exception &) {
