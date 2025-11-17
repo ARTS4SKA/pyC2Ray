@@ -10,11 +10,6 @@ import tools21cm as t2c
 # files to HDF5 format
 # ==================================================
 
-# parser = argparse.ArgumentParser()
-# parser.add_argument("path", nargs='+', help="Path with files to convert")
-# parser.add_argument("--sort", action='store_true', help="Sort Sources by Mass (high to low)")
-# args = parser.parse_args()
-
 sort = False
 path_in = "/store/ska/sk015/244Mpc_RT/244Mpc_f2_0_250/sources/"
 path_out = "/scratch/snx3000/mibianco/results_c2ray/convert_sources/"
