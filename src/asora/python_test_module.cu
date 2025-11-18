@@ -7,17 +7,17 @@
 #include <Python.h>
 #include <numpy/arrayobject.h>
 
-PyObject *asora_test_cinterp(PyObject *self, PyObject *args) {
+PyObject *asora_test_cinterp([[maybe_unused]] PyObject *self, PyObject *args) {
     PyObject *pos0;
     PyArrayObject *dens;
     int i0, j0, k0;
 
     // Error checking
-    if (!PyArg_ParseTuple(args, "OO", &pos0, &dens)) return NULL;
-    if (!PyArg_ParseTuple(pos0, "iii", &i0, &j0, &k0)) return NULL;
+    if (!PyArg_ParseTuple(args, "OO", &pos0, &dens)) return nullptr;
+    if (!PyArg_ParseTuple(pos0, "iii", &i0, &j0, &k0)) return nullptr;
     if (!PyArray_Check(dens) || PyArray_TYPE(dens) != NPY_DOUBLE) {
         PyErr_SetString(PyExc_TypeError, "dens must be numpy array of type double");
-        return NULL;
+        return nullptr;
     }
 
     // Get density data
@@ -41,15 +41,15 @@ PyObject *asora_test_cinterp(PyObject *self, PyObject *args) {
         );
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_MemoryError, e.what());
-        return NULL;
+        return nullptr;
     }
 
     return PyArray_Return(reinterpret_cast<PyArrayObject *>(output));
 }
 
-PyObject *asora_test_linthrd2cart(PyObject *self, PyObject *args) {
+PyObject *asora_test_linthrd2cart([[maybe_unused]] PyObject *self, PyObject *args) {
     int s, q;
-    if (!PyArg_ParseTuple(args, "ii", &s, &q)) return NULL;
+    if (!PyArg_ParseTuple(args, "ii", &s, &q)) return nullptr;
 
     auto [i, j, k] = asoratest::linthrd2cart(s, q);
     return Py_BuildValue("iii", i, j, k);
