@@ -8,13 +8,14 @@ namespace asora {
     // Raytrace all sources and compute photoionization rates
     void do_all_sources_gpu(
         double R, double sig, double dr, const double *xh_av, double *phi_ion,
-        int num_src, int m1, double minlogtau, double dlogtau, int num_tau
+        int num_src, int m1, double minlogtau, double dlogtau, int num_tau,
+        size_t grid_size, size_t block_size = 256
     );
 
     // Raytracing kernel, called by do_all_sources
     __global__ void evolve0D_gpu(
-        double Rmax_LLS, int q, int ns_start, int num_src_par, int num_src,
-        int *src_pos, double *src_flux, double *coldensh_out, double sig, double dr,
+        double Rmax_LLS, int q, int ns_start, int num_src, int *src_pos,
+        double *src_flux, double *coldensh_out, double sig, double dr,
         const double *ndens, const double *xh_av, double *phi_ion, int m1,
         const double *photo_thin_table, const double *photo_thick_table,
         double minlogtau, double dlogtau, int num_tau, int last_l, int last_r

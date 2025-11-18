@@ -1,6 +1,6 @@
 #include "raytracing.cuh"
 
-#include "memory.cuh"
+#include "memory.h"
 #include "rates.cuh"
 #include "utils.cuh"
 
@@ -9,8 +9,6 @@
 #include <cuda/std/tuple>
 #include <cuda/std/utility>
 #include <exception>
-
-#define CUDA_BLOCK_SIZE 256  // Size of blocks used to treat sources
 
 namespace {
 
@@ -68,10 +66,19 @@ namespace asora {
     // ========================================================================
     void do_all_sources_gpu(
         double R, double sig, double dr, const double *xh_av, double *phi_ion,
-        int num_src, int m1, double minlogtau, double dlogtau, int num_tau
+        int num_src, int m1, double minlogtau, double dlogtau, int num_tau,
+        size_t grid_size, size_t block_size
     ) {
-        // Byte-size of grid data
-        auto meshsize = m1 * m1 * m1 * sizeof(double);
+        device::check_initialized();
+
+        // Lazy allocation of memory that'll be used until the end of the application
+        auto n_cells = m1 * m1 * m1;
+        if (!device::contains(buffer_tag::photo_ionization))
+            device::add<double>(buffer_tag::photo_ionization, n_cells);
+        if (!device::contains(buffer_tag::hydrogen_fraction))
+            device::add<double>(buffer_tag::hydrogen_fraction, n_cells);
+        if (!device::contains(buffer_tag::column_density))
+            device::add<double>(buffer_tag::column_density, grid_size * n_cells);
 
         //  Determine how large the octahedron should be, based on the raytracing
         //  radius. Currently, this is set s.t. the radius equals the distance from
@@ -79,28 +86,18 @@ namespace asora {
         //  whole box, the octahedron bust be 1.5*N in size
         int max_q = std::ceil(c::sqrt3<> * min(R, c::sqrt3<> * m1 / 2.0));
 
-        // CUDA Grid size: since 1 block = 1 source, this sets the number of sources
-        // treated in parallel
-        dim3 gs(NUM_SRC_PAR);
+        // Here we fill the ionization rate array with zero before raytracing all
+        // sources. The LOCALRATES flag is for debugging purposes and will be
+        // removed later on
+        auto phi_buf = device::get(buffer_tag::photo_ionization);
+        auto phi_d = phi_buf.view<double>().data();
+        safe_cuda(cudaMemset(phi_d, 0, phi_buf.size()));
 
-        // CUDA Block size: more of a tuning parameter (see above), in practice
-        // anything ~128 is fine
-        dim3 bs(CUDA_BLOCK_SIZE);
-
-        try {
-            // Here we fill the ionization rate array with zero before raytracing all
-            // sources. The LOCALRATES flag is for debugging purposes and will be
-            // removed later on
-            safe_cuda(cudaMemset(phi_dev, 0, meshsize));
-
-            // Copy current ionization fraction to the device
-            // cudaMemcpy(n_dev,ndens,meshsize,cudaMemcpyHostToDevice);  < --- !!
-            // density array is not modified, asora assumes that it has been copied to
-            // the device before
-            safe_cuda(cudaMemcpy(x_dev, xh_av, meshsize, cudaMemcpyHostToDevice));
-        } catch (const std::exception &) {
-            return;
-        }
+        // density array is not modified, asora assumes that it has been copied to
+        // the device before
+        auto xh_buf = device::get(buffer_tag::hydrogen_fraction);
+        auto xh_d = xh_buf.view<double>().data();
+        xh_buf.copyFromHost(xh_av, xh_buf.size());
 
         // Since the grid is periodic, we limit the maximum size of the raytraced
         // region to a cube as large as the mesh around the source. See line 93 of
@@ -110,29 +107,30 @@ namespace asora {
         int last_r = m1 / 2 - 1 + modulo(m1, 2);
         int last_l = -m1 / 2;
 
+        auto src_flux_d = device::get(buffer_tag::source_flux).view<double>().data();
+        auto src_pos_d = device::get(buffer_tag::source_position).view<int>().data();
+        auto cdh_d = device::get(buffer_tag::column_density).view<double>().data();
+        auto n_d = device::get(buffer_tag::number_density).view<double>().data();
+        auto ph_thin_d =
+            device::get(buffer_tag::photo_thin_table).view<double>().data();
+        auto ph_thick_d =
+            device::get(buffer_tag::photo_thick_table).view<double>().data();
         // Loop over batches of sources
-        for (int ns = 0; ns < num_src; ns += NUM_SRC_PAR) {
+        for (int ns = 0; ns < num_src; ns += grid_size) {
             // Raytrace the current batch of sources in parallel
             // Consecutive kernel launches are in the same stream and so are serialized
-            evolve0D_gpu<<<gs, bs>>>(
-                R, max_q, ns, num_src, NUM_SRC_PAR, src_pos_dev, src_flux_dev, cdh_dev,
-                sig, dr, n_dev, x_dev, phi_dev, m1, photo_thin_table_dev,
-                photo_thick_table_dev, minlogtau, dlogtau, num_tau, last_l, last_r
+            evolve0D_gpu<<<grid_size, block_size>>>(
+                R, max_q, ns, num_src, src_pos_d, src_flux_d, cdh_d, sig, dr, n_d, xh_d,
+                phi_d, m1, ph_thin_d, ph_thick_d, minlogtau, dlogtau, num_tau, last_l,
+                last_r
             );
 
-            try {
-                safe_cuda(cudaPeekAtLastError());
-            } catch (const std::exception &) {
-                return;
-            }
+            safe_cuda(cudaPeekAtLastError());
         }
 
-        try {
-            // Copy the accumulated ionization fraction back to the host
-            // Memcpy blocks until last kernel has finished
-            safe_cuda(cudaMemcpy(phi_ion, phi_dev, meshsize, cudaMemcpyDeviceToHost));
-        } catch (const std::exception &) {
-        }
+        // Copy the accumulated ionization fraction back to the host
+        // Memcpy blocks until last kernel has finished
+        phi_buf.copyToHost(phi_ion, phi_buf.size());
     }
 
     // ========================================================================
@@ -142,9 +140,9 @@ namespace asora {
     __global__ void evolve0D_gpu(
         double Rmax_LLS,
         int q_max,  // Is now the size of max q
-        int ns_start, int num_src, int num_src_par, int *src_pos, double *src_flux,
-        double *coldensh_out, double sig, double dr, const double *ndens,
-        const double *xh_av, double *phi_ion, int m1, const double *photo_thin_table,
+        int ns_start, int num_src, int *src_pos, double *src_flux, double *coldensh_out,
+        double sig, double dr, const double *ndens, const double *xh_av,
+        double *phi_ion, int m1, const double *photo_thin_table,
         const double *photo_thick_table, double minlogtau, double dlogtau, int num_tau,
         int last_l, int last_r
     ) {
@@ -291,12 +289,12 @@ namespace asora {
         auto dx = abs(std::copysign(1.0, di) - di / std::abs(dk));
         auto dy = abs(std::copysign(1.0, dj) - dj / std::abs(dk));
 
-        auto s1 = (1. - dx) * (1. - dy);
-        auto s2 = (1. - dy) * dx;
-        auto s3 = (1. - dx) * dy;
-        auto s4 = dx * dy;
+        auto w1 = (1. - dx) * (1. - dy);
+        auto w2 = (1. - dy) * dx;
+        auto w3 = (1. - dx) * dy;
+        auto w4 = dx * dy;
 
-        return {path, s1, s2, s3, s4};
+        return {path, w1, w2, w3, w4};
     }
 
     __device__ cuda::std::pair<double, double> cinterp_gpu(
@@ -345,20 +343,20 @@ namespace asora {
             cuda::std::swap(ai, aj);
         }
 
-        auto &&[path, s1, s2, s3, s4] = geometric_factors(
+        auto &&[path, w1, w2, w3, w4] = geometric_factors(
             static_cast<double>(di), static_cast<double>(dj), static_cast<double>(dk)
         );
 
         // Weight function for C2Ray interpolation function
-        auto weightf_gpu = [](double cd, double sig) {
+        auto weightf_gpu = [sigma = sigma_HI_at_ion_freq](double cd) {
             constexpr double tau_0 = 0.6;
-            return 1.0 / max(tau_0, cd * sig);
+            return 1.0 / max(tau_0, cd * sigma);
         };
 
-        auto w1 = s1 * weightf_gpu(c1, sigma_HI_at_ion_freq);
-        auto w2 = s2 * weightf_gpu(c2, sigma_HI_at_ion_freq);
-        auto w3 = s3 * weightf_gpu(c3, sigma_HI_at_ion_freq);
-        auto w4 = s4 * weightf_gpu(c4, sigma_HI_at_ion_freq);
+        w1 *= weightf_gpu(c1);
+        w2 *= weightf_gpu(c2);
+        w3 *= weightf_gpu(c3);
+        w4 *= weightf_gpu(c4);
 
         // Column density at the crossing point
         auto cdensi = (c1 * w1 + c2 * w2 + c3 * w3 + c4 * w4) / (w1 + w2 + w3 + w4);
