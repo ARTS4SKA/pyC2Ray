@@ -2,6 +2,8 @@ import array
 import time
 
 import numpy as np
+import numpy.typing as npt
+from mpi4py import MPI
 
 from .asora_core import cuda_is_init
 from .load_extensions import load_asora, load_c2ray
@@ -39,37 +41,37 @@ __all__ = ["evolve3D"]
 
 
 def evolve3D(
-    dt,
-    dr,
-    src_flux,
-    src_pos,
-    use_gpu,
-    max_subbox,
-    subboxsize,
-    loss_fraction,
-    use_mpi,
-    comm,
-    rank,
-    nprocs,
-    temp,
-    ndens,
-    xh,
-    clump,
-    photo_thin_table,
-    photo_thick_table,
-    minlogtau,
-    dlogtau,
-    R_max_LLS,
-    convergence_fraction,
-    sig,
-    bh00,
-    albpow,
-    colh0,
-    temph0,
-    abu_c,
-    logfile="pyC2Ray.log",
-    quiet=False,
-):
+    dt: float,
+    dr: float,
+    src_flux: npt.NDArray,
+    src_pos: npt.NDArray,
+    use_gpu: bool,
+    max_subbox: int,
+    subboxsize: int,
+    loss_fraction: float,
+    use_mpi: bool,
+    comm: MPI.Intracomm,
+    rank: int,
+    nprocs: int,
+    temp: npt.NDArray,
+    ndens: npt.NDArray,
+    xh: npt.NDArray,
+    clump: float,
+    photo_thin_table: npt.NDArray,
+    photo_thick_table: npt.NDArray,
+    minlogtau: float,
+    dlogtau: float,
+    R_max_LLS: float,
+    convergence_fraction: float,
+    sig: float,
+    bh00: float,
+    albpow: float,
+    colh0: float,
+    temph0: float,
+    abu_c: float,
+    logfile: str = "pyC2Ray.log",
+    quiet: bool = False,
+) -> tuple[npt.NDArray, npt.NDArray]:
     """Evolves the ionization fraction over one timestep for the whole grid
 
     Warning: Calling this function with use_gpu = True assumes that the radiation
@@ -137,7 +139,9 @@ def evolve3D(
         Photoionization rate of each cell due to all sources
     """
 
-    # Allow a call with GPU only if 1. the asora library is present and 2. the GPU memory has been allocated using device_init()
+    # Allow a call with GPU only if
+    # 1. the asora library is present and
+    # 2. the GPU memory has been allocated using device_init()
     if use_gpu and not cuda_is_init():
         raise RuntimeError(
             "GPU not initialized. Please initialize it by calling device_init(N)"
@@ -189,16 +193,14 @@ def evolve3D(
             srcpos_flat, normflux_flat = format_sources(src_pos, src_flux)
 
         # Copy positions & fluxes of sources to the GPU in advance
-        libasora.source_data_to_device(srcpos_flat, normflux_flat, NumSrc)
+        libasora.source_data_to_device(srcpos_flat, normflux_flat)
 
-        # Initialize Flat Column density & ionization rate arrays. These are used to store the output of the raytracing module.
-        # TODO: python column density array is actually not needed but only for debug?
-        coldensh_out_flat = np.ravel(np.zeros((N, N, N), dtype="float64"))
-
+        # Initialize Flat Column density & ionization rate arrays.
+        # These are used to store the output of the raytracing module.
         phi_ion_flat = np.ravel(np.zeros((N, N, N), dtype="float64"))
 
         # Copy density field to GPU once at the beginning of timestep (!! do_all_sources assumes this !!)
-        libasora.density_to_device(ndens_flat, N)
+        libasora.density_to_device(ndens_flat)
         if use_mpi:
             printlog("Copied source data to device.", logfile, quiet)
         else:
@@ -241,22 +243,13 @@ def evolve3D(
         else:
             printlog("Rank=%d is doing Raytracing..." % rank, logfile, quiet, " ")
 
-        # Set rates to 0. When using ASORA, this is done internally by the library (directly on the GPU)
-        if not use_gpu:
-            phi_ion = np.zeros((N, N, N), order="F")
-            # So far in evolve we ignore heating (not considered in chemistry), but the raytracing function requires heating tables as argument
-            phi_heat = np.zeros((N, N, N), order="F")
-            coldensh_out = np.zeros((N, N, N), order="F")
-
         # Do the raytracing part for each source. This computes the cumulative ionization rate for each cell.
         if use_gpu:
             # Use GPU raytracing
             libasora.do_all_sources(
                 R_max_LLS,
-                coldensh_out_flat,
                 sig,
                 dr,
-                ndens_flat,
                 xh_av_flat,
                 phi_ion_flat,
                 NumSrc,
@@ -266,6 +259,12 @@ def evolve3D(
                 NumTau,
             )
         else:
+            # Set rates to 0. When using ASORA, this is done internally by the library (directly on the GPU)
+            phi_ion = np.zeros((N, N, N), order="F")
+            # So far in evolve we ignore heating (not considered in chemistry),
+            # but the raytracing function requires heating tables as argument
+            phi_heat = np.zeros((N, N, N), order="F")
+            coldensh_out = np.zeros((N, N, N), order="F")
             # Use CPU raytracing with subbox optimization
             nsubbox, photonloss = libc2ray.raytracing.do_all_sources(
                 src_flux,
@@ -298,7 +297,6 @@ def evolve3D(
         # Since chemistry (ODE solving) is done on the CPU in Fortran, flattened CUDA arrays need to be reshaped
         if use_gpu:
             phi_ion = np.reshape(phi_ion_flat, (N, N, N))
-            coldensh_out = np.reshape(coldensh_out_flat, (N, N, N))
         else:
             printlog(
                 f"Average number of subboxes: {nsubbox / NumSrc:n}, Total photon loss: {photonloss:.3e}",
@@ -413,4 +411,4 @@ def evolve3D(
         # braodcast final result
         comm.Bcast([xh_new, use_mpi.DOUBLE], root=0)
 
-    return xh_new, phi_ion, coldensh_out
+    return xh_new, phi_ion

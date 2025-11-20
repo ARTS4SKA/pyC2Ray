@@ -1,7 +1,7 @@
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #define PY_SSIZE_T_CLEAN
 
-#include "memory.cuh"
+#include "memory.h"
 #include "raytracing.cuh"
 
 #include <Python.h>
@@ -18,12 +18,10 @@
 // ========================================================================
 // Raytrace all sources and compute photoionization rates
 // ========================================================================
-static PyObject *asora_do_all_sources(PyObject *self, PyObject *args) {
+PyObject *asora_do_all_sources(PyObject *self, PyObject *args) {
     double R;
-    PyArrayObject *coldensh_out;
     double sig;
     double dr;
-    PyArrayObject *ndens;
     PyArrayObject *xh_av;
     PyArrayObject *phi_ion;
     int NumSrc;
@@ -31,102 +29,153 @@ static PyObject *asora_do_all_sources(PyObject *self, PyObject *args) {
     double minlogtau;
     double dlogtau;
     int num_tau;
+    size_t grid_size;
+    size_t block_size = 256;
 
     if (!PyArg_ParseTuple(
-            args, "dOddOOOiiddi", &R, &coldensh_out, &sig, &dr, &ndens, &xh_av,
-            &phi_ion, &NumSrc, &m1, &minlogtau, &dlogtau, &num_tau
+            args, "dddOOiiddik|k", &R, &sig, &dr, &xh_av, &phi_ion, &NumSrc, &m1,
+            &minlogtau, &dlogtau, &num_tau, &grid_size, &block_size
         ))
-        return NULL;
+        return nullptr;
 
     // Error checking
-    if (!PyArray_Check(coldensh_out) || PyArray_TYPE(coldensh_out) != NPY_DOUBLE) {
-        PyErr_SetString(PyExc_TypeError, "coldensh_out must be Array of type double");
-        return NULL;
+    if (!PyArray_Check(xh_av) || PyArray_TYPE(xh_av) != NPY_DOUBLE) {
+        PyErr_SetString(PyExc_TypeError, "xh_av must be Array of type double");
+        return nullptr;
+    }
+    if (!PyArray_Check(phi_ion) || PyArray_TYPE(phi_ion) != NPY_DOUBLE) {
+        PyErr_SetString(PyExc_TypeError, "phi_ion must be Array of type double");
+        return nullptr;
     }
 
     // Get Array data
-    auto coldensh_out_data = static_cast<double *>(PyArray_DATA(coldensh_out));
-    auto ndens_data = static_cast<double *>(PyArray_DATA(ndens));
-    auto phi_ion_data = static_cast<double *>(PyArray_DATA(phi_ion));
     auto xh_av_data = static_cast<double *>(PyArray_DATA(xh_av));
+    auto phi_ion_data = static_cast<double *>(PyArray_DATA(phi_ion));
 
-    asora::do_all_sources_gpu(
-        R, coldensh_out_data, sig, dr, ndens_data, xh_av_data, phi_ion_data, NumSrc, m1,
-        minlogtau, dlogtau, num_tau
-    );
+    try {
+        asora::do_all_sources_gpu(
+            R, sig, dr, xh_av_data, phi_ion_data, NumSrc, m1, minlogtau, dlogtau,
+            num_tau, grid_size, block_size
+        );
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return nullptr;
+    }
 
     return Py_None;
 }
 
-// ========================================================================
-// Allocate GPU memory for grid data
-// ========================================================================
-static PyObject *asora_device_init(PyObject *self, PyObject *args) {
-    int N;
-    int num_src_par;
-    int mpi_rank;
-    int num_gpus;
-    if (!PyArg_ParseTuple(args, "iiii", &N, &num_src_par, &mpi_rank, &num_gpus))
-        return NULL;
+// Initialize GPU device and allocate some memory for grid data
+PyObject *asora_device_init([[maybe_unused]] PyObject *self, PyObject *args) {
+    unsigned int mpi_rank = 0;
+    if (!PyArg_ParseTuple(args, "|I", &mpi_rank)) return nullptr;
 
-    asora::device_init(N, num_src_par, mpi_rank, num_gpus);
+    try {
+        // Initialize the device
+        asora::device::initialize(mpi_rank);
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_MemoryError, e.what());
+        return nullptr;
+    }
+
     return Py_None;
 }
 
-// ========================================================================
-// Deallocate GPU memory
-// ========================================================================
-static PyObject *asora_device_close(PyObject *self, PyObject *args) {
-    asora::device_close();
+// Close device and deallocate memory
+PyObject *asora_device_close([[maybe_unused]] PyObject *self, PyObject *args) {
+    if (!PyArg_ParseTuple(args, "")) return nullptr;
+
+    try {
+        asora::device::close();
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_MemoryError, e.what());
+        return nullptr;
+    }
     return Py_None;
 }
 
-// ========================================================================
+PyObject *asora_is_device_init([[maybe_unused]] PyObject *self, PyObject *args) {
+    if (!PyArg_ParseTuple(args, "")) return nullptr;
+
+    return asora::device::is_initialized() ? Py_True : Py_False;
+}
+
+namespace {
+
+    template <typename T>
+    NPY_TYPES getNpyType();
+
+    template <>
+    NPY_TYPES getNpyType<double>() {
+        return NPY_DOUBLE;
+    }
+
+    template <>
+    NPY_TYPES getNpyType<int>() {
+        return NPY_INT;
+    }
+
+    template <typename T>
+    bool load_array_to_device(const PyArrayObject *array, asora::buffer_tag tag) {
+        if (!PyArray_Check(array) || PyArray_TYPE(array) != getNpyType<T>()) {
+            using namespace std::string_literals;
+            std::string msg =
+                "array must be a numpy NDArray of type "s + typeid(T).name();
+            PyErr_SetString(PyExc_TypeError, msg.c_str());
+            return false;
+        }
+
+        auto data = static_cast<T *>(PyArray_DATA(array));
+        auto size = static_cast<size_t>(PyArray_SIZE(array));
+
+        try {
+            asora::device::transfer<T>(tag, data, size);
+        } catch (const std::exception &e) {
+            PyErr_SetString(PyExc_TypeError, e.what());
+            return false;
+        }
+        return true;
+    }
+
+}  // namespace
+
 // Copy density grid to GPU
-// ========================================================================
-static PyObject *asora_density_to_device(PyObject *self, PyObject *args) {
-    int N;
+PyObject *asora_density_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
     PyArrayObject *ndens;
-    if (!PyArg_ParseTuple(args, "Oi", &ndens, &N)) return NULL;
-
-    auto ndens_data = static_cast<double *>(PyArray_DATA(ndens));
-    asora::density_to_device(ndens_data, N);
-
-    return Py_None;
+    return PyArg_ParseTuple(args, "O", &ndens) &&  //
+                   load_array_to_device<double>(
+                       ndens, asora::buffer_tag::number_density
+                   )
+               ? Py_None
+               : nullptr;
 }
 
-// ========================================================================
-// Copy radiation table to GPU
-// ========================================================================
-static PyObject *asora_photo_table_to_device(PyObject *self, PyObject *args) {
-    int num_tau;
-    PyArrayObject *thin_table;
-    PyArrayObject *thick_table;
-    if (!PyArg_ParseTuple(args, "OOi", &thin_table, &thick_table, &num_tau))
-        return NULL;
-
-    auto thin_table_data = static_cast<double *>(PyArray_DATA(thin_table));
-    auto thick_table_data = static_cast<double *>(PyArray_DATA(thick_table));
-    asora::photo_table_to_device(thin_table_data, thick_table_data, num_tau);
-
-    return Py_None;
+// Copy radiation tables to GPU
+PyObject *asora_photo_table_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
+    PyArrayObject *thin_table, *thick_table;
+    return PyArg_ParseTuple(args, "OO", &thin_table, &thick_table) &&
+                   load_array_to_device<double>(
+                       thin_table, asora::buffer_tag::photo_thin_table
+                   ) &&
+                   load_array_to_device<double>(
+                       thick_table, asora::buffer_tag::photo_thick_table
+                   )
+               ? Py_None
+               : nullptr;
 }
 
-// ========================================================================
 // Copy source data to GPU
-// ========================================================================
-static PyObject *asora_source_data_to_device(PyObject *self, PyObject *args) {
-    int NumSrc;
-    PyArrayObject *pos;
-    PyArrayObject *flux;
-    if (!PyArg_ParseTuple(args, "OOi", &pos, &flux, &NumSrc)) return NULL;
-
-    auto pos_data = static_cast<int *>(PyArray_DATA(pos));
-    auto flux_data = static_cast<double *>(PyArray_DATA(flux));
-
-    asora::source_data_to_device(pos_data, flux_data, NumSrc);
-
-    return Py_None;
+PyObject *asora_source_data_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
+    PyArrayObject *src_pos, *src_flux;
+    return PyArg_ParseTuple(args, "OO", &src_pos, &src_flux) &&
+                   load_array_to_device<int>(
+                       src_pos, asora::buffer_tag::source_position
+                   ) &&
+                   load_array_to_device<double>(
+                       src_flux, asora::buffer_tag::source_flux
+                   )
+               ? Py_None
+               : nullptr;
 }
 
 #ifdef __cplusplus
@@ -138,8 +187,11 @@ extern "C" {
 // ========================================================================
 static PyMethodDef asoraMethods[] = {
     {"do_all_sources", asora_do_all_sources, METH_VARARGS, "Do OCTA raytracing (GPU)"},
-    {"device_init", asora_device_init, METH_VARARGS, "Free GPU memory"},
-    {"device_close", asora_device_close, METH_VARARGS, "Free GPU memory"},
+    {"device_init", asora_device_init, METH_VARARGS,
+     "Initialize device and allocate memory"},
+    {"device_close", asora_device_close, METH_VARARGS, "Close device and free memory"},
+    {"is_device_init", asora_is_device_init, METH_VARARGS,
+     "Check if the device is initialized"},
     {"density_to_device", asora_density_to_device, METH_VARARGS,
      "Copy density field to GPU"},
     {"photo_table_to_device", asora_photo_table_to_device, METH_VARARGS,
@@ -150,13 +202,8 @@ static PyMethodDef asoraMethods[] = {
 };
 
 static struct PyModuleDef asoramodule = {
-    PyModuleDef_HEAD_INIT, "libasora",                         /* name of module */
-    "CUDA C++ implementation of the short-characteristics RT", /* module
-                                                                  documentation,
-                                                                  may be NULL */
-    -1, /* size of per-interpreter state of the module,
-          or -1 if the module keeps state in global variables. */
-    asoraMethods
+    PyModuleDef_HEAD_INIT, "libasora",
+    "CUDA C++ implementation of the short-characteristics RT", -1, asoraMethods
 };
 
 PyMODINIT_FUNC PyInit_libasora(void) {

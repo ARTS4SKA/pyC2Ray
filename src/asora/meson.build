@@ -32,18 +32,20 @@ nvcc_flags = [
     'true',
     '-DPERIODIC',
     '-DLOCALRATES',
+    '-use_fast_math',
 ]
 nvlink_flags = [compute_cap]
 
 # CUDA sources for ASORA
-asora_sources = ['memory.cu', 'rates.cu', 'raytracing.cu', 'utils.cu']
-asora_core = static_library('asora_core', asora_sources, cuda_args: nvcc_flags, link_args: nvlink_flags)
+asora_sources = ['memory.cpp', 'rates.cu', 'raytracing.cu', 'utils.cu']
+cuda_dep = dependency('cuda', version : '>=12', static: false)
+asora_core = static_library('asora_core', asora_sources, dependencies: cuda_dep, cuda_args: nvcc_flags, link_args: nvlink_flags)
 
 # Build ASORA module with nvcc
 py.extension_module(
     'libasora',
     'python_module.cu',
-    dependencies: [py_dep, np_dep],
+    dependencies: [py_dep, np_dep, cuda_dep],
     install: true,
     subdir: 'pyc2ray/lib',
     link_with: asora_core,
@@ -55,7 +57,7 @@ py.extension_module(
 py.extension_module(
     'libasoratest',
     ['tests.cu', 'python_test_module.cu'],
-    dependencies: [py_dep, np_dep],
+    dependencies: [py_dep, np_dep, cuda_dep],
     install: true,
     subdir: 'pyc2ray/lib',
     link_with: asora_core,

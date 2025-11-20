@@ -56,9 +56,8 @@ def device_close():
 def photo_table_to_device(thin_table, thick_table):
     """Copy radiation tables to GPU (optically thin & thick tables)"""
     global cuda_init
-    NumTau = thin_table.shape[0]
     if cuda_init:
-        libasora.photo_table_to_device(thin_table, thick_table, NumTau)
+        libasora.photo_table_to_device(thin_table, thick_table)
     else:
         raise RuntimeError(
             "GPU not initialized. Please initialize it by calling device_init(N)"
