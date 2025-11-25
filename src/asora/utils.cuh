@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cuda_runtime.h>
+#include <cuda/std/array>
 
 #include <concepts>
 #include <source_location>
@@ -26,5 +27,10 @@ namespace asora {
         constexpr F sqrt2 = F(1.4142135623730951L);
 
     }  // namespace c
+
+    // Mapping from octahedral shells (q, s) to 3D cartesian coordinates (i, j, k) and
+    // back.
+    __host__ __device__ cuda::std::array<int, 3> linthrd2cart(int q, int s);
+    __host__ __device__ cuda::std::array<int, 2> cart2linthrd(int i, int j, int k);
 
 }  // namespace asora

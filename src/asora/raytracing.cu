@@ -33,34 +33,6 @@ namespace {
 
 namespace asora {
 
-    // Mapping from linear 1D indices to the cartesian coords of a q-shell in asora
-    // Determine if cell is in top or bottom part of the shell (the
-    // mapping is slightly different due to the part that is on the
-    // same z-plane as the source)
-    __host__ __device__ cuda::std::array<int, 3> linthrd2cart(int s, int q) {
-        if (s == 0) return {q, 0, 0};
-
-        auto s_top = 2 * q * (q + 1) + 1;
-        if (s == s_top) return {q - 1, 0, -1};
-
-        int sign = 1;
-        int q1 = q;
-        if (s > s_top) {
-            s -= s_top;
-            q1 -= 1;
-            sign = -1;
-        }
-
-        auto j = (s - 1) / (2 * q1);
-        auto i = (s - 1) % (2 * q1) + j - q1;
-        if (i + j > q1) {
-            i -= q1;
-            j -= q1 + 1;
-        }
-
-        return {i, j, sign * (q - abs(i) - abs(j))};
-    }
-
     // ========================================================================
     // Raytrace all sources and add up ionization rates
     // ========================================================================
@@ -195,7 +167,7 @@ namespace asora {
                 // Ensure the thread maps to a valid cell
                 if (s >= num_cells) continue;
 
-                auto &&[i, j, k] = linthrd2cart(s, q);
+                auto &&[i, j, k] = linthrd2cart(q, s);
 
                 // Only do cell if it is within the (shifted under periodicity)
                 // grid, i.e. at most ~N cells away from the source

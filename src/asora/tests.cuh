@@ -9,6 +9,7 @@ namespace asoratest {
         const double *dens_data, size_t dens_size, const int3 &pos0, int m1
     );
 
-    std::array<int, 3> linthrd2cart(int s, int q);
+    std::array<int, 3> linthrd2cart(int q, int s);
+    std::array<int, 2> cart2linthrd(int i, int j, int k);
 
 };  // namespace asoratest

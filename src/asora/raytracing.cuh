@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cuda/std/array>
 #include <cuda/std/utility>
 
 namespace asora {
@@ -26,7 +25,5 @@ namespace asora {
         int i, int j, int k, int i0, int j0, int k0, const double *coldensh_out,
         double sigma_HI_at_ion_freq, int m1
     );
-
-    __host__ __device__ cuda::std::array<int, 3> linthrd2cart(int s, int q);
 
 }  // namespace asora

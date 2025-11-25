@@ -92,11 +92,11 @@ def setup_do_all_sources(
     )
 
 
-def test_do_all_sources(init_device):
+def test_do_all_sources(data_dir, init_device):
     with setup_do_all_sources() as args:
         asora.do_all_sources(*args)
 
-        expected_phi_ion = np.load("tests/data/photo_ionization_rate.npy")
+        expected_phi_ion = np.load(data_dir / "photo_ionization_rate.npy")
 
         phi_ion = args[4] * 1e40
         expected_phi_ion *= 1e40

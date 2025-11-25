@@ -58,9 +58,14 @@ namespace asoratest {
         asora::safe_cuda(cudaFree(dens_dev));
     }
 
-    std::array<int, 3> linthrd2cart(int s, int q) {
-        auto [i, j, k] = asora::linthrd2cart(s, q);
+    std::array<int, 3> linthrd2cart(int q, int s) {
+        auto [i, j, k] = asora::linthrd2cart(q, s);
         return {i, j, k};
+    }
+
+    std::array<int, 2> cart2linthrd(int i, int j, int k) {
+        auto [q, s] = asora::cart2linthrd(i, j, k);
+        return {q, s};
     }
 
 }  // namespace asoratest

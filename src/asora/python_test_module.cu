@@ -48,11 +48,19 @@ PyObject *asora_test_cinterp([[maybe_unused]] PyObject *self, PyObject *args) {
 }
 
 PyObject *asora_test_linthrd2cart([[maybe_unused]] PyObject *self, PyObject *args) {
-    int s, q;
-    if (!PyArg_ParseTuple(args, "ii", &s, &q)) return nullptr;
+    int q, s;
+    if (!PyArg_ParseTuple(args, "ii", &q, &s)) return nullptr;
 
-    auto [i, j, k] = asoratest::linthrd2cart(s, q);
+    auto [i, j, k] = asoratest::linthrd2cart(q, s);
     return Py_BuildValue("iii", i, j, k);
+}
+
+PyObject *asora_test_cart2linthrd([[maybe_unused]] PyObject *self, PyObject *args) {
+    int i, j, k;
+    if (!PyArg_ParseTuple(args, "iii", &i, &j, &k)) return nullptr;
+
+    auto [q, s] = asoratest::cart2linthrd(i, j, k);
+    return Py_BuildValue("ii", q, s);
 }
 
 #ifdef __cplusplus
@@ -65,7 +73,9 @@ extern "C" {
 static PyMethodDef asoraMethods[] = {
     {"cinterp", asora_test_cinterp, METH_VARARGS, "Geometric OCTA raytracing (GPU)"},
     {"linthrd2cart", asora_test_linthrd2cart, METH_VARARGS,
-     "Shell mapping to cartesian coordinates"},
+     "Shell indexing to cartesian coordinates"},
+    {"cart2linthrd", asora_test_cart2linthrd, METH_VARARGS,
+     "Cartesian coordinates to shell indexing"},
     {NULL, NULL, 0, NULL} /* Sentinel */
 };
 
