@@ -3,7 +3,7 @@ build-backend = "mesonpy"
 requires = [
   "charset-normalizer",
   "meson-python",
-  "meson==1.5.1",
+  "meson",
   "numpy>=2",
 ]
 

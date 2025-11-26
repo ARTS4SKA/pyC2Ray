@@ -18,7 +18,7 @@ namespace {
     __host__ __device__ int modulo(int a, int b) { return (a % b + b) % b; }
 
     // Flat-array index from 3D (i,j,k) indices
-    __device__ int mem_offst_gpu(int i, int j, int k, int N) {
+    __device__ int mem_offset_gpu(int i, int j, int k, size_t N) {
         return N * N * modulo(i, N) + N * modulo(j, N) + modulo(k, N);
     }
 
@@ -29,6 +29,28 @@ namespace {
     }
 #endif
 
+    __device__ void update_col_dens_phi_ion(
+        double &coldens_out, double &phi_ion, double coldens_in, double nHI_p,
+        double path, double strength, double vol, double sigma,
+        const asora::photo_tables &ion_tables, const asora::linspace<double> &logtau
+    ) {
+        // Compute outgoing column density and add to array for subsequent
+        // interpolations
+        coldens_out = coldens_in + nHI_p * path;
+
+#if defined(GREY_NOTABLES)
+        auto phi = asora::photoion_rates_test_gpu(coldens_in, coldens_out, sigma);
+#else
+        auto phi = asora::photoion_rates_gpu(
+            coldens_in, coldens_out, sigma, ion_tables, logtau
+        );
+#endif
+        // Rescale the photo-ionization rate by the flux strength normalized per volume
+        // and per neutral density (part of the photon-conserving rate prescription) and
+        // add it to the global array
+        atomicAdd(&phi_ion, phi * strength / vol / nHI_p);
+    }
+
 }  // namespace
 
 namespace asora {
@@ -37,8 +59,8 @@ namespace asora {
     // Raytrace all sources and add up ionization rates
     // ========================================================================
     void do_all_sources_gpu(
-        double R, double sig, double dr, const double *xh_av, double *phi_ion,
-        int num_src, int m1, double minlogtau, double dlogtau, int num_tau,
+        double R, double sigma, double dr, const double *xh_av, double *phi_ion,
+        size_t num_src, size_t m1, double minlogtau, double dlogtau, size_t num_tau,
         size_t grid_size, size_t block_size
     ) {
         device::check_initialized();
@@ -56,7 +78,7 @@ namespace asora {
         //  radius. Currently, this is set s.t. the radius equals the distance from
         //  the source to the middle of the faces of the octahedron. To raytrace the
         //  whole box, the octahedron bust be 1.5*N in size
-        int max_q = std::ceil(c::sqrt3<> * min(R, c::sqrt3<> * m1 / 2.0));
+        int q_max = std::ceil(c::sqrt3<> * min(R, c::sqrt3<> * m1 / 2.0));
 
         // Here we fill the ionization rate array with zero before raytracing all
         // sources. The LOCALRATES flag is for debugging purposes and will be
@@ -87,14 +109,15 @@ namespace asora {
             device::get(buffer_tag::photo_thin_table).view<double>().data();
         auto ph_thick_d =
             device::get(buffer_tag::photo_thick_table).view<double>().data();
+
         // Loop over batches of sources
-        for (int ns = 0; ns < num_src; ns += grid_size) {
+        for (size_t ns = 0; ns < num_src; ns += grid_size) {
             // Raytrace the current batch of sources in parallel
             // Consecutive kernel launches are in the same stream and so are serialized
             evolve0D_gpu<<<grid_size, block_size>>>(
-                R, max_q, ns, num_src, src_pos_d, src_flux_d, cdh_d, sig, dr, n_d, xh_d,
-                phi_d, m1, ph_thin_d, ph_thick_d, minlogtau, dlogtau, num_tau, last_l,
-                last_r
+                R, q_max, ns, num_src, src_pos_d, src_flux_d, cdh_d, sigma, dr, n_d,
+                xh_d, phi_d, m1, ph_thin_d, ph_thick_d, minlogtau, dlogtau, num_tau,
+                last_l, last_r
             );
 
             safe_cuda(cudaPeekAtLastError());
@@ -112,11 +135,13 @@ namespace asora {
     __global__ void evolve0D_gpu(
         double Rmax_LLS,
         int q_max,  // Is now the size of max q
-        int ns_start, int num_src, int *src_pos, double *src_flux, double *coldensh_out,
-        double sig, double dr, const double *ndens, const double *xh_av,
-        double *phi_ion, int m1, const double *photo_thin_table,
-        const double *photo_thick_table, double minlogtau, double dlogtau, int num_tau,
-        int last_l, int last_r
+        size_t ns_start, size_t num_src, int *__restrict__ src_pos,
+        double *__restrict__ src_flux, double *__restrict__ coldensh_out, double sigma,
+        double dr, const double *__restrict__ ndens, const double *__restrict__ xh_av,
+        double *__restrict__ phi_ion, size_t m1,
+        const double *__restrict__ photo_thin_table,
+        const double *__restrict__ photo_thick_table, double minlogtau, double dlogtau,
+        size_t num_tau, int last_l, int last_r
     ) {
         /* The raytracing kernel proceeds as follows:
             1. Select the source based on the block number (within the batch = the
@@ -136,6 +161,9 @@ namespace asora {
         // Ensure the source index is valid
         if (ns >= num_src) return;
 
+        asora::linspace<double> logtau{minlogtau, dlogtau, num_tau};
+        asora::photo_tables ion_tables{photo_thin_table, photo_thick_table};
+
         // Get source properties
         const auto i0 = src_pos[3 * ns + 0];
         const auto j0 = src_pos[3 * ns + 1];
@@ -147,19 +175,29 @@ namespace asora {
         auto cdh_offset = blockIdx.x * m1 * m1 * m1;
         coldensh_out += cdh_offset;
 
+        if (threadIdx.x == 0) {
+            const auto offset = mem_offset_gpu(i0, j0, k0, m1);
+            double nHI_p = ndens[offset] * (1.0 - xh_av[offset]);
+            update_col_dens_phi_ion(
+                coldensh_out[offset], phi_ion[offset], 0.0, nHI_p, 0.5 * dr, strength,
+                dr * dr * dr, sigma, ion_tables, logtau
+            );
+        }
+        __syncthreads();
+
         // (A) Loop over ASORA q-shells
-        for (int q = 0; q <= q_max; q++) {
+        for (int q = 1; q <= q_max; q++) {
             // We figure out the number of cells in the shell and determine how many
             // passes the block needs to take to treat all of them
-            int num_cells = q > 0 ? 4 * q * q + 2 : 1;
-            int Npass = std::ceil(static_cast<float>(num_cells) / blockDim.x);
+            int num_cells = 4 * q * q + 2;
+            int passes = std::ceil(static_cast<float>(num_cells) / blockDim.x);
 
             // The threads have 1D indices 0,...,blocksize-1. We map these 1D
             // indices to the 3D positions of the cells inside the shell via the
             // mapping described in the paper. Since in general there are more cells
             // than threads, there is an additional loop here (B) so that all cells
             // are treated.
-            for (int ipass = 0; ipass < Npass; ipass++) {
+            for (int ipass = 0; ipass < passes; ipass++) {
                 // "s" is the index in the 1D-range [0,...,4q^2 + 1] that gets
                 // mapped to the cells in the shell
                 int s = ipass * blockDim.x + threadIdx.x;
@@ -188,28 +226,14 @@ namespace asora {
                 // When not in periodic mode, only treat cell if its in the grid
                 if (!in_box_gpu(i, j, k, m1)) continue;
 #endif
-                // Map to periodic grid
-                const auto offset = mem_offst_gpu(i, j, k, m1);
-
-                // Get local ionization fraction & neutral Hydrogen density in the cell
-                double nHI_p = ndens[offset] * (1.0 - xh_av[offset]);
-
-                // PH (29.9.23): There used to be a check here if the
-                // coldensh_out of the current cell was zero to
-                // "determine if it hasn't been done before". I think
-                // this isn't necessary anymore in this version and
-                // eliminates the need to set the array to zero between
-                // source batches, which for large batches is a
-                // SIGNIFICANT bottleneck.
-
                 auto [coldensh_in, path] =
-                    cinterp_gpu(i, j, k, i0, j0, k0, coldensh_out, sig, m1);
+                    cinterp_gpu(i, j, k, i0, j0, k0, coldensh_out, sigma, m1);
                 path *= dr;
-                auto vol_ph = (at_origin) ? dr * dr * dr : 4 * c::pi<> * dist2 * path;
+                auto vol_ph = 4 * c::pi<> * dist2 * path;
 
-                // Compute outgoing column density and add to array for
-                // subsequent interpolations
-                coldensh_out[offset] = coldensh_in + nHI_p * path;
+                // Get local ionization fraction & neutral hydrogen density in the cell
+                const auto offset = mem_offset_gpu(i, j, k, m1);
+                double nHI_p = ndens[offset] * (1.0 - xh_av[offset]);
 
                 if (coldensh_in > max_coldensh) continue;
 
@@ -221,33 +245,11 @@ namespace asora {
                 // WARNING: for now this is limited to the grey-opacity
                 // test case source
 
-#if defined(GREY_NOTABLES)
-                auto phi = photoion_rates_test_gpu(
-                    strength, coldensh_in, coldensh_out[offset], vol_ph, sig
+                update_col_dens_phi_ion(
+                    coldensh_out[offset], phi_ion[offset], coldensh_in, nHI_p, path,
+                    strength, vol_ph, sigma, ion_tables, logtau
                 );
-#else
-                auto phi = photoion_rates_gpu(
-                    strength, coldensh_in, coldensh_out[offset], vol_ph, sig,
-                    photo_thin_table, photo_thick_table, minlogtau, dlogtau, num_tau
-                );
-#endif
-                // Divide the photo-ionization rates by the
-                // appropriate neutral density (part of the
-                // photon-conserving rate prescription)
-                phi /= nHI_p;
-
-                // Add the computed ionization rate and the column
-                // density to the array ATOMICALLY since multiple
-                // blocks could be writing to the same cell at the
-                // same time!
-                atomicAdd(&phi_ion[offset], phi);
-                // atomicAdd(coldensh_out +
-                // mem_offst_gpu(pos[0],pos[1],pos[2],m1),cdho);
-                // TODO: this seems to induce some double precision
-                // floating error
             }
-            // IMPORTANT: Sync threads after each shell so that the next only begins
-            // when all outgoing column densities of the current shell are available
             __syncthreads();
         }
     }
@@ -270,8 +272,8 @@ namespace asora {
     }
 
     __device__ cuda::std::pair<double, double> cinterp_gpu(
-        int i, int j, int k, int i0, int j0, int k0, const double *coldensh_out,
-        double sigma_HI_at_ion_freq, int m1
+        int i, int j, int k, int i0, int j0, int k0,
+        const double *__restrict__ coldensh_out, double sigma_HI_at_ion_freq, size_t m1
     ) {
         auto di = i - i0;
         auto dj = j - j0;
@@ -288,7 +290,7 @@ namespace asora {
 
         auto get_column_density = [&coldensh_out, i, j, k,
                                    m1](int i_off, int j_off, int k_off) {
-            return coldensh_out[mem_offst_gpu(i - i_off, j - j_off, k - k_off, m1)];
+            return coldensh_out[mem_offset_gpu(i - i_off, j - j_off, k - k_off, m1)];
         };
 
         double c1, c2, c3, c4;

@@ -18,22 +18,22 @@
 // ========================================================================
 // Raytrace all sources and compute photoionization rates
 // ========================================================================
-PyObject *asora_do_all_sources(PyObject *self, PyObject *args) {
+PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) {
     double R;
     double sig;
     double dr;
     PyArrayObject *xh_av;
     PyArrayObject *phi_ion;
-    int NumSrc;
-    int m1;
+    size_t num_src;
+    size_t m1;
     double minlogtau;
     double dlogtau;
-    int num_tau;
+    size_t num_tau;
     size_t grid_size;
     size_t block_size = 256;
 
     if (!PyArg_ParseTuple(
-            args, "dddOOiiddik|k", &R, &sig, &dr, &xh_av, &phi_ion, &NumSrc, &m1,
+            args, "dddOOkkddkk|k", &R, &sig, &dr, &xh_av, &phi_ion, &num_src, &m1,
             &minlogtau, &dlogtau, &num_tau, &grid_size, &block_size
         ))
         return nullptr;
@@ -54,7 +54,7 @@ PyObject *asora_do_all_sources(PyObject *self, PyObject *args) {
 
     try {
         asora::do_all_sources_gpu(
-            R, sig, dr, xh_av_data, phi_ion_data, NumSrc, m1, minlogtau, dlogtau,
+            R, sig, dr, xh_av_data, phi_ion_data, num_src, m1, minlogtau, dlogtau,
             num_tau, grid_size, block_size
         );
     } catch (const std::exception &e) {
