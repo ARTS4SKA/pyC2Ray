@@ -3,6 +3,7 @@ from contextlib import contextmanager
 import astropy.constants as cst
 import astropy.units as u
 import numpy as np
+import math
 import pytest
 
 from pyc2ray.load_extensions import load_asora
@@ -31,7 +32,7 @@ def setup_do_all_sources(
     num_sources: int = 10,
     mesh_size: int = 50,
     batch_size: int = 8,
-    block_size: int = 256,
+    block_size=256,
     radius: float = 15.0,
 ):
     # Calculate the table
@@ -114,4 +115,47 @@ def test_benchmark_do_all_sources(
     benchmark, init_device, mesh_size, batch_size, block_size
 ):
     with setup_do_all_sources(10000, mesh_size, batch_size, block_size) as args:
+        benchmark(asora.do_all_sources, *args)
+
+
+@pytest.mark.parametrize("log_mesh", range(12, 18))
+@pytest.mark.benchmark(warmup=True, warmup_iterations=1)
+def test_benchmark_do_all_sources_mesh_size(benchmark, init_device, log_mesh):
+    mesh_size = int(math.pow(2.0, log_mesh / 2.0) - 1)
+    with setup_do_all_sources(10000, mesh_size, 256, 512) as args:
+        benchmark(asora.do_all_sources, *args)
+
+
+@pytest.mark.parametrize("thread_size", range(1, 29))
+@pytest.mark.benchmark(warmup=True, warmup_iterations=1)
+def test_benchmark_do_all_sources_thread_size(benchmark, init_device, thread_size):
+    with setup_do_all_sources(10000, 512, 80, thread_size * 32) as args:
+        benchmark(asora.do_all_sources, *args)
+
+
+@pytest.mark.parametrize("radius", range(5, 51, 5))
+@pytest.mark.benchmark(warmup=True, warmup_iterations=1)
+def test_benchmark_do_all_sources_radius(benchmark, init_device, radius):
+    with setup_do_all_sources(10000, 1024, 8, 512, radius) as args:
+        benchmark(asora.do_all_sources, *args)
+
+
+@pytest.mark.parametrize("log_batch_size", range(1, 20))
+@pytest.mark.benchmark(warmup=True, warmup_iterations=1)
+def test_benchmark_do_all_sources_batch_size(benchmark, init_device, log_batch_size):
+    batch_size = int(round(math.pow(2.0, log_batch_size / 2.0)))
+    with setup_do_all_sources(10000, 256, batch_size, 512) as args:
+        benchmark(asora.do_all_sources, *args)
+
+
+def test_benchmark_do_all_sources_ref(benchmark, init_device):
+    with setup_do_all_sources(10000, 256, 256, 512) as args:
+        benchmark(asora.do_all_sources, *args)
+
+
+@pytest.mark.parametrize("log_ns", range(0, 7))
+@pytest.mark.benchmark(warmup=True, warmup_iterations=1)
+def test_benchmark_do_all_sources_sources(benchmark, init_device, log_ns):
+    sources = int(10**log_ns)
+    with setup_do_all_sources(sources, 200, 64, 256, 10.0) as args:
         benchmark(asora.do_all_sources, *args)
