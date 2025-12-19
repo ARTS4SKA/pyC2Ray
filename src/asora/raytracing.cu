@@ -288,21 +288,19 @@ namespace asora {
             return coldensh_out[cells_to_shell(q - 1) + s];
         };
 
-        double c1, c2, c3, c4;
+        double c1 = get_column_density(si, sj, sk);
+        double c2, c3, c4;
         if (ak >= aj && ak >= ai) {
-            c1 = get_column_density(si, sj, sk);
             c2 = get_column_density(0, sj, sk);
             c3 = get_column_density(si, 0, sk);
             c4 = get_column_density(0, 0, sk);
         } else if (aj >= ai && aj >= ak) {
-            c1 = get_column_density(si, sj, sk);
             c2 = get_column_density(0, sj, sk);
             c3 = get_column_density(si, sj, 0);
             c4 = get_column_density(0, sj, 0);
             cuda::std::swap(dj, dk);
             cuda::std::swap(aj, ak);
         } else {  // (ai >= aj && ai >= ak)
-            c1 = get_column_density(si, sj, sk);
             c2 = get_column_density(si, 0, sk);
             c3 = get_column_density(si, sj, 0);
             c4 = get_column_density(si, 0, 0);

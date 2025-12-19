@@ -4,20 +4,6 @@
 #include <format>
 #include <iostream>
 
-namespace {
-
-    __host__ __device__ cuda::std::array<int, 2> get_ij(int q, int s) {
-        auto j = (s - 1) / (2 * q);
-        auto i = (s - 1) % (2 * q) + j - q;
-        if (i + j > q) {
-            i -= q;
-            j -= q + 1;
-        }
-        return {i, j};
-    }
-
-}  // namespace
-
 namespace asora {
 
     void safe_cuda(cudaError_t err, const std::source_location &loc) {
@@ -32,47 +18,36 @@ namespace asora {
         }
     }
 
-    __host__ __device__ cuda::std::array<int, 3> linthrd2cart(int q, int s) {
-        if (s == 0) return {q, 0, 0};
+    namespace {
 
-        auto s_top = 2 * q * (q + 1) + 1;
-        if (s == s_top) return {q - 1, 0, -1};
-
-        int sign = 1;
-        int q1 = q;
-        if (s > s_top) {
-            s -= s_top;
-            q1 -= 1;
-            sign = -1;
+        __host__ __device__ cuda::std::array<int, 2> divmod(int x, int y) {
+            return {x / y, x % y};
         }
 
-        auto &&[i, j] = get_ij(q1, s);
-        return {i, j, sign * (q - abs(i) - abs(j))};
+    }  // namespace
+
+    __host__ __device__ cuda::std::array<int, 3> linthrd2cart(int q, int s) {
+        auto s_top = (q + 1) * (q + 1) + q * q;
+        auto [t, sh] = divmod(s, s_top);
+        auto qh = q - t;
+
+        auto [m, n] = divmod(sh, 2 * qh + 1);
+        auto [o, p] = divmod(n, qh + 1);
+
+        auto i = p + m + o - qh;
+        auto j = p - m;
+        auto k = (1 - 2 * t) * (q - abs(i) - abs(j));
+
+        return {i, j, k};
     }
 
     __host__ __device__ cuda::std::array<int, 2> cart2linthrd(int i, int j, int k) {
         auto q = abs(i) + abs(j) + abs(k);
-        if (i == q && j == 0 && k == 0) return {q, 0};
+        auto t = int(k < 0);
+        auto qh = q - t;
 
-        auto s_top = 2 * q * (q + 1) + 1;
-        if (i == q - 1 && j == 0 && k == -1) return {q, s_top};
-
-        auto q1 = q;
-        auto s_off = 0;
-        if (k < 0) {
-            q1 -= 1;
-            s_off = s_top;
-        }
-
-        // Guess a solution
-        auto s = (2 * q1 - 1) * j + i + q1 + 1;
-        if (s > 0) {
-            auto &&[i0, j0] = get_ij(q1, s);
-            if (i0 == i && j0 == j) return {q, s + s_off};
-        }
-
-        // It's the other solution
-        s += 2 * q1 * (q1 + 1) - 1 + s_off;
+        auto s_top = (q + 1) * (q + 1) + q * q;
+        auto s = s_top * t + (qh + 1) * (qh + i) - qh * j;
         return {q, s};
     }
 

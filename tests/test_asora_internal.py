@@ -23,51 +23,35 @@ def test_cinterp(data_dir: Path) -> None:
     expected_output.close()
 
 
-def linthrd2cart(q: int, s: int) -> tuple[int, int, int]:
-    """Reference function for shell mapping to cartesian coordinates"""
-    if s == 0:
-        return q, 0, 0
-
-    s_top = 2 * q * (q + 1) + 1
-    if s == s_top:
-        return q - 1, 0, -1
-
-    def get_ij(q: int, s: int) -> tuple[int, int]:
-        j, i = divmod(s - 1, 2 * q)
-        i += j - q
-        if i + j > q:
-            i -= q
-            j -= q + 1
-        return i, j
-
-    if s < s_top:
-        sgn = 1
-        i, j = get_ij(q, s)
-    else:
-        sgn = -1
-        i, j = get_ij(q - 1, s - s_top)
-
-    return i, j, sgn * (q - abs(i) - abs(j))
-
-
-@pytest.mark.parametrize("q", range(0, 50))
-def test_shell_mapping(q: int) -> None:
-    q_max = 4 * q**2 + 2 if q > 0 else 1
-    for s in range(q_max):
-        ijk = linthrd2cart(q, s)
-        assert ijk == asoratest.linthrd2cart(q, s)
-        assert (q, s) == asoratest.cart2linthrd(*ijk)
+Q_MAX = 100
 
 
 def test_cells_in_shell() -> None:
     assert asoratest.cells_in_shell(0) == 1
-    for q in range(1, 50):
+    for q in range(1, Q_MAX):
         assert asoratest.cells_in_shell(q) == 4 * q**2 + 2
 
 
 def test_cells_to_shell() -> None:
     q_tot = 1
     assert asoratest.cells_to_shell(0) == q_tot
-    for q in range(1, 50):
+    for q in range(1, Q_MAX):
         q_tot += 4 * q**2 + 2
         assert asoratest.cells_to_shell(q) == q_tot
+
+
+@pytest.mark.parametrize("q", range(0, Q_MAX))
+def test_shell_mapping(q: int) -> None:
+    cells: set[tuple[int, int, int]] = set()
+    q_max = 4 * q**2 + 2 if q > 0 else 1
+    for s in range(q_max):
+        # Check value makes sense
+        ijk = asoratest.linthrd2cart(q, s)
+        assert q == sum(abs(x) for x in ijk)
+
+        # Check it's unique
+        assert ijk not in cells
+        cells.add(ijk)
+
+        # Check inverse function
+        assert (q, s) == asoratest.cart2linthrd(*ijk)
