@@ -234,11 +234,10 @@ namespace asora {
         int lr = m1 % 2 - 1 - ll;
 
         // Loop over ASORA q-shells and each thread does raytracing on one or more
-        // cells. "s" is the index in the range [0,...,4q^2 + 1] that gets mapped to the
-        // cells in the shell. The threads are [0,...,blocksize-1] and since there are
-        // usually more cells, threads can do additional work. (q, s) indexing is mapped
-        // to the (i, j, k) indexing of the cells via the mapping described in the
-        // paper.
+        // cells. "s" is the index in the range [0, ..., 4q^2 + 1] that gets mapped to
+        // the cells in the shell. The threads are usually fewer than the number of
+        // cells, therefore they can do additional work. (q, s) indexing is mapped to
+        // the (i, j, k) indexing of the cells via the mapping described in the paper.
 
         // Memory shared between threads with column density values from q-1, q-2 and
         // q-3 shells.
@@ -255,8 +254,8 @@ namespace asora {
             auto q_off_2 = cells_to_shell(q - 3);
             auto q_off_3 = cells_to_shell(q - 4);
             if (num_cells < shared_size) {
-                // Threads copy the column density values of previous q-shell on the
-                // shared memory.
+                // Threads copy the column density values of previous q-shell from
+                // global memory to shared memory.
                 int s = threadIdx.x;
                 while (s < num_cells) {
                     cdens1[s] = coldensh_out[q_off_1 + s];
@@ -307,71 +306,105 @@ namespace asora {
         int di, int dj, int dk, const cuda::std::array<double *, 3> &shared_cdens,
         double sigma_HI_at_ion_freq
     ) {
+        // Degenerate case.
         if (di == 0 && dj == 0 && dk == 0) return {0.0, 0.5};
 
-        int si = std::copysignf(1.f, di);
-        int sj = std::copysignf(1.f, dj);
-        int sk = std::copysignf(1.f, dk);
         int ai = std::abs(di);
         int aj = std::abs(dj);
         int ak = std::abs(dk);
+        cuda::std::array<int, 4> offsets = {
+            0,                                          //
+            static_cast<int>(std::copysignf(1.0, di)),  //
+            static_cast<int>(std::copysignf(1.0, dj)),  //
+            static_cast<int>(std::copysignf(1.0, dk))
+        };
 
+        // Capture values before swaps take place.
         auto get_column_density = [&shared_cdens, di, dj, dk,
                                    q0 = abs(di) + abs(dj) +
                                         abs(dk)](int i_off, int j_off, int k_off) {
             auto &&[q, s] = cart2linthrd(di - i_off, dj - j_off, dk - k_off);
-            auto qlev = q0 - q - 1;
-            if (qlev < 0 || qlev >= shared_cdens.size()) return 0.0;
-            return shared_cdens[qlev][s];
+            switch (q0 - q - 1) {
+                case 0:
+                    // Cell is in q-1 cell
+                    return shared_cdens[0][s];
+                case 1:
+                    // Cell is in q-2 cell
+                    return shared_cdens[1][s];
+                case 2:
+                    // Cell is in q-3 cell
+                    return shared_cdens[2][s];
+                default:
+                    return 0.0;
+            }
         };
 
-        double c1 = get_column_density(si, sj, sk);
-        double c2, c3, c4;
-        if (ak >= aj && ak >= ai) {
-            c2 = get_column_density(0, sj, sk);
-            c3 = get_column_density(si, 0, sk);
-            c4 = get_column_density(0, 0, sk);
-        } else if (aj >= ai && aj >= ak) {
-            c2 = get_column_density(0, sj, sk);
-            c3 = get_column_density(si, sj, 0);
-            c4 = get_column_density(0, sj, 0);
+        // Offset index matrix for geometric factors w_i and cartesian coordinates (i,
+        // j, k). Default case is for (ak >= aj && ak >= ai).
+        cuda::std::array<size_t, 12> xi = {
+            1, 2, 3,  //
+            0, 2, 3,  //
+            1, 0, 3,  //
+            0, 0, 3   //
+        };
+        if (aj >= ai && aj >= ak) {
+            xi = {
+                1, 2, 3,  //
+                0, 2, 3,  //
+                1, 2, 0,  //
+                0, 2, 0   //
+
+            };
             cuda::std::swap(dj, dk);
             cuda::std::swap(aj, ak);
-        } else {  // (ai >= aj && ai >= ak)
-            c2 = get_column_density(si, 0, sk);
-            c3 = get_column_density(si, sj, 0);
-            c4 = get_column_density(si, 0, 0);
+
+        } else if (ai >= aj && ai >= ak) {
+            xi = {
+                1, 2, 3,  //
+                1, 0, 3,  //
+                1, 2, 0,  //
+                1, 0, 0   //
+            };
             cuda::std::swap(di, dk);
             cuda::std::swap(ai, ak);
             cuda::std::swap(di, dj);
             cuda::std::swap(ai, aj);
         }
 
-        auto &&[path, w1, w2, w3, w4] = geometric_factors(
+        const auto factors = geometric_factors(
             static_cast<double>(di), static_cast<double>(dj), static_cast<double>(dk)
         );
 
-        // Weight function for C2Ray interpolation function
+        // Weight function for C2Ray interpolation function.
         auto weightf = [sigma = sigma_HI_at_ion_freq](double cd) {
             constexpr double tau_0 = 0.6;
             return 1.0 / max(tau_0, cd * sigma);
         };
 
-        w1 *= weightf(c1);
-        w2 *= weightf(c2);
-        w3 *= weightf(c3);
-        w4 *= weightf(c4);
+        // Column density at the crossing point is a weighted average.
+        double cdens = 0.0;
+        double wtot = 0.0;
+        // Index matrix accessor.
+        auto o = xi.data();
+        for (size_t idx = 1; idx < factors.size(); ++idx, o += 3) {
+            auto w = factors[idx];
+            if (w <= 0.0) continue;
 
-        // Column density at the crossing point
-        auto cdensi = (c1 * w1 + c2 * w2 + c3 * w3 + c4 * w4) / (w1 + w2 + w3 + w4);
+            auto c = get_column_density(offsets[o[0]], offsets[o[1]], offsets[o[2]]);
+            w *= weightf(c);
+            cdens += w * c;
+            wtot += w;
+        }
+        cdens /= wtot;
 
-        // Take care of diagonals
+        // Take care of diagonals.
         if (ak == 1 && ai == 1 && aj == 1)
-            cdensi *= c::sqrt3<>;
+            cdens *= c::sqrt3<>;
         else if (ak == 1 && (ai == 1 || aj == 1))
-            cdensi *= c::sqrt2<>;
+            cdens *= c::sqrt2<>;
 
-        return cuda::std::make_pair(cdensi, path);
+        auto &path = factors[0];
+        return cuda::std::make_pair(cdens, path);
     }
 
 }  // namespace asora
