@@ -22,7 +22,8 @@ namespace asora {
 
     // Short-characteristics interpolation function
     __device__ cuda::std::pair<double, double> cinterp_gpu(
-        int di, int dj, int dk, const double *coldensh_out, double sigma_HI_at_ion_freq
+        int di, int dj, int dk, const cuda::std::array<const double *, 3> &shared_cdens,
+        double sigma_HI_at_ion_freq
     );
 
 }  // namespace asora

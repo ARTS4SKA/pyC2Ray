@@ -14,10 +14,16 @@ namespace asoratest {
         __global__ void cinterp_gpu_kernel(
             double *coldens_data, double *path_data, const double *dens_data
         ) {
-            auto di = blockIdx.x - gridDim.x / 2;
-            auto dj = threadIdx.x - blockDim.x / 2;
-            auto dk = threadIdx.y - blockDim.y / 2;
-            auto &&[cdens, path] = asora::cinterp_gpu(di, dj, dk, dens_data, 1.0);
+            int di = blockIdx.x - gridDim.x / 2;
+            int dj = threadIdx.x - blockDim.x / 2;
+            int dk = threadIdx.y - blockDim.y / 2;
+            auto q0 = abs(di) + abs(dj) + abs(dk);
+            cuda::std::array<const double *, 3> shared_cdens = {
+                &dens_data[asora::cells_to_shell(q0 - 2)],
+                &dens_data[asora::cells_to_shell(q0 - 3)],
+                &dens_data[asora::cells_to_shell(q0 - 4)]
+            };
+            auto &&[cdens, path] = asora::cinterp_gpu(di, dj, dk, shared_cdens, 1.0);
 
             auto idx =
                 threadIdx.y + blockDim.y * (threadIdx.x + blockDim.x * blockIdx.x);
