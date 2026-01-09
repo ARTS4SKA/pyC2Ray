@@ -90,7 +90,7 @@ static PyObject *asora_do_all_sources(PyObject *self, PyObject *args) {
     double *sig_hei_data = (double *)PyArray_DATA(sig_hei);
     double *sig_heii_data = (double *)PyArray_DATA(sig_heii);
 
-    do_all_sources_gpu(
+    asora::do_all_sources_gpu(
         R, coldensh_out_hi, coldensh_out_hei, coldensh_out_heii, sig_hi_data,
         sig_hei_data, sig_heii_data, nbin1, nbin2, nbin3, dr, ndens_data, xh_av_HI_data,
         xh_av_HeI_data, xh_av_HeII_data, phi_ion_HI_data, phi_ion_HeI_data,

@@ -27,4 +27,5 @@ np_dep = dependency('numpy', version: '>=2', method: 'config-tool')
 
 subdir('src/c2ray')
 subdir('src/asora')
+subdir('src/asora_he')
 subdir('pyc2ray')
