@@ -1,5 +1,7 @@
 #include "rates.cuh"
 
+#include <cuda_runtime.h>
+
 #include <iostream>
 
 // ========================================================================

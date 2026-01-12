@@ -1,6 +1,6 @@
-#include "raytracing_He.cuh"
+#include "raytracing.cuh"
 
-#include "memory_He.cuh"
+#include "memory.cuh"
 #include "rates.cuh"
 #include "utils.cuh"
 

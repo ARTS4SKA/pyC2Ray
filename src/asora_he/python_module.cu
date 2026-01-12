@@ -1,8 +1,8 @@
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #define PY_SSIZE_T_CLEAN
 
-#include "memory_He.cuh"
-#include "raytracing_He.cuh"
+#include "memory.cuh"
+#include "raytracing.cuh"
 
 #include <Python.h>
 #include <numpy/arrayobject.h>

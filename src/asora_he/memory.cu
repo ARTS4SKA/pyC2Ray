@@ -1,4 +1,4 @@
-#include "memory_He.cuh"
+#include "memory.cuh"
 
 #include "utils.cuh"
 

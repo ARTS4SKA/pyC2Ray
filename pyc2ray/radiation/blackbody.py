@@ -1,12 +1,11 @@
 from functools import partial
+from pathlib import Path
 
 import astropy.constants as cst
 import astropy.units as u
 import numpy as np
 import scipy
 from scipy.integrate import quad, quad_vec
-
-import pyc2ray as pc2r
 
 # For detailed comparisons with C2Ray, we use the same exact value for the constants
 # This can be changed to the astropy values once consistency between
@@ -268,14 +267,7 @@ class BlackBodySource_Multifreq:
 
         self.freqs_tab, self.pl_index_HI, self.pl_index_HeI, self.pl_index_HeII = (
             np.loadtxt(
-                pc2r.__path__[0] + "/tables/multifreq/Verner1996_spectidx.txt",
-                unpack=True,
-            )
-        )
-
-        self.freqs_tab, self.pl_index_HI, self.pl_index_HeI, self.pl_index_HeII = (
-            np.loadtxt(
-                pc2r.__path__[0] + "/tables/multifreq/Verner1996_spectidx.txt",
+                Path(__file__).parent / "../tables/multifreq/Verner1996_spectidx.txt",
                 unpack=True,
             )
         )
