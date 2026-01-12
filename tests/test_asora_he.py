@@ -18,13 +18,13 @@ if asora is None:
 
 @pytest.fixture
 def init_device():
-    asora.device_init(10, 10, 10)
+    asora.device_init()
     yield
     asora.device_close()
 
 
 def test_device_init(init_device):
-    # asora.is_device_init()
+    asora.is_device_init()
     pass
 
 
@@ -58,7 +58,7 @@ def setup_do_all_sources(
         tau, freq_min, freq_max, 1e48
     )
 
-    # read cross section
+    # Read cross section
     _, sigma_HI, sigma_HeI, sigma_HeII = np.loadtxt(
         data_dir / "Verner1996_crossect.txt", unpack=True
     )
@@ -72,23 +72,16 @@ def setup_do_all_sources(
 
     assert photo_thin_table.shape[0] == num_freq
 
-    asora.device_init(mesh_size, batch_size, num_freq)
-
     # Allocate tables to GPU device
     asora.tables_to_device(
-        photo_thin_table.copy(),
-        photo_thick_table.copy(),
-        heat_thin_table.copy(),
-        heat_thick_table.copy(),
-        num_tau,
-        num_freq,
+        photo_thin_table.ravel(),
+        photo_thick_table.ravel(),
+        heat_thin_table.ravel(),
+        heat_thick_table.ravel(),
     )
 
     size = mesh_size**3
 
-    coldensh_out_HI = np.zeros(size, dtype=np.float64)
-    coldensh_out_HeI = np.zeros(size, dtype=np.float64)
-    coldensh_out_HeII = np.zeros(size, dtype=np.float64)
     phion_HI = np.zeros(size, dtype=np.float64)
     phion_HeI = np.zeros(size, dtype=np.float64)
     phion_HeII = np.zeros(size, dtype=np.float64)
@@ -102,7 +95,7 @@ def setup_do_all_sources(
     xHeII = np.full(size, 1e-3, dtype=np.float64)
 
     # Copy density field to GPU device
-    asora.density_to_device(ndens, mesh_size)
+    asora.density_to_device(ndens)
 
     # Efficiency factor (converting mass to photons)
     f_gamma = 100.0
@@ -114,7 +107,7 @@ def setup_do_all_sources(
     norm_flux *= f_gamma / 1e48
 
     # Copy source list to GPU device
-    asora.source_data_to_device(src_pos, norm_flux, num_sources)
+    asora.source_data_to_device(src_pos, norm_flux)
 
     # Size of a cell
     boxsize = 1.62022035 * u.Mpc
@@ -122,17 +115,14 @@ def setup_do_all_sources(
 
     yield (
         R_max,
-        coldensh_out_HI,
-        coldensh_out_HeI,
-        coldensh_out_HeII,
         sigma_HI,
         sigma_HeI,
         sigma_HeII,
         numb1,
         numb2,
         numb3,
+        num_freq,
         dr,
-        ndens,
         xHI,
         xHeI,
         xHeII,
@@ -147,21 +137,21 @@ def setup_do_all_sources(
         minlog_tau,
         dlogtau,
         num_tau,
-        # batch_size,
-        # block_size,
+        batch_size,
+        block_size,
     )
 
 
-def test_do_all_sources(data_dir):
+def test_do_all_sources(data_dir, init_device):
     with setup_do_all_sources(data_dir) as args:
         asora.do_all_sources(*args)
 
-        phion_HI = args[15] * 1e48
-        phion_HeI = args[16] * 1e48
-        phion_HeII = args[17] * 1e48
-        pheat_HI = args[18] * 1e48
-        pheat_HeI = args[19] * 1e48
-        pheat_HeII = args[20] * 1e48
+        phion_HI = args[12] * 1e48
+        phion_HeI = args[13] * 1e48
+        phion_HeII = args[14] * 1e48
+        pheat_HI = args[15] * 1e48
+        pheat_HeI = args[16] * 1e48
+        pheat_HeII = args[17] * 1e48
 
         if False:
             np.savez(

@@ -115,31 +115,31 @@ namespace asora {
 
         // Lazy allocation of memory that'll be used until the end of the application
         auto n_cells = m1 * m1 * m1;
-        if (!device::contains(buffer_tag::photo_ionization))
-            device::add<double>(buffer_tag::photo_ionization, n_cells);
-        if (!device::contains(buffer_tag::hydrogen_fraction))
-            device::add<double>(buffer_tag::hydrogen_fraction, n_cells);
+        if (!device::contains(buffer_tag::photo_ionization_HI))
+            device::add<double>(buffer_tag::photo_ionization_HI, n_cells);
+        if (!device::contains(buffer_tag::fraction_HII))
+            device::add<double>(buffer_tag::fraction_HII, n_cells);
 
-        //  Determine how large the octahedron should be, based on the raytracing
-        //  radius. Currently, this is set s.t. the radius equals the distance from
-        //  the source to the middle of the faces of the octahedron. To raytrace the
-        //  whole box, the octahedron bust be 1.5*N in size
+        // Determine how large the octahedron should be, based on the raytracing
+        // radius. Currently, this is set s.t. the radius equals the distance from
+        // the source to the middle of the faces of the octahedron. To raytrace the
+        // whole box, the octahedron bust be 1.5*N in size
         int q_max = std::ceil(c::sqrt3<> * min(R, c::sqrt3<> * m1 / 2.0));
-        if (!device::contains(buffer_tag::column_density))
+        if (!device::contains(buffer_tag::column_density_HI))
             device::add<double>(
-                buffer_tag::column_density, grid_size * cells_to_shell(q_max)
+                buffer_tag::column_density_HI, grid_size * cells_to_shell(q_max)
             );
 
         // Here we fill the ionization rate array with zero before raytracing all
         // sources. The LOCALRATES flag is for debugging purposes and will be
         // removed later on
-        auto phi_buf = device::get(buffer_tag::photo_ionization);
+        auto phi_buf = device::get(buffer_tag::photo_ionization_HI);
         auto phi_d = phi_buf.view<double>().data();
         safe_cuda(cudaMemset(phi_d, 0, phi_buf.size()));
 
         // density array is not modified, asora assumes that it has been copied to
         // the device before
-        auto xh_buf = device::get(buffer_tag::hydrogen_fraction);
+        auto xh_buf = device::get(buffer_tag::fraction_HII);
         auto xh_d = xh_buf.view<double>().data();
         xh_buf.copyFromHost(xh_av, xh_buf.size());
 
@@ -151,12 +151,12 @@ namespace asora {
 
         auto src_flux_d = device::get(buffer_tag::source_flux).view<double>().data();
         auto src_pos_d = device::get(buffer_tag::source_position).view<int>().data();
-        auto cdh_d = device::get(buffer_tag::column_density).view<double>().data();
+        auto cdh_d = device::get(buffer_tag::column_density_HI).view<double>().data();
         auto n_d = device::get(buffer_tag::number_density).view<double>().data();
         auto ph_thin_d =
-            device::get(buffer_tag::photo_thin_table).view<double>().data();
+            device::get(buffer_tag::photo_ion_thin_table).view<double>().data();
         auto ph_thick_d =
-            device::get(buffer_tag::photo_thick_table).view<double>().data();
+            device::get(buffer_tag::photo_ion_thick_table).view<double>().data();
 
         // Loop over batches of sources
         for (size_t ns = 0; ns < num_src; ns += grid_size) {

@@ -1,8 +1,8 @@
 #include "raytracing.cuh"
 
-#include "memory.cuh"
+#include "../asora/memory.h"
+#include "../asora/utils.cuh"
 #include "rates.cuh"
-#include "utils.cuh"
 
 #include <cuda_runtime.h>
 
@@ -38,10 +38,10 @@ namespace {
     }
 
     // Flat-array index from 3D (i,j,k) indices
-    __device__ int mem_offst_gpu(
+    __device__ int mem_offset_gpu(
         const int &i, const int &j, const int &k, const int &N
     ) {
-        return N * N * i + N * j + k;
+        return N * N * modulo(i, N) + N * modulo(j, N) + modulo(k, N);
     }
 
     // Weight function for C2Ray interpolation function (see cinterp_gpu below)
@@ -73,6 +73,11 @@ namespace {
         }
     }
 
+    template <typename T>
+    T *get_data_view(asora::buffer_tag tag) {
+        return asora::device::get(tag).view<T>().data();
+    }
+
 }  // namespace
 
 namespace asora {
@@ -80,62 +85,69 @@ namespace asora {
     // Raytrace all sources and add up ionization rates
     // ========================================================================
     void do_all_sources_gpu(
-        const double &R, double *coldensh_out_hi, double *coldensh_out_hei,
-        double *coldensh_out_heii,
-        double *sig_hi,  // These now are arrays of the cross section for the three
-                         // elements
-        double *sig_hei, double *sig_heii,
-        const int &NumBin1,  // and these are the size of the frequency sub-bins (in
-                             // the original paper this was 1, 26 and 20)
-        const int &NumBin2, const int &NumBin3, const double &dr, double *ndens,
-        double *xHII_av, double *xHeII_av, double *xHeIII_av, double *phi_ion_HI,
-        double *phi_ion_HeI, double *phi_ion_HeII, double *phi_heat_HI,
-        double *phi_heat_HeI, double *phi_heat_HeII, const int &NumSrc, const int &m1,
-        const double &minlogtau, const double &dlogtau, const int &NumTau
+        double R, const double *sig_hi, const double *sig_hei, const double *sig_heii,
+        int num_bin_1, int num_bin_2, int num_bin_3, int num_freq, double dr,
+        const double *xHII_av, const double *xHeII_av, const double *xHeIII_av,
+        double *phi_ion_HI, double *phi_ion_HeI, double *phi_ion_HeII,
+        double *phi_heat_HI, double *phi_heat_HeI, double *phi_heat_HeII, int num_src,
+        int m1, double minlogtau, double dlogtau, int num_tau, size_t grid_size,
+        size_t block_size
     ) {
-        // Byte-size of grid data
-        int meshsize = m1 * m1 * m1 * sizeof(double);
+        device::check_initialized();
 
-        // Number of frequency bins
-        int NumFreq = NUM_FREQ;
-        int freqsize = NumFreq * sizeof(double);
+        // Size of grid data
+        auto n_cells = m1 * m1 * m1;
 
-        // std::cout << "R: " << R << std::endl;
-        //  Determine how large the octahedron should be, based on the raytracing
-        //  radius. Currently, this is set s.t. the radius equals the distance from
-        //  the source to the middle of the faces of the octahedron. To raytrace the
-        //  whole box, the octahedron bust be 1.5*N in size
-        int max_q = std::ceil(SQRT3 * min(R, SQRT3 * m1 / 2.0));
-        // int max_q = std::ceil(SQRT3 * R); //std::ceil(1.5 * m1);
-        // std::cout << "max_q: " << max_q << std::endl;
+        // Initialize and copy density data.
+        for (auto &&[tag, data] : {
+                 std::pair{buffer_tag::fraction_HII, xHII_av},
+                 std::pair{buffer_tag::fraction_HeII, xHeII_av},
+                 std::pair{buffer_tag::fraction_HeIII, xHeIII_av},
+             }) {
+            if (!device::contains(tag)) device::add<double>(tag, n_cells);
+            auto buf = device::get(tag);
+            buf.copyFromHost(data, buf.size());
+        }
 
-        // CUDA Grid size: since 1 block = 1 source, this sets the number of sources
-        // treated in parallel
-        dim3 gs(NUM_SRC_PAR);
+        // Initialize and set to zero photo rate data.
+        for (auto tag : {
+                 buffer_tag::photo_ionization_HI,
+                 buffer_tag::photo_ionization_HeI,
+                 buffer_tag::photo_ionization_HeII,
+                 buffer_tag::photo_heating_HI,
+                 buffer_tag::photo_heating_HeI,
+                 buffer_tag::photo_heating_HeII,
+             }) {
+            if (!device::contains(tag)) device::add<double>(tag, n_cells);
+            auto buf = device::get(tag);
+            safe_cuda(cudaMemset(buf.view<double>().data(), 0, buf.size()));
+        }
 
-        // CUDA Block size: more of a tuning parameter (see above), in practice
-        // anything ~128 is fine
-        dim3 bs(CUDA_BLOCK_SIZE);
+        // Initialize and copy cross section data.
+        for (auto &&[tag, data] : {
+                 std::pair{buffer_tag::cross_section_HI, sig_hi},
+                 std::pair{buffer_tag::cross_section_HeI, sig_hei},
+                 std::pair{buffer_tag::cross_section_HeII, sig_heii},
+             }) {
+            if (!device::contains(tag)) device::add<double>(tag, num_freq);
+            auto buf = device::get(tag);
+            buf.copyFromHost(data, buf.size());
+        }
 
-        // Here we fill the ionization and heating rate array with zero before
-        // raytracing all sources. The LOCALRATES flag is for debugging purposes and
-        // will be removed later on
-        safe_cuda(cudaGetLastError());
+        // Allocate memory for column density calculations.
+        for (auto tag : {
+                 buffer_tag::column_density_HI,
+                 buffer_tag::column_density_HeI,
+                 buffer_tag::column_density_HeII,
+             }) {
+            if (!device::contains(tag)) device::add<double>(tag, grid_size * n_cells);
+        }
 
-        safe_cuda(cudaMemset(phi_HI_dev, 0, meshsize));
-        safe_cuda(cudaMemset(phi_HeI_dev, 0, meshsize));
-        safe_cuda(cudaMemset(phi_HeII_dev, 0, meshsize));
-        safe_cuda(cudaMemset(heat_HI_dev, 0, meshsize));
-        safe_cuda(cudaMemset(heat_HeI_dev, 0, meshsize));
-        safe_cuda(cudaMemset(heat_HeII_dev, 0, meshsize));
-
-        // Copy current ionization fraction to the device
-        safe_cuda(cudaMemcpy(xHI_dev, xHII_av, meshsize, cudaMemcpyHostToDevice));
-        safe_cuda(cudaMemcpy(xHeI_dev, xHeII_av, meshsize, cudaMemcpyHostToDevice));
-        safe_cuda(cudaMemcpy(xHeII_dev, xHeIII_av, meshsize, cudaMemcpyHostToDevice));
-        safe_cuda(cudaMemcpy(sig_hi_dev, sig_hi, freqsize, cudaMemcpyHostToDevice));
-        safe_cuda(cudaMemcpy(sig_hei_dev, sig_hei, freqsize, cudaMemcpyHostToDevice));
-        safe_cuda(cudaMemcpy(sig_heii_dev, sig_heii, freqsize, cudaMemcpyHostToDevice));
+        // Determine how large the octahedron should be, based on the raytracing
+        // radius. Currently, this is set s.t. the radius equals the distance from
+        // the source to the middle of the faces of the octahedron. To raytrace the
+        // whole box, the octahedron bust be 1.5*N in size
+        int q_max = std::ceil(c::sqrt3<> * min(R, c::sqrt3<> * m1 / 2.0));
 
         // Since the grid is periodic, we limit the maximum size of the raytraced
         // region to a cube as large as the mesh around the source. See line 93 of
@@ -149,45 +161,62 @@ namespace asora {
         // and HI+HeI+HeII (value 2)
         // int freq_flag=0;
 
+        auto src_flux_d = get_data_view<double>(buffer_tag::source_flux);
+        auto src_pos_d = get_data_view<int>(buffer_tag::source_position);
+
+        auto cdHI_d = get_data_view<double>(buffer_tag::column_density_HI);
+        auto cdHeI_d = get_data_view<double>(buffer_tag::column_density_HeI);
+        auto cdHeII_d = get_data_view<double>(buffer_tag::column_density_HeII);
+
+        auto sigHI_d = get_data_view<double>(buffer_tag::cross_section_HI);
+        auto sigHeI_d = get_data_view<double>(buffer_tag::cross_section_HeI);
+        auto sigHeII_d = get_data_view<double>(buffer_tag::cross_section_HeII);
+
+        auto n_d = get_data_view<double>(buffer_tag::number_density);
+        auto xHII_d = get_data_view<double>(buffer_tag::fraction_HII);
+        auto xHeII_d = get_data_view<double>(buffer_tag::fraction_HeII);
+        auto xHeIII_d = get_data_view<double>(buffer_tag::fraction_HeIII);
+
+        auto phion_HI_d = get_data_view<double>(buffer_tag::photo_ionization_HI);
+        auto phion_HeI_d = get_data_view<double>(buffer_tag::photo_ionization_HeI);
+        auto phion_HeII_d = get_data_view<double>(buffer_tag::photo_ionization_HeII);
+        auto pheat_HI_d = get_data_view<double>(buffer_tag::photo_heating_HI);
+        auto pheat_HeI_d = get_data_view<double>(buffer_tag::photo_heating_HeI);
+        auto pheat_HeII_d = get_data_view<double>(buffer_tag::photo_heating_HeII);
+
+        auto phion_thin_d = get_data_view<double>(buffer_tag::photo_ion_thin_table);
+        auto phion_thick_d = get_data_view<double>(buffer_tag::photo_ion_thick_table);
+        auto pheat_thin_d = get_data_view<double>(buffer_tag::photo_heat_thin_table);
+        auto pheat_thick_d = get_data_view<double>(buffer_tag::photo_heat_thick_table);
+
         // Loop over batches of sources
-        for (int ns = 0; ns < NumSrc; ns += NUM_SRC_PAR) {
-            evolve0D_gpu<<<gs, bs>>>(
-                R, max_q, ns, NumSrc, NUM_SRC_PAR, src_pos_dev, src_flux_dev, cdh_dev,
-                cdhei_dev, cdheii_dev, sig_hi_dev, sig_hei_dev, sig_heii_dev, dr, n_dev,
-                xHI_dev, xHeI_dev, xHeII_dev, phi_HI_dev, phi_HeI_dev, phi_HeII_dev,
-                heat_HI_dev, heat_HeI_dev, heat_HeII_dev, m1, photo_thin_table_dev,
-                photo_thick_table_dev, heat_thin_table_dev, heat_thick_table_dev,
-                minlogtau, dlogtau, NumTau, NumBin1, NumBin2, NumBin3, NUM_FREQ, last_l,
-                last_r
+        for (int ns = 0; ns < num_src; ns += grid_size) {
+            // Raytrace the current batch of sources in parallel
+            // Consecutive kernel launches are in the same stream and so are serialized
+            evolve0D_gpu<<<grid_size, block_size>>>(
+                R, q_max, ns, num_src, src_pos_d, src_flux_d, cdHI_d, cdHeI_d, cdHeII_d,
+                sigHI_d, sigHeI_d, sigHeII_d, dr, n_d, xHII_d, xHeII_d, xHeIII_d,
+                phion_HI_d, phion_HeI_d, phion_HeII_d, pheat_HI_d, pheat_HeI_d,
+                pheat_HeII_d, m1, phion_thin_d, phion_thick_d, pheat_thin_d,
+                pheat_thick_d, minlogtau, dlogtau, num_tau, num_bin_1, num_bin_2,
+                num_bin_3, num_freq, last_l, last_r
             );
 
-            // Check for errors
-            auto error = cudaGetLastError();
-            if (error != cudaSuccess) {
-                throw std::runtime_error(
-                    "Error Launching Kernel: " + std::string(cudaGetErrorName(error)) +
-                    " - " + std::string(cudaGetErrorString(error))
-                );
-            }
-
-            // Sync device to be sure (is this required ??)
-            cudaDeviceSynchronize();
+            safe_cuda(cudaPeekAtLastError());
         }
 
-        // Copy the accumulated ionization fraction and column density back to the
-        // host
-        auto error1 =
-            cudaMemcpy(phi_ion_HI, phi_HI_dev, meshsize, cudaMemcpyDeviceToHost);
-        auto error2 =
-            cudaMemcpy(phi_ion_HeI, phi_HeI_dev, meshsize, cudaMemcpyDeviceToHost);
-        auto error3 =
-            cudaMemcpy(phi_ion_HeII, phi_HeII_dev, meshsize, cudaMemcpyDeviceToHost);
-        auto error4 =
-            cudaMemcpy(phi_heat_HI, heat_HI_dev, meshsize, cudaMemcpyDeviceToHost);
-        auto error5 =
-            cudaMemcpy(phi_heat_HeI, heat_HeI_dev, meshsize, cudaMemcpyDeviceToHost);
-        auto error6 =
-            cudaMemcpy(phi_heat_HeII, heat_HeII_dev, meshsize, cudaMemcpyDeviceToHost);
+        // Copy the accumulated ionization rates back to the host
+        for (auto &&[tag, data] : {
+                 std::pair{buffer_tag::photo_ionization_HI, phi_ion_HI},
+                 std::pair{buffer_tag::photo_ionization_HeI, phi_ion_HeI},
+                 std::pair{buffer_tag::photo_ionization_HeII, phi_ion_HeII},
+                 std::pair{buffer_tag::photo_heating_HI, phi_heat_HI},
+                 std::pair{buffer_tag::photo_heating_HeI, phi_heat_HeI},
+                 std::pair{buffer_tag::photo_heating_HeII, phi_heat_HeII},
+             }) {
+            auto buf = device::get(tag);
+            buf.copyToHost(data, buf.size());
+        }
     }
 
     // ========================================================================
@@ -195,22 +224,19 @@ namespace asora {
     // to the current cell and finds the photoionization rate
     // ========================================================================
     __global__ void evolve0D_gpu(
-        const double Rmax_LLS,
-        const int q_max,  // Is now the size of max q
-        const int ns_start, const int NumSrc, const int num_src_par, int *src_pos,
-        double *src_flux, double *coldensh_out_hi, double *coldensh_out_hei,
-        double *coldensh_out_heii,
-        // This are the cross sections for the three elements at
-        // different frequency (frequency loop is outside)
-        double *sig_hi, double *sig_hei, double *sig_heii, const double dr,
+        double Rmax_LLS,
+        int q_max,  // Is now the size of max q
+        int ns_start, int num_src, int *src_pos, double *src_flux,
+        double *coldens_out_hi, double *coldens_out_hei, double *coldens_out_heii,
+        const double *sig_hi, const double *sig_hei, const double *sig_heii, double dr,
         const double *ndens, const double *xHII_av, const double *xHeII_av,
         const double *xHeIII_av, double *phi_ion_HI, double *phi_ion_HeI,
         double *phi_ion_HeII, double *phi_heat_HI, double *phi_heat_HeI,
-        double *phi_heat_HeII, const int m1, const double *photo_thin_table,
+        double *phi_heat_HeII, int m1, const double *photo_thin_table,
         const double *photo_thick_table, const double *heat_thin_table,
-        const double *heat_thick_table, const double minlogtau, const double dlogtau,
-        const int NumTau, const int NumBin1, const int NumBin2, const int NumBin3,
-        const int NumFreq, const int last_l, const int last_r
+        const double *heat_thick_table, double minlogtau, double dlogtau, int num_tau,
+        int num_bin_1, int num_bin_2, int num_bin_3, int num_freq, int last_l,
+        int last_r
     ) {
         /* The raytracing kernel proceeds as follows:
         1. Select the source based on the block number (within the batch = the grid)
@@ -218,25 +244,26 @@ namespace asora {
         3. Inside each shell, threads independently do all cells, possibly requiring
         multiple iterations if the block size is smaller than the number of cells in
         the shell (loop "B")
-        4. After each shell, the threads are synchronized to ensure that causality is
-        respected
+        4. After each shell, the threads are synchronized to ensure that causality
+        is respected
         */
 
         // TODO: later need to import this from parameters.ylm
         double abu_he_mass = 0.2486;
 
-        // Source number = Start of batch + block number (each block does one source)
+        // Source number = Start of batch + block number (each block does one
+        // source)
         int ns = ns_start + blockIdx.x;
 
-        // Offset pointer to the outgoing column density array used for interpolation
-        // (each block needs its own copy of the array)
+        // Offset pointer to the outgoing column density array used for
+        // interpolation (each block needs its own copy of the array)
         int cdh_offset = blockIdx.x * m1 * m1 * m1;
-        coldensh_out_hi += cdh_offset;
-        coldensh_out_hei += cdh_offset;
-        coldensh_out_heii += cdh_offset;
+        coldens_out_hi += cdh_offset;
+        coldens_out_hei += cdh_offset;
+        coldens_out_heii += cdh_offset;
 
         // Ensure the source index is valid
-        if (ns >= NumSrc) return;
+        if (ns >= num_src) return;
 
         // (A) Loop over ASORA q-shells
         for (int q = 0; q <= q_max; ++q) {
@@ -293,52 +320,35 @@ namespace asora {
                 j += j0;
                 k += k0;
 
-                int pos[3];
-                double path;
-                double coldens_in_hi;    // HI Column density to the cell
-                double coldens_in_hei;   // HeI Column density to the cell
-                double coldens_in_heii;  // HeII Column density to the cell
-                double nHI_p;            // Local density of HI in the cell
-                double nHeI_p;           // Local density of HeI in the cell
-                double nHeII_p;          // Local density of HeII in the cell
-                double xh_av_p;          // Local hydrogen ionization fraction of cell
-                double xhei_av_p;        // Local helium first ionization fraction
-                                         // of cell
-                double xheii_av_p;       // Local helium second ionization
-                                         // fraction of cell
-
-                double xs, ys, zs;
-                double dist2;
-                double vol_ph;
-
 // When not in periodic mode, only treat cell if its in the grid
 #if !defined(PERIODIC)
                 if (!in_box_gpu(i, j, k, m1)) continue;
 #endif
                 // Map to periodic grid
-                pos[0] = modulo(i, m1);
-                pos[1] = modulo(j, m1);
-                pos[2] = modulo(k, m1);
+                auto offset = mem_offset_gpu(i, j, k, m1);
 
-                auto offset = mem_offst_gpu(pos[0], pos[1], pos[2], m1);
+                // Get local ionization fraction of HII, HeII and HeIII:
+                auto xhii_av_p = xHII_av[offset];
+                auto xhei_av_p = xHeII_av[offset];
+                auto xheii_av_p = xHeIII_av[offset];
 
-                // Get local ionization fraction of HII, HeII and HeIII
-                xh_av_p = xHII_av[offset];
-                xhei_av_p = xHeII_av[offset];
-                xheii_av_p = xHeIII_av[offset];
-
-                // Get local HI number density
-                nHI_p = ndens[offset] * (1.0 - abu_he_mass) * (1.0 - xh_av_p);
-
+                // Get local number density of HI, HeI, and HeII
+                auto nHI_p = ndens[offset] * (1.0 - abu_he_mass) * (1.0 - xhii_av_p);
                 // Get local HeI number density
-                nHeI_p = ndens[offset] * abu_he_mass * (1.0 - xhei_av_p - xheii_av_p);
-
+                auto nHeI_p =
+                    ndens[offset] * abu_he_mass * (1.0 - xhei_av_p - xheii_av_p);
                 // Get local HeII number density
-                nHeII_p = ndens[offset] * abu_he_mass * xhei_av_p;
+                auto nHeII_p = ndens[offset] * abu_he_mass * xhei_av_p;
 
                 // If its the source cell, just find path (no incoming
                 // column density), otherwise if its another cell, do
                 // interpolation to find incoming column density
+                double path;
+                double dist2;
+                double vol_ph;
+                double coldens_in_hi;    // HI Column density to the cell
+                double coldens_in_hei;   // HeI Column density to the cell
+                double coldens_in_heii;  // HeII Column density to the cell
                 if (i == i0 && j == j0 && k == k0) {
                     coldens_in_hi = 0.0;
                     coldens_in_hei = 0.0;
@@ -349,23 +359,23 @@ namespace asora {
                     dist2 = 0.0;
                 } else {
                     cinterp_gpu(
-                        i, j, k, i0, j0, k0, coldens_in_hi, path, coldensh_out_hi,
+                        i, j, k, i0, j0, k0, coldens_in_hi, path, coldens_out_hi,
                         sig_hi[0], m1
                     );
                     cinterp_gpu(
-                        i, j, k, i0, j0, k0, coldens_in_hei, path, coldensh_out_hei,
+                        i, j, k, i0, j0, k0, coldens_in_hei, path, coldens_out_hei,
                         sig_hei[0], m1
                     );
                     cinterp_gpu(
-                        i, j, k, i0, j0, k0, coldens_in_heii, path, coldensh_out_heii,
+                        i, j, k, i0, j0, k0, coldens_in_heii, path, coldens_out_heii,
                         sig_heii[0], m1
                     );
 
                     path *= dr;
                     // Find the distance to the source
-                    xs = dr * (i - i0);
-                    ys = dr * (j - j0);
-                    zs = dr * (k - k0);
+                    auto xs = dr * (i - i0);
+                    auto ys = dr * (j - j0);
+                    auto zs = dr * (k - k0);
                     dist2 = xs * xs + ys * ys + zs * zs;
                     // vol_ph = dist2 * path;
                     vol_ph = dist2 * path * FOURPI;
@@ -377,9 +387,9 @@ namespace asora {
 
                 // Compute outgoing column density and add to array for
                 // subsequent interpolations
-                coldensh_out_hi[offset] = cdo_hi;
-                coldensh_out_hei[offset] = cdo_hei;
-                coldensh_out_heii[offset] = cdo_heii;
+                coldens_out_hi[offset] = cdo_hi;
+                coldens_out_hei[offset] = cdo_hei;
+                coldens_out_heii[offset] = cdo_heii;
 
                 // Compute photoionization rates from column density.
                 // WARNING: for now this is limited to the grey-opacity
@@ -390,7 +400,7 @@ namespace asora {
                 if (dist2 / (dr * dr) > Rmax_LLS * Rmax_LLS) continue;
 
                 // frequency loop
-                for (int nf = 0; nf < NumFreq; nf += 1) {
+                for (int nf = 0; nf < num_freq; ++nf) {
                     double tau_in_hi = 0.0;
                     double tau_in_hei = 0.0;
                     double tau_in_heii = 0.0;
@@ -398,33 +408,20 @@ namespace asora {
                     double tau_out_hei = 0.0;
                     double tau_out_heii = 0.0;
 
-                    if (nf < NumBin1)  // first frequency bin
-                                       // ionizes just HI
-                    {
-                        // Compute optical depth
+                    // Compute optical depths
+                    if (nf >= 0) {
+                        // First frequency bin ionizes just HI
                         tau_in_hi = coldens_in_hi * sig_hi[nf];
                         tau_out_hi = cdo_hi * sig_hi[nf];
-                    } else if ((nf >= NumBin1) &&
-                               (nf < NumBin1 + NumBin2))  // second frequency bin
-                                                          // ionizes HI and HeI
-                    {
-                        // Compute optical depth
-                        tau_in_hi = coldens_in_hi * sig_hi[nf];
+                    }
+                    if (nf >= num_bin_1) {
+                        // Second frequency bin ionizes HI and HeI
                         tau_in_hei = coldens_in_hei * sig_hei[nf];
-
-                        tau_out_hi = cdo_hi * sig_hi[nf];
                         tau_out_hei = cdo_hei * sig_hei[nf];
-                    } else if ((nf >= NumBin1 + NumBin2) &&
-                               (nf < NumBin1 + NumBin2 + NumBin3
-                               ))  // third frequency bin ionizes HI, HeI and HeII
-                    {
-                        // Compute optical depth
-                        tau_in_hi = coldens_in_hi * sig_hi[nf];
-                        tau_in_hei = coldens_in_hei * sig_hei[nf];
+                    }
+                    if (nf >= num_bin_1 + num_bin_2) {
+                        // Third frequency bin ionizes HI, HeI and HeII
                         tau_in_heii = coldens_in_heii * sig_heii[nf];
-
-                        tau_out_hi = cdo_hi * sig_hi[nf];
-                        tau_out_hei = cdo_hei * sig_hei[nf];
                         tau_out_heii = cdo_heii * sig_heii[nf];
                     }
 
@@ -432,14 +429,14 @@ namespace asora {
                     double tau_out_tot = tau_out_hi + tau_out_hei + tau_out_heii;
                     double phi = photoion_rates_gpu(
                         strength, tau_in_tot, tau_out_tot, nf, vol_ph, photo_thin_table,
-                        photo_thick_table, minlogtau, dlogtau, NumTau, NumFreq
+                        photo_thick_table, minlogtau, dlogtau, num_tau, num_freq
                     );
                     // TODO: heating requires more tables than just one because of the
                     // frequency dependency. Probably solution is to move this inside
                     // the if else condition (look at the radiation_tables.f90 line 322)
                     double heat = photoheat_rates_gpu(
                         strength, tau_in_tot, tau_out_tot, nf, vol_ph, heat_thin_table,
-                        heat_thick_table, minlogtau, dlogtau, NumTau, NumFreq
+                        heat_thick_table, minlogtau, dlogtau, num_tau, num_freq
                     );
 
                     // Assign the photo-ionization and heating rates
@@ -483,15 +480,12 @@ namespace asora {
     // Short-characteristics interpolation function
     // ========================================================================
     __device__ void cinterp_gpu(
-        const int i, const int j, const int k, const int i0, const int j0, const int k0,
-        double &cdensi, double &path, double *coldensh_out,
-        /* This is now considered for any elements at any frequency */
-        const double sigma_at_freq, const int &m1
+        int i, int j, int k, int i0, int j0, int k0, double &cdensi, double &path,
+        double *coldensh_out, double sigma_at_freq, int m1
     ) {
         int idel, jdel, kdel;
         int idela, jdela, kdela;
         int im, jm, km;
-        unsigned int ip, imp, jp, jmp, kp, kmp;
         int sgni, sgnj, sgnk;
         double alam, xc, yc, zc, dx, dy, dz, s1, s2, s3, s4;
         double c1, c2, c3, c4;
@@ -540,16 +534,10 @@ namespace asora {
             s3 = (1. - dx) * dy;
             s4 = dx * dy;
 
-            ip = modulo(i, m1);
-            imp = modulo(im, m1);
-            jp = modulo(j, m1);
-            jmp = modulo(jm, m1);
-            kmp = modulo(km, m1);
-
-            c1 = coldensh_out[mem_offst_gpu(imp, jmp, kmp, m1)];
-            c2 = coldensh_out[mem_offst_gpu(ip, jmp, kmp, m1)];
-            c3 = coldensh_out[mem_offst_gpu(imp, jp, kmp, m1)];
-            c4 = coldensh_out[mem_offst_gpu(ip, jp, kmp, m1)];
+            c1 = coldensh_out[mem_offset_gpu(im, jm, km, m1)];
+            c2 = coldensh_out[mem_offset_gpu(i, jm, km, m1)];
+            c3 = coldensh_out[mem_offset_gpu(im, j, km, m1)];
+            c4 = coldensh_out[mem_offset_gpu(i, j, km, m1)];
 
             // extra weights for better fit to analytical solution
             w1 = s1 * weightf_gpu(c1, sigma_at_freq);
@@ -582,16 +570,10 @@ namespace asora {
             s3 = (1. - dx) * dz;
             s4 = dx * dz;
 
-            ip = modulo(i, m1);
-            imp = modulo(im, m1);
-            jmp = modulo(jm, m1);
-            kp = modulo(k, m1);
-            kmp = modulo(km, m1);
-
-            c1 = coldensh_out[mem_offst_gpu(imp, jmp, kmp, m1)];
-            c2 = coldensh_out[mem_offst_gpu(ip, jmp, kmp, m1)];
-            c3 = coldensh_out[mem_offst_gpu(imp, jmp, kp, m1)];
-            c4 = coldensh_out[mem_offst_gpu(ip, jmp, kp, m1)];
+            c1 = coldensh_out[mem_offset_gpu(im, jm, km, m1)];
+            c2 = coldensh_out[mem_offset_gpu(i, jm, km, m1)];
+            c3 = coldensh_out[mem_offset_gpu(im, jm, k, m1)];
+            c4 = coldensh_out[mem_offset_gpu(i, jm, k, m1)];
 
             // extra weights for better fit to analytical solution
             w1 = s1 * weightf_gpu(c1, sigma_at_freq);
@@ -621,16 +603,10 @@ namespace asora {
             s3 = (1. - dy) * dz;
             s4 = dy * dz;
 
-            imp = modulo(im, m1);
-            jp = modulo(j, m1);
-            jmp = modulo(jm, m1);
-            kp = modulo(k, m1);
-            kmp = modulo(km, m1);
-
-            c1 = coldensh_out[mem_offst_gpu(imp, jmp, kmp, m1)];
-            c2 = coldensh_out[mem_offst_gpu(imp, jp, kmp, m1)];
-            c3 = coldensh_out[mem_offst_gpu(imp, jmp, kp, m1)];
-            c4 = coldensh_out[mem_offst_gpu(imp, jp, kp, m1)];
+            c1 = coldensh_out[mem_offset_gpu(im, jm, km, m1)];
+            c2 = coldensh_out[mem_offset_gpu(im, j, km, m1)];
+            c3 = coldensh_out[mem_offset_gpu(im, jm, k, m1)];
+            c4 = coldensh_out[mem_offset_gpu(im, j, k, m1)];
 
             // extra weights for better fit to analytical solution
             w1 = s1 * weightf_gpu(c1, sigma_at_freq);

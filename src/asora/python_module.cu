@@ -155,10 +155,10 @@ PyObject *asora_photo_table_to_device([[maybe_unused]] PyObject *self, PyObject 
     PyArrayObject *thin_table, *thick_table;
     return PyArg_ParseTuple(args, "OO", &thin_table, &thick_table) &&
                    load_array_to_device<double>(
-                       thin_table, asora::buffer_tag::photo_thin_table
+                       thin_table, asora::buffer_tag::photo_ion_thin_table
                    ) &&
                    load_array_to_device<double>(
-                       thick_table, asora::buffer_tag::photo_thick_table
+                       thick_table, asora::buffer_tag::photo_ion_thick_table
                    )
                ? Py_None
                : nullptr;
@@ -195,9 +195,9 @@ static PyMethodDef asoraMethods[] = {
     {"density_to_device", asora_density_to_device, METH_VARARGS,
      "Copy density field to GPU"},
     {"photo_table_to_device", asora_photo_table_to_device, METH_VARARGS,
-     "Copy radiation table to GPU"},
+     "Copy radiation tables to GPU"},
     {"source_data_to_device", asora_source_data_to_device, METH_VARARGS,
-     "Copy radiation table to GPU"},
+     "Copy source data to GPU"},
     {NULL, NULL, 0, NULL} /* Sentinel */
 };
 

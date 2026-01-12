@@ -11,7 +11,13 @@ namespace asora {
     // Type-erased, shared memory buffer living on the device.
     class device_buffer {
        public:
+        device_buffer() = default;
         explicit device_buffer(size_t nbytes);
+
+        device_buffer(const device_buffer &other) = default;
+        device_buffer(device_buffer &&other) = default;
+        device_buffer &operator=(const device_buffer &other) = default;
+        device_buffer &operator=(device_buffer &&other) = default;
 
         friend void swap(device_buffer &lhs, device_buffer &rhs) noexcept;
 
@@ -44,12 +50,26 @@ namespace asora {
 
     // Buffer identifiers.
     enum class buffer_tag {
-        column_density,
-        hydrogen_fraction,
         number_density,
-        photo_ionization,
-        photo_thin_table,
-        photo_thick_table,
+        fraction_HII,
+        fraction_HeII,
+        fraction_HeIII,
+        cross_section_HI,
+        cross_section_HeI,
+        cross_section_HeII,
+        photo_ionization_HI,
+        photo_ionization_HeI,
+        photo_ionization_HeII,
+        photo_heating_HI,
+        photo_heating_HeI,
+        photo_heating_HeII,
+        column_density_HI,
+        column_density_HeI,
+        column_density_HeII,
+        photo_ion_thin_table,
+        photo_ion_thick_table,
+        photo_heat_thin_table,
+        photo_heat_thick_table,
         source_flux,
         source_position,
     };
