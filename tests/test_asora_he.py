@@ -107,6 +107,7 @@ def setup_do_all_sources(
     norm_flux *= f_gamma / 1e48
 
     # Copy source list to GPU device
+    print(src_pos.reshape(num_sources, 3))
     asora.source_data_to_device(src_pos, norm_flux)
 
     # Size of a cell
@@ -166,9 +167,9 @@ def test_do_all_sources(data_dir, init_device):
 
         expected_rates = np.load(data_dir / "photo_rates_with_helium.npz")
 
-        assert np.allclose(phion_HI, expected_rates["ion_HI"], equal_nan=True)
-        assert np.allclose(phion_HeI, expected_rates["ion_HeI"], equal_nan=True)
-        assert np.allclose(phion_HeII, expected_rates["ion_HeII"], equal_nan=True)
+        assert np.allclose(phion_HI, expected_rates["ion_HI"])
+        assert np.allclose(phion_HeI, expected_rates["ion_HeI"])
+        assert np.allclose(phion_HeII, expected_rates["ion_HeII"])
         assert np.allclose(pheat_HI, expected_rates["heat_HI"], equal_nan=True)
         assert np.allclose(pheat_HeI, expected_rates["heat_HeI"], equal_nan=True)
         assert np.allclose(pheat_HeII, expected_rates["heat_HeII"], equal_nan=True)
