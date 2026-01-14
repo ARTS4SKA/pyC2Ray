@@ -26,25 +26,48 @@ PyObject *asora_test_cinterp([[maybe_unused]] PyObject *self, PyObject *args) {
         reinterpret_cast<PyArrayObject *>(PyArray_SimpleNew(3, shape, NPY_DOUBLE));
     auto coldens_data = static_cast<double *>(PyArray_DATA(coldens));
 
-    auto path =
-        reinterpret_cast<PyArrayObject *>(PyArray_SimpleNew(3, shape, NPY_DOUBLE));
-    auto path_data = static_cast<double *>(PyArray_DATA(path));
-
     // Run test kernel
     try {
         std::array<size_t, 3> cpp_shape;
         std::copy(shape, shape + 3, cpp_shape.begin());
-        asoratest::cinterp_gpu(coldens_data, path_data, dens_data, cpp_shape);
+        asoratest::cinterp_gpu(coldens_data, dens_data, cpp_shape);
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_MemoryError, e.what());
         return nullptr;
     }
 
-    return Py_BuildValue(
-        "OO",
-        PyArray_Return(reinterpret_cast<PyArrayObject *>(coldens)),  //
-        PyArray_Return(reinterpret_cast<PyArrayObject *>(path))      //
+    return PyArray_Return(reinterpret_cast<PyArrayObject *>(coldens));
+}
+
+PyObject *asora_test_path_in_cell([[maybe_unused]] PyObject *self, PyObject *args) {
+    PyObject *shape_arg;
+    std::array<size_t, 3> cpp_shape;
+
+    // Error checking
+    if (!PyArg_ParseTuple(args, "O", &shape_arg)) return nullptr;
+    if (!PyArg_ParseTuple(
+            shape_arg, "kkk", &cpp_shape[0], &cpp_shape[1], &cpp_shape[2]
+        )) {
+        PyErr_SetString(PyExc_TypeError, "only shape of dimension 3 is allowed");
+        return nullptr;
+    }
+
+    std::array<npy_intp, 3> np_shape;
+    std::copy(cpp_shape.begin(), cpp_shape.end(), np_shape.begin());
+    auto path = reinterpret_cast<PyArrayObject *>(
+        PyArray_SimpleNew(3, np_shape.data(), NPY_DOUBLE)
     );
+    auto path_data = static_cast<double *>(PyArray_DATA(path));
+
+    // Run test kernel
+    try {
+        asoratest::path_in_cell(path_data, cpp_shape);
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_MemoryError, e.what());
+        return nullptr;
+    }
+
+    return PyArray_Return(reinterpret_cast<PyArrayObject *>(path));
 }
 
 PyObject *asora_test_linthrd2cart([[maybe_unused]] PyObject *self, PyObject *args) {
@@ -97,7 +120,9 @@ extern "C" {
 // Define module functions and initialization function
 // ========================================================================
 static PyMethodDef asoraMethods[] = {
-    {"cinterp", asora_test_cinterp, METH_VARARGS, "Geometric OCTA raytracing (GPU)"},
+    {"cinterp", asora_test_cinterp, METH_VARARGS, "Test cell interpolation algorithm"},
+    {"path_in_cell", asora_test_path_in_cell, METH_VARARGS,
+     " Test path-in-cell calculations"},
     {"linthrd2cart", asora_test_linthrd2cart, METH_VARARGS,
      "Shell indexing to cartesian coordinates"},
     {"cart2linthrd", asora_test_cart2linthrd, METH_VARARGS,

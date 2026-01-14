@@ -6,8 +6,7 @@
 
 #include <cuda_runtime.h>
 
-#include <cuda/std/tuple>
-#include <cuda/std/utility>
+#include <cassert>
 #include <exception>
 
 namespace {
@@ -76,9 +75,8 @@ namespace {
         // When not in periodic mode, only treat cell if its in the grid
         if (!in_box(i0 + di, j0 + dj, k0 + dk, m1)) return;
 #endif
-        // Calculate column density to and path inside this cell.
-        auto [coldensh_in, path] = cinterp_gpu(di, dj, dk, shared_cdens, sigma);
-        path *= dr;
+        auto path = path_in_cell(di, dj, dk) * dr;
+        auto coldensh_in = cinterp_gpu(di, dj, dk, shared_cdens, sigma);
 
         auto dist2 =
             (dr * di) * (dr * di) + (dr * dj) * (dr * dj) + (dr * dk) * (dr * dk);
@@ -261,121 +259,116 @@ namespace asora {
         }
     }
 
-    // dk is the largest delta.
-    __device__ cuda::std::array<double, 5> geometric_factors(
-        double di, double dj, double dk
-    ) {
-        auto path = sqrt(1.0 + (di * di + dj * dj) / (dk * dk));
+    __device__ double path_in_cell(int di, int dj, int dk) {
+        if (di == 0 && dj == 0 && dk == 0) return 0.5;
+        double di2 = di * di;
+        double dj2 = dj * dj;
+        double dk2 = dk * dk;
+        auto delta_max = max(di2, max(dj2, dk2));
+        return sqrt((di2 + dj2 + dk2) / delta_max);
+    }
 
-        auto dx = abs(std::copysign(1.0, di) - di / std::abs(dk));
-        auto dy = abs(std::copysign(1.0, dj) - dj / std::abs(dk));
+    // dk is the largest delta.
+    __device__ cuda::std::array<double, 4> geometric_factors(int di, int dj, int dk) {
+        assert(dk != 0 && abs(dk) >= abs(di) && abs(dk) >= abs(dj));
+        auto dk_inv = 1.0 / abs(dk);
+        auto dx = abs(copysign(1.0, static_cast<double>(di)) - di * dk_inv);
+        auto dy = abs(copysign(1.0, static_cast<double>(dj)) - dj * dk_inv);
 
         auto w1 = (1. - dx) * (1. - dy);
         auto w2 = (1. - dy) * dx;
         auto w3 = (1. - dx) * dy;
         auto w4 = dx * dy;
 
-        return {path, w1, w2, w3, w4};
+        return {w1, w2, w3, w4};
     }
 
-    __device__ cuda::std::pair<double, double> cinterp_gpu(
+    __device__ double cinterp_gpu(
         int di, int dj, int dk, const cuda::std::array<const double *, 3> &shared_cdens,
-        double sigma_HI_at_ion_freq
+        double sigma
     ) {
         // Degenerate case.
-        if (di == 0 && dj == 0 && dk == 0) return {0.0, 0.5};
+        if (di == 0 && dj == 0 && dk == 0) return 0.0;
 
-        int ai = std::abs(di);
-        int aj = std::abs(dj);
-        int ak = std::abs(dk);
-        // Cartesian index offsets for short characteristic interpolation towards the
-        // ray source.
-        cuda::std::array<int, 4> offsets = {
-            0,                                          //
-            static_cast<int>(std::copysignf(1.0, di)),  //
-            static_cast<int>(std::copysignf(1.0, dj)),  //
-            static_cast<int>(std::copysignf(1.0, dk))
-        };
-
-        // Capture values before swaps take place.
-        auto get_column_density = [&shared_cdens, di, dj, dk,
-                                   q0 = abs(di) + abs(dj) +
-                                        abs(dk)](int i_off, int j_off, int k_off) {
+        // This lambda selects the memory bank for the right q-shell, e.g., q-1, q-2 or
+        // q-3. Defined here to capture values before swaps take place.
+        auto get_qlevel = [di, dj, dk, q0 = abs(di) + abs(dj) + abs(dk)](
+                              int i_off, int j_off, int k_off
+                          ) -> cuda::std::array<int, 2> {
             auto &&[q, s] = cart2linthrd(di - i_off, dj - j_off, dk - k_off);
-            // Select the memory bank for the right q-shell, e.g., q-1, q-2 or q-3.
             auto qlev = q0 - q - 1;
-            if (qlev < 0 || qlev >= shared_cdens.size()) return 0.0;
-            return shared_cdens[qlev][s];
+            assert(qlev >= 0 && qlev < 3);
+            return {qlev, s};
         };
+
+        auto ai = abs(di);
+        auto aj = abs(dj);
+        auto ak = abs(dk);
+        int si = copysignf(1.0, di);
+        int sj = copysignf(1.0, dj);
+        int sk = copysignf(1.0, dk);
 
         // Offset index matrix for geometric factors w_i and cartesian coordinates (i,
-        // j, k). Default case is for (ak >= aj && ak >= ai), otherwise rearrange such
-        // that "k" is the largest dimension.
-        cuda::std::array<size_t, 12> xi = {
-            1, 2, 3,  //
-            0, 2, 3,  //
-            1, 0, 3,  //
-            0, 0, 3   //
-        };
-        if (aj >= ai && aj >= ak) {
-            xi = {
-                1, 2, 3,  //
-                0, 2, 3,  //
-                1, 2, 0,  //
-                0, 2, 0   //
+        // j, k). Depending on which delta is largest, some offsets are turned off.
+        cuda::std::array<int, 12> offsets;
+        if (ak >= ai && ak >= aj) {
+            offsets = {
+                si, sj, sk,  //
+                0,  sj, sk,  //
+                si, 0,  sk,  //
+                0,  0,  sk   //
+            };
+        } else if (aj >= ai && aj >= ak) {
+            offsets = {
+                si, sj, sk,  //
+                0,  sj, sk,  //
+                si, sj, 0,   //
+                0,  sj, 0    //
             };
             cuda::std::swap(dj, dk);
-            cuda::std::swap(aj, ak);
-
-        } else if (ai >= aj && ai >= ak) {
-            xi = {
-                1, 2, 3,  //
-                1, 0, 3,  //
-                1, 2, 0,  //
-                1, 0, 0   //
+        } else {  // if (ai >= aj && ai >= ak)
+            offsets = {
+                si, sj, sk,  //
+                si, 0,  sk,  //
+                si, sj, 0,   //
+                si, 0,  0    //
             };
             cuda::std::swap(di, dk);
-            cuda::std::swap(ai, ak);
             cuda::std::swap(di, dj);
-            cuda::std::swap(ai, aj);
         }
 
-        const auto factors = geometric_factors(
-            static_cast<double>(di), static_cast<double>(dj), static_cast<double>(dk)
-        );
+        auto factors = geometric_factors(di, dj, dk);
 
-        // Weight function for C2Ray interpolation function.
-        auto weightf = [sigma = sigma_HI_at_ion_freq](double cd) {
-            constexpr double tau_0 = 0.6;
-            return 1.0 / max(tau_0, cd * sigma);
-        };
+        // Reference optical depth from C2Ray interpolation function.
+        constexpr double tau_0 = 0.6;
 
         // Column density at the crossing point is a weighted average.
         double cdens = 0.0;
         double wtot = 0.0;
-        // Index matrix accessor.
-        auto xa = xi.data();
-        // Loop over geomtric factors and skip null ones: it helps avoid some expensive
-        // memory reads.
-        for (size_t idx = 1; idx < factors.size(); ++idx, xa += 3) {
-            auto w = factors[idx];
-            if (w <= 0.0) continue;
-
-            auto c = get_column_density(offsets[xa[0]], offsets[xa[1]], offsets[xa[2]]);
-            w *= weightf(c);
-            cdens += w * c;
-            wtot += w;
+        // Loop over geometric factors and skip null ones: it helps avoid some reads.
+#pragma unroll
+        for (auto xa = offsets.data(); auto w : factors) {
+            if (w > 0.0) {
+                auto &&[qlev, s] = get_qlevel(xa[0], xa[1], xa[2]);
+                auto c = shared_cdens[qlev][s];
+                // Rescale weight by optical path
+                w /= max(tau_0, c * sigma);
+                cdens += w * c;
+                wtot += w;
+            }
+            // Access next row of the offset matrix.
+            xa += 3;
         }
+
+        // At least one weight was valid.
+        assert(wtot > 0.0);
         cdens /= wtot;
 
-        // Take care of diagonals.
-        if (ak == 1 && ai == 1 && aj == 1)
-            cdens *= c::sqrt3<>;
-        else if (ak == 1 && (ai == 1 || aj == 1))
-            cdens *= c::sqrt2<>;
+        // Take care of diagonals for cells close to the source.
+        if (ai <= 1 && aj <= 1 && ak <= 1)
+            cdens *= sqrt(static_cast<double>(ai + ak + aj));
 
-        auto &path = factors[0];
-        return cuda::std::make_pair(cdens, path);
+        return cdens;
     }
 
 }  // namespace asora

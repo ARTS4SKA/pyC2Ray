@@ -14,10 +14,20 @@ def test_cinterp(data_dir: Path) -> None:
     N = 11
     dens = rng.random((N, N, N), dtype=np.float64)
 
-    cdens, path = asoratest.cinterp(dens)
+    cdens = asoratest.cinterp(dens)
     expected_output = np.load(data_dir / "cinterp_output.npz")
 
     assert np.allclose(cdens, expected_output["cdens"])
+
+    expected_output.close()
+
+
+def test_path_in_cell(data_dir: Path) -> None:
+    N = 11
+
+    path = asoratest.path_in_cell((N, N, N))
+    expected_output = np.load(data_dir / "cinterp_output.npz")
+
     assert np.allclose(path, expected_output["path"])
 
     expected_output.close()

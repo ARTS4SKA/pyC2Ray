@@ -12,7 +12,7 @@ namespace asoratest {
     namespace {
 
         __global__ void cinterp_gpu_kernel(
-            double *coldens_data, double *path_data, const double *dens_data
+            double *coldens_data, const double *dens_data
         ) {
             int di = blockIdx.x - gridDim.x / 2;
             int dj = threadIdx.x - blockDim.x / 2;
@@ -23,26 +23,32 @@ namespace asoratest {
                 &dens_data[asora::cells_to_shell(q0 - 3)],
                 &dens_data[asora::cells_to_shell(q0 - 4)]
             };
-            auto &&[cdens, path] = asora::cinterp_gpu(di, dj, dk, shared_cdens, 1.0);
 
             auto idx =
                 threadIdx.y + blockDim.y * (threadIdx.x + blockDim.x * blockIdx.x);
-            coldens_data[idx] = cdens;
-            path_data[idx] = path;
+            coldens_data[idx] = asora::cinterp_gpu(di, dj, dk, shared_cdens, 1.0);
+        }
+
+        __global__ void path_in_cell_kernel(double *path_data) {
+            int di = blockIdx.x - gridDim.x / 2;
+            int dj = threadIdx.x - blockDim.x / 2;
+            int dk = threadIdx.y - blockDim.y / 2;
+
+            auto idx =
+                threadIdx.y + blockDim.y * (threadIdx.x + blockDim.x * blockIdx.x);
+            path_data[idx] = asora::path_in_cell(di, dj, dk);
         }
 
     }  // namespace
 
     // Arrays are host pointers:
     void cinterp_gpu(
-        double *coldens_data, double *path_data, double *dens_data,
-        const std::array<size_t, 3> &shape
+        double *coldens_data, double *dens_data, const std::array<size_t, 3> &shape
     ) {
         size_t size = std::accumulate(
             shape.begin(), shape.end(), sizeof(double), std::multiplies<>()
         );
         asora::device_buffer coldens_dev(size);
-        asora::device_buffer path_dev(size);
         asora::device_buffer dens_dev(size);
         dens_dev.copyFromHost(dens_data, dens_dev.size());
 
@@ -53,12 +59,28 @@ namespace asoratest {
 
         cinterp_gpu_kernel<<<gs, ts>>>(
             coldens_dev.view<double>().data(),  //
-            path_dev.view<double>().data(),     //
             dens_dev.view<double>().data()
         );
 
         asora::safe_cuda(cudaPeekAtLastError());
         coldens_dev.copyToHost(coldens_data, coldens_dev.size());
+    }
+
+    // Arrays are host pointers:
+    void path_in_cell(double *path_data, const std::array<size_t, 3> &shape) {
+        size_t size = std::accumulate(
+            shape.begin(), shape.end(), sizeof(double), std::multiplies<>()
+        );
+        asora::device_buffer path_dev(size);
+
+        uint3 gs = {static_cast<unsigned int>(shape[0]), 1, 1};
+        uint3 ts = {
+            static_cast<unsigned int>(shape[1]), static_cast<unsigned int>(shape[2]), 1
+        };
+
+        path_in_cell_kernel<<<gs, ts>>>(path_dev.view<double>().data());
+
+        asora::safe_cuda(cudaPeekAtLastError());
         path_dev.copyToHost(path_data, path_dev.size());
     }
 
