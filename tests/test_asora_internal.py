@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from numpy.typing import NDArray
 
 try:
     from pyc2ray.lib import libasoratest as asoratest
@@ -9,28 +10,64 @@ except ImportError:
     pytest.skip("libasoratest.so missing, skipping tests", allow_module_level=True)
 
 
-def test_cinterp(data_dir: Path) -> None:
+def test_path_in_cell(data_dir: Path) -> None:
+    def create_path_in_cell_data(N: int) -> NDArray:
+        """Return the length of the ray intersecting cell at pos emitted from pos0"""
+        N2 = N // 2
+        di, dj, dk = np.mgrid[-N2 : N2 + 1, -N2 : N2 + 1, -N2 : N2 + 1]
+
+        di2 = di * di
+        dj2 = dj * dj
+        dk2 = dk * dk
+        delta_max = np.maximum(di2, np.maximum(dj2, dk2))
+
+        paths = np.sqrt((di2 + dj2 + dk2) / delta_max)
+        paths[N2, N2, N2] = 0.5
+        return paths
+
+    N = 11
+    path = asoratest.path_in_cell((N, N, N))
+    expected = create_path_in_cell_data(N)
+
+    assert np.allclose(path, expected)
+
+
+def test_geometric_factors(data_dir: Path) -> None:
+    def create_geometric_factors_data(N: int) -> NDArray:
+        """Return the length of the ray intersecting cell at pos emitted from pos0"""
+        N2 = N // 2
+        grid = np.mgrid[-N2 : N2 + 1, -N2 : N2 + 1, -N2 : N2 + 1]
+        indices = np.abs(grid).argsort(axis=0)
+        di, dj, dk = np.take_along_axis(grid, indices, axis=0)
+
+        dx = np.abs(np.copysign(1, di) - di / np.abs(dk))
+        dy = np.abs(np.copysign(1, dj) - dj / np.abs(dk))
+
+        w1 = (1 - dx) * (1 - dy)
+        w2 = (1 - dy) * dx
+        w3 = (1 - dx) * dy
+        w4 = dx * dy
+
+        facts = np.stack((w1, w2, w3, w4), axis=-1)
+        facts[dk == 0] = 0.0
+        return facts
+
+    N = 11
+    facts = asoratest.geometric_factors((N, N, N))
+    expected = create_geometric_factors_data(N)
+
+    assert np.allclose(facts, expected)
+
+
+def test_cell_interpolator(data_dir: Path) -> None:
     rng = np.random.default_rng(seed=42)
     N = 11
     dens = rng.random((N, N, N), dtype=np.float64)
 
-    cdens = asoratest.cinterp(dens)
-    expected_output = np.load(data_dir / "cinterp_output.npz")
+    cdens = asoratest.cell_interpolator(dens)
+    expected_output = np.load(data_dir / "cell_interpolator_output.npy")
 
-    assert np.allclose(cdens, expected_output["cdens"])
-
-    expected_output.close()
-
-
-def test_path_in_cell(data_dir: Path) -> None:
-    N = 11
-
-    path = asoratest.path_in_cell((N, N, N))
-    expected_output = np.load(data_dir / "cinterp_output.npz")
-
-    assert np.allclose(path, expected_output["path"])
-
-    expected_output.close()
+    assert np.allclose(cdens, expected_output)
 
 
 Q_MAX = 100

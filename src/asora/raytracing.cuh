@@ -20,13 +20,4 @@ namespace asora {
         double minlogtau, double dlogtau, size_t num_tau
     );
 
-    // Path inside the cell; dk is the largest delta.
-    __device__ double path_in_cell(int di, int dj, int dk);
-
-    // Short-characteristics interpolation function
-    __device__ double cinterp_gpu(
-        int di, int dj, int dk, const cuda::std::array<const double *, 3> &shared_cdens,
-        double sigma
-    );
-
 }  // namespace asora

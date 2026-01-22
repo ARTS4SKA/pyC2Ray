@@ -6,13 +6,12 @@
 
 #include <cuda_runtime.h>
 
-#include <cassert>
 #include <cuda/std/span>
 #include <exception>
 
 namespace asora {
 
-    __device__ element_data::shared_cdens_t element_data::make_shared_cdens(
+    __device__ cuda::std::array<const double *, 3> element_data::make_shared_cdens(
         int q
     ) const {
         return {
@@ -191,24 +190,27 @@ namespace {
         if (!in_box(i0 + di, j0 + dj, k0 + dk, m1)) return;
 #endif
 
-        // Split column density in memory banks corresponding to shells q-1,
-        // q-2, q-3.
+        // Split column density in memory banks corresponding to shells q-1, q-2, q-3.
         // FIXME: This is the same for each s....
-        auto shared_cdens_HI = data_HI.make_shared_cdens(q);
-        auto shared_cdens_HeI = data_HeI.make_shared_cdens(q);
-        auto shared_cdens_HeII = data_HeII.make_shared_cdens(q);
 
         // Column density of HI, HeI and HeII to the cell
-        auto cd_in = cinterp_gpu(
-            di, dj, dk, shared_cdens_HI, shared_cdens_HeI, shared_cdens_HeII,
-            data_HI.cross_section[0], data_HI.cross_section[0], data_HI.cross_section[0]
+        cell_interpolator interp(di, dj, dk);
+
+        auto cd_in_HI =
+            interp.interpolate(data_HI.make_shared_cdens(q), data_HI.cross_section[0]);
+        auto cd_in_HeI = interp.interpolate(
+            data_HeI.make_shared_cdens(q), data_HeI.cross_section[0]
+        );
+        auto cd_in_HeII = interp.interpolate(
+            data_HeII.make_shared_cdens(q), data_HeII.cross_section[0]
         );
 
         // Compute photoionization rates from column density.
         // WARNING: for now this is limited to the grey-opacity
         // test case source
         constexpr double max_coldens = 2e30;
-        if (cd_in[0] > max_coldens || cd_in[1] > max_coldens || cd_in[2] > max_coldens)
+        if (cd_in_HI > max_coldens || cd_in_HeI > max_coldens ||
+            cd_in_HeII > max_coldens)
             return;
 
         auto dist2 =
@@ -226,8 +228,9 @@ namespace {
         auto vol = 4 * c::pi<> * dist2 * path;
 
         update_photo_rates(
-            data_HI, data_HeI, data_HeII, q_off + s, index, cd_in, ns, path, strength,
-            vol, ion_tables, heat_tables, logtau, num_freq
+            data_HI, data_HeI, data_HeII, q_off + s, index,
+            {cd_in_HI, cd_in_HeI, cd_in_HeII}, ns, path, strength, vol, ion_tables,
+            heat_tables, logtau, num_freq
         );
     }
 
@@ -438,136 +441,6 @@ namespace asora {
             // when all outgoing column densities of the current shell are available
             __syncthreads();
         }
-    }
-
-    __device__ double path_in_cell(int di, int dj, int dk) {
-        if (di == 0 && dj == 0 && dk == 0) return 0.5;
-        double di2 = di * di;
-        double dj2 = dj * dj;
-        double dk2 = dk * dk;
-        auto delta_max = max(di2, max(dj2, dk2));
-        return sqrt((di2 + dj2 + dk2) / delta_max);
-    }
-
-    // dk is the largest delta.
-    __device__ cuda::std::array<double, 4> geometric_factors(int di, int dj, int dk) {
-        assert(dk != 0 && abs(dk) >= abs(di) && abs(dk) >= abs(dj));
-        auto dk_inv = 1.0 / abs(dk);
-        auto dx = abs(copysign(1.0, static_cast<double>(di)) - di * dk_inv);
-        auto dy = abs(copysign(1.0, static_cast<double>(dj)) - dj * dk_inv);
-
-        auto w1 = (1. - dx) * (1. - dy);
-        auto w2 = (1. - dy) * dx;
-        auto w3 = (1. - dx) * dy;
-        auto w4 = dx * dy;
-
-        return {w1, w2, w3, w4};
-    }
-
-    __device__ cuda::std::array<double, 3> cinterp_gpu(
-        int di, int dj, int dk, const element_data::shared_cdens_t &cd_HI,
-        const element_data::shared_cdens_t &cd_HeI,
-        const element_data::shared_cdens_t &cd_HeII, double sigma_HI, double sigma_HeI,
-        double sigma_HeII
-    ) {
-        // Degenerate case.
-        if (di == 0 && dj == 0 && dk == 0) return {0.0, 0.0, 0.0};
-
-        // This lambda selects the memory bank for the right q-shell, e.g., q-1, q-2
-        // or q-3. Defined here to capture values before swaps take place.
-        auto get_qlevel = [di, dj, dk, q0 = abs(di) + abs(dj) + abs(dk)](
-                              int i_off, int j_off, int k_off
-                          ) -> cuda::std::array<int, 2> {
-            auto &&[q, s] = cart2linthrd(di - i_off, dj - j_off, dk - k_off);
-            auto qlev = q0 - q - 1;
-            assert(qlev >= 0 && qlev < 3);
-            return {qlev, s};
-        };
-
-        auto ai = abs(di);
-        auto aj = abs(dj);
-        auto ak = abs(dk);
-        int si = copysignf(1.0, di);
-        int sj = copysignf(1.0, dj);
-        int sk = copysignf(1.0, dk);
-
-        // Offset index matrix for geometric factors w_i and cartesian coordinates
-        // (i, j, k). Depending on which delta is largest, some offsets are turned
-        // off.
-        cuda::std::array<int, 12> offsets;
-        if (ak >= ai && ak >= aj) {
-            offsets = {
-                si, sj, sk,  //
-                0,  sj, sk,  //
-                si, 0,  sk,  //
-                0,  0,  sk   //
-            };
-        } else if (aj >= ai && aj >= ak) {
-            offsets = {
-                si, sj, sk,  //
-                0,  sj, sk,  //
-                si, sj, 0,   //
-                0,  sj, 0    //
-            };
-            cuda::std::swap(dj, dk);
-        } else {  // if (ai >= aj && ai >= ak)
-            offsets = {
-                si, sj, sk,  //
-                si, 0,  sk,  //
-                si, sj, 0,   //
-                si, 0,  0    //
-            };
-            cuda::std::swap(di, dk);
-            cuda::std::swap(di, dj);
-        }
-
-        auto factors = geometric_factors(di, dj, dk);
-
-        // Reference optical depth from C2Ray interpolation function.
-        constexpr double tau_0 = 0.6;
-
-        // Column density at the crossing point is a weighted average.
-        auto avg = [&offsets, &factors,
-                    &get_qlevel](const element_data::shared_cdens_t &cd, double sigma) {
-            double cdens = 0.0;
-            double wtot = 0.0;
-            // Loop over geometric factors and skip null ones: it helps avoid some
-            // reads.
-#pragma unroll
-            for (auto xa = offsets.data(); auto w : factors) {
-                if (w > 0.0) {
-                    auto &&[qlev, s] = get_qlevel(xa[0], xa[1], xa[2]);
-                    auto c = cd[qlev][s];
-
-                    // Rescale weight by optical path
-                    w /= max(tau_0, c * sigma);
-                    cdens += w * c;
-                    wtot += w;
-                }
-                // Access next row of the offset matrix.
-                xa += 3;
-            }
-
-            // At least one weight was valid.
-            assert(wtot > 0.0);
-            cdens /= wtot;
-
-            return cdens;
-        };
-
-        auto cdens_HI = avg(cd_HI, sigma_HI);
-        auto cdens_HeI = avg(cd_HeI, sigma_HeI);
-        auto cdens_HeII = avg(cd_HeII, sigma_HeII);
-
-        // Take care of diagonals for cells close to the source.
-        if (ai <= 1 && aj <= 1 && ak <= 1) {
-            auto fact = sqrt(static_cast<double>(ai + ak + aj));
-            cdens_HI *= fact;
-            cdens_HeI *= fact;
-            cdens_HeII *= fact;
-        }
-
-        return {cdens_HI, cdens_HeI, cdens_HeII};
     }
 
 }  // namespace asora

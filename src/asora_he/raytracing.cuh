@@ -2,7 +2,7 @@
 
 #include "rates.cuh"
 
-#include <cuda/std/utility>
+#include <cuda/std/array>
 
 namespace asora {
 
@@ -24,10 +24,8 @@ namespace asora {
         const double *cross_section;
         size_t first_bin;
 
-        using shared_cdens_t = cuda::std::array<const double *, 3>;
-
         // Shared column density relevant for cinterp.
-        __device__ shared_cdens_t make_shared_cdens(int q) const;
+        __device__ cuda::std::array<const double *, 3> make_shared_cdens(int q) const;
     };
 
     struct density_maps {
@@ -45,17 +43,6 @@ namespace asora {
         int *src_pos, double *src_flux, element_data data_HI, element_data data_HeI,
         element_data data_HeII, density_maps densities, photo_tables ion_tables,
         photo_tables heat_tables, linspace<double> logtau, int num_freq
-    );
-
-    // Path inside the cell
-    __device__ double path_in_cell(int di, int dj, int dk);
-
-    // Short-characteristics interpolation function
-    __device__ cuda::std::array<double, 3> cinterp_gpu(
-        int di, int dj, int dk, const element_data::shared_cdens_t &cd_HI,
-        const element_data::shared_cdens_t &cd_HeI,
-        const element_data::shared_cdens_t &cd_HeII, double sigma_HI, double sigma_HeI,
-        double sigma_HeII
     );
 
 }  // namespace asora
