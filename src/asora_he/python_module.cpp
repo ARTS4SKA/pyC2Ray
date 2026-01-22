@@ -69,9 +69,9 @@ namespace {
 // ========================================================================
 static PyObject *asora_do_all_sources(PyObject *self, PyObject *args) {
     double R;
-    PyArrayObject *sig_hi;
-    PyArrayObject *sig_hei;
-    PyArrayObject *sig_heii;
+    PyArrayObject *sig_HI;
+    PyArrayObject *sig_HeI;
+    PyArrayObject *sig_HeII;
     int nbin1;
     int nbin2;
     int nbin3;
@@ -80,12 +80,12 @@ static PyObject *asora_do_all_sources(PyObject *self, PyObject *args) {
     PyArrayObject *xHII_av;
     PyArrayObject *xHeII_av;
     PyArrayObject *xHeIII_av;
-    PyArrayObject *phi_ion_HI;
-    PyArrayObject *phi_ion_HeI;
-    PyArrayObject *phi_ion_HeII;
-    PyArrayObject *phi_heat_HI;
-    PyArrayObject *phi_heat_HeI;
-    PyArrayObject *phi_heat_HeII;
+    PyArrayObject *phion_HI;
+    PyArrayObject *phion_HeI;
+    PyArrayObject *phion_HeII;
+    PyArrayObject *pheat_HI;
+    PyArrayObject *pheat_HeI;
+    PyArrayObject *pheat_HeII;
     int num_src;
     int m1;
     double minlogtau;
@@ -95,43 +95,42 @@ static PyObject *asora_do_all_sources(PyObject *self, PyObject *args) {
     size_t block_size = 256;
 
     if (!PyArg_ParseTuple(
-            args, "dOOOiiiidOOOOOOOOOiiddik|k", &R, &sig_hi, &sig_hei, &sig_heii,
+            args, "dOOOiiiidOOOOOOOOOiiddik|k", &R, &sig_HI, &sig_HeI, &sig_HeII,
             &nbin1, &nbin2, &nbin3, &num_freq, &dr, &xHII_av, &xHeII_av, &xHeIII_av,
-            &phi_ion_HI, &phi_ion_HeI, &phi_ion_HeII, &phi_heat_HI, &phi_heat_HeI,
-            &phi_heat_HeII, &num_src, &m1, &minlogtau, &dlogtau, &num_tau, &grid_size,
-            &block_size
+            &phion_HI, &phion_HeI, &phion_HeII, &pheat_HI, &pheat_HeI, &pheat_HeII,
+            &num_src, &m1, &minlogtau, &dlogtau, &num_tau, &grid_size, &block_size
         ))
         return NULL;
 
     // Type checking
-    if (!numpy_check<double>(sig_hi) || !numpy_check<double>(sig_hei) ||
-        !numpy_check<double>(sig_heii) || !numpy_check<double>(xHII_av) ||
+    if (!numpy_check<double>(sig_HI) || !numpy_check<double>(sig_HeI) ||
+        !numpy_check<double>(sig_HeII) || !numpy_check<double>(xHII_av) ||
         !numpy_check<double>(xHeII_av) || !numpy_check<double>(xHeIII_av) ||
-        !numpy_check<double>(phi_ion_HI) || !numpy_check<double>(phi_ion_HeI) ||
-        !numpy_check<double>(phi_ion_HeII) || !numpy_check<double>(phi_heat_HI) ||
-        !numpy_check<double>(phi_heat_HeI) || !numpy_check<double>(phi_heat_HeII))
+        !numpy_check<double>(phion_HI) || !numpy_check<double>(phion_HeI) ||
+        !numpy_check<double>(phion_HeII) || !numpy_check<double>(pheat_HI) ||
+        !numpy_check<double>(pheat_HeI) || !numpy_check<double>(pheat_HeII))
         return nullptr;
 
     // Get Array data
-    auto sig_hi_data = static_cast<double *>(PyArray_DATA(sig_hi));
-    auto sig_hei_data = static_cast<double *>(PyArray_DATA(sig_hei));
-    auto sig_heii_data = static_cast<double *>(PyArray_DATA(sig_heii));
-    auto phi_ion_HI_data = static_cast<double *>(PyArray_DATA(phi_ion_HI));
-    auto phi_ion_HeI_data = static_cast<double *>(PyArray_DATA(phi_ion_HeI));
-    auto phi_ion_HeII_data = static_cast<double *>(PyArray_DATA(phi_ion_HeII));
-    auto phi_heat_HI_data = static_cast<double *>(PyArray_DATA(phi_heat_HI));
-    auto phi_heat_HeI_data = static_cast<double *>(PyArray_DATA(phi_heat_HeI));
-    auto phi_heat_HeII_data = static_cast<double *>(PyArray_DATA(phi_heat_HeII));
+    auto sig_HI_data = static_cast<double *>(PyArray_DATA(sig_HI));
+    auto sig_HeI_data = static_cast<double *>(PyArray_DATA(sig_HeI));
+    auto sig_HeII_data = static_cast<double *>(PyArray_DATA(sig_HeII));
+    auto phion_HI_data = static_cast<double *>(PyArray_DATA(phion_HI));
+    auto phion_HeI_data = static_cast<double *>(PyArray_DATA(phion_HeI));
+    auto phion_HeII_data = static_cast<double *>(PyArray_DATA(phion_HeII));
+    auto pheat_HI_data = static_cast<double *>(PyArray_DATA(pheat_HI));
+    auto pheat_HeI_data = static_cast<double *>(PyArray_DATA(pheat_HeI));
+    auto pheat_HeII_data = static_cast<double *>(PyArray_DATA(pheat_HeII));
     auto xh_av_HI_data = static_cast<double *>(PyArray_DATA(xHII_av));
     auto xh_av_HeI_data = static_cast<double *>(PyArray_DATA(xHeII_av));
     auto xh_av_HeII_data = static_cast<double *>(PyArray_DATA(xHeIII_av));
 
     try {
         asora::do_all_sources_gpu(
-            R, sig_hi_data, sig_hei_data, sig_heii_data, nbin1, nbin2, nbin3, num_freq,
-            dr, xh_av_HI_data, xh_av_HeI_data, xh_av_HeII_data, phi_ion_HI_data,
-            phi_ion_HeI_data, phi_ion_HeII_data, phi_heat_HI_data, phi_heat_HeI_data,
-            phi_heat_HeII_data, num_src, m1, minlogtau, dlogtau, num_tau, grid_size,
+            R, sig_HI_data, sig_HeI_data, sig_HeII_data, nbin1, nbin2, nbin3, num_freq,
+            dr, xh_av_HI_data, xh_av_HeI_data, xh_av_HeII_data, phion_HI_data,
+            phion_HeI_data, phion_HeII_data, pheat_HI_data, pheat_HeI_data,
+            pheat_HeII_data, num_src, m1, minlogtau, dlogtau, num_tau, grid_size,
             block_size
         );
     } catch (const std::exception &e) {

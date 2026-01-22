@@ -2,32 +2,27 @@
 
 namespace asora {
 
+    template <typename T>
+    struct linspace {
+        T start;
+        T step;
+        size_t num;
+
+        __host__ __device__ T stop() const { return start + num * step; }
+    };
+
+    struct photo_tables {
+        const double *thin;
+        const double *thick;
+    };
+
     // Photoionization rate from tables
-    __device__ double photoion_rates_gpu(
-        const double &strength, const double &tau_in, const double &tau_out,
-        const int &nf, const double &Vfact, const double *thin_table,
-        const double *thick_table, const double &minlogtau, const double &dlogtau,
-        const int &NumTau, const int &NumFreq
-    );
-
-    // Photoheating rate from tables
-    __device__ double photoheat_rates_gpu(
-        const double &strength, const double &tau_in, const double &tau_out,
-        const int &nf, const double &Vfact, const double *thin_table,
-        const double *thick_table, const double &minlogtau, const double &dlogtau,
-        const int &NumTau, const int &NumFreq
-    );
-
-    // Table interpolation lookup function
-    __device__ double photo_lookuptable(
-        const double *, const int &, const double &, const double &, const double &,
-        const int &
+    __device__ double photo_rates_gpu(
+        double tau_in, double tau_out, int nf, const photo_tables &ion_tables,
+        const linspace<double> &logtau
     );
 
     // Photoionization rates from analytical expression (grey-opacity)
-    __device__ double photoion_rates_test_gpu(
-        const double &strength, const double &coldens_in, const double &coldens_out,
-        const double &Vfact, const double &sig
-    );
+    __device__ double photo_rates_test_gpu(double tau_in, double tau_out);
 
 }  // namespace asora
