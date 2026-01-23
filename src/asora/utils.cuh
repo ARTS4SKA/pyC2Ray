@@ -28,6 +28,16 @@ namespace asora {
 
     }  // namespace c
 
+    // Fortran-type modulo function (C modulo is signed)
+    __host__ __device__ int modulo(int a, int b);
+
+    // Flat-array index from 3D (i,j,k) indices
+    __device__ int mem_offset(int i, int j, int k, int N);
+
+#if !defined(PERIODIC)
+    __device__ bool in_box_gpu(const int &i, const int &j, const int &k, const int &N);
+#endif
+
     // Mapping from octahedral shells (q, s) to 3D cartesian coordinates (i, j, k) and
     // back.
     __host__ __device__ cuda::std::array<int, 3> linthrd2cart(int q, int s);
@@ -54,7 +64,7 @@ namespace asora {
 
         // Interpolate the column density values from the previous cells.
         __device__ double interpolate(
-            const cuda::std::array<const double *, 3> &coldens, double sigma
+            const cuda::std::array<const double *__restrict__, 3> &coldens, double sigma
         );
 
        private:

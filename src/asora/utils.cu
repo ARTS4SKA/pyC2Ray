@@ -5,6 +5,14 @@
 #include <format>
 #include <iostream>
 
+namespace {
+
+    __host__ __device__ cuda::std::array<int, 2> divmod(int x, int y) {
+        return {x / y, x % y};
+    }
+
+}  // namespace
+
 namespace asora {
 
     void safe_cuda(cudaError_t err, const std::source_location &loc) {
@@ -19,13 +27,17 @@ namespace asora {
         }
     }
 
-    namespace {
+    __host__ __device__ int modulo(int a, int b) { return (a % b + b) % b; }
 
-        __host__ __device__ cuda::std::array<int, 2> divmod(int x, int y) {
-            return {x / y, x % y};
-        }
+    __device__ int mem_offset(int i, int j, int k, int N) {
+        return N * N * modulo(i, N) + N * modulo(j, N) + modulo(k, N);
+    }
 
-    }  // namespace
+#if !defined(PERIODIC)
+    __device__ bool in_box_gpu(const int &i, const int &j, const int &k, const int &N) {
+        return (i >= 0 && i < N) && (j >= 0 && j < N) && (k >= 0 && k < N);
+    }
+#endif
 
     __host__ __device__ cuda::std::array<int, 3> linthrd2cart(int q, int s) {
         auto s_top = (q + 1) * (q + 1) + q * q;
@@ -150,7 +162,7 @@ namespace asora {
     }
 
     __device__ double cell_interpolator::interpolate(
-        const cuda::std::array<const double *, 3> &coldens, double sigma
+        const cuda::std::array<const double *__restrict__, 3> &coldens, double sigma
     ) {
         // Degenerate case.
         if (is_origin()) return 0.0;

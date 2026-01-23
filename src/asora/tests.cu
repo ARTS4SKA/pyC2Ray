@@ -17,10 +17,10 @@ namespace asoratest {
             int dj = threadIdx.x - blockDim.x / 2;
             int dk = threadIdx.y - blockDim.y / 2;
             auto q0 = abs(di) + abs(dj) + abs(dk);
-            cuda::std::array<const double *, 3> shared_cdens = {
-                &dens_data[asora::cells_to_shell(q0 - 2)],
-                &dens_data[asora::cells_to_shell(q0 - 3)],
-                &dens_data[asora::cells_to_shell(q0 - 4)]
+            cuda::std::array<const double *__restrict__, 3> shared_cdens = {
+                dens_data + asora::cells_to_shell(q0 - 2),
+                dens_data + asora::cells_to_shell(q0 - 3),
+                dens_data + asora::cells_to_shell(q0 - 4)
             };
 
             auto idx =

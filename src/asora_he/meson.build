@@ -37,7 +37,7 @@ nvcc_flags = [
 nvlink_flags = [compute_cap, '-dlto']
 
 # CUDA sources for ASORA
-asora_sources = ['../asora/utils.cu', '../asora/memory.cpp', 'rates.cu', 'raytracing.cu']
+asora_sources = ['../asora/utils.cu', '../asora/memory.cpp', '../asora/rates.cu', 'raytracing.cu']
 cuda_dep = dependency('cuda', version: '>=12', static: false)
 asora_core = static_library(
     'asora_core',
