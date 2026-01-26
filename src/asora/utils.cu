@@ -139,7 +139,7 @@ namespace asora {
         return _di == 0 && _dj == 0 && _dk == 0;
     }
 
-    __device__ cuda::std::array<int, 2> cell_interpolator::get_qlevel(
+    inline __device__ cuda::std::array<int, 2> cell_interpolator::get_qlevel(
         int i_off, int j_off, int k_off
     ) {
         auto &&[q, s] = cart2linthrd(_di - i_off, _dj - j_off, _dk - k_off);

@@ -65,7 +65,9 @@ namespace asora {
         cuda::std::array<double, 4> _factors;
 
         // Get the corresponding q-level of the provided offset.
-        __device__ cuda::std::array<int, 2> get_qlevel(int i_off, int j_off, int k_off);
+        inline __device__ cuda::std::array<int, 2> get_qlevel(
+            int i_off, int j_off, int k_off
+        );
 
         // True if interpolator is pointing at the origin.
         inline __device__ bool is_origin();
