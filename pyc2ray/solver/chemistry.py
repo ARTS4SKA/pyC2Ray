@@ -21,68 +21,44 @@ def global_pass(
     temph0,
     abu_c,
 ):
-    conv_flag = 0
+    # call do chemistry
+    new_xh, new_xh_av, _ = do_chemistry(
+        dt,
+        ndens,
+        temp,
+        xh,
+        xh_av,
+        xh_intermed,
+        phi_ion,
+        clump,
+        bh00,
+        albpow,
+        colh0,
+        temph0,
+        abu_c,
+    )
 
-    new_xh = np.zeros_like(xh)
-    new_xh_av = np.zeros_like(xh)
+    # Check for convergence (global flag). In original, convergence is tested using neutral fraction,
+    # but testing with ionized fraction should be equivalent.
+    # TODO: add temperature convergence criterion when non-isothermal mode is added later on.
 
-    for k in range(xh.shape[0]):
-        for j in range(xh.shape[1]):
-            for i in range(xh.shape[2]):
-                # Initialize local quantities
-                temperature_start = temp[i, j, k]
-                ndens_p = ndens[i, j, k]
-                phi_ion_p = phi_ion[i, j, k]
-                clump_p = clump[i, j, k]
-
-                # Initialize local ion fractions
-                xh_p = xh[i, j, k]
-                xh_av_p = xh_av[i, j, k]
-                xh_intermed_p = xh_intermed[i, j, k]
-
-                # call do chemistry
-                new_xh[i, j, k], new_xh_av[i, j, k], _ = do_chemistry(
-                    dt,
-                    ndens_p,
-                    temperature_start,
-                    xh_p,
-                    xh_av_p,
-                    xh_intermed_p,
-                    phi_ion_p,
-                    clump_p,
-                    bh00,
-                    albpow,
-                    colh0,
-                    temph0,
-                    abu_c,
-                )
-
-                # Check for convergence (global flag). In original, convergence is tested using neutral fraction,
-                # but testing with ionized fraction should be equivalent.
-                # TODO: add temperature convergence criterion when non-isothermal mode is added later on.
-                xh_av_p_old = new_xh_av[i, j, k]
-
-                cond1 = np.abs(xh_av_p - xh_av_p_old) > minimum_fractional_change
-                cond2 = (
-                    np.abs((xh_av_p - xh_av_p_old) / (1.0 - xh_av_p))
-                    > minimum_fractional_change
-                )
-                cond3 = (1.0 - xh_av_p) > minimum_fraction_of_atoms
-                if cond1 * cond2 * cond3:
-                    conv_flag += 1
+    cond1 = np.abs(xh_av - new_xh_av) > minimum_fractional_change
+    cond2 = np.abs((xh_av - new_xh_av) / (1.0 - xh_av)) > minimum_fractional_change
+    cond3 = (1.0 - xh_av) > minimum_fraction_of_atoms
+    conv_flag = np.count_nonzero(cond1 * cond2 * cond3)
 
     return new_xh, new_xh_av, conv_flag
 
 
 def do_chemistry(
     dt,
-    ndens_p,
-    temperature_start,
-    xh_p,
-    xh_av_p,
-    xh_intermed_p,
-    phi_ion_p,
-    clump_p,
+    ndens,
+    temp_start,
+    xh,
+    xh_av,
+    xh_intermed,
+    phi_ion,
+    clump,
     bh00,
     albpow,
     colh0,
@@ -90,28 +66,40 @@ def do_chemistry(
     abu_c,
 ):
     # Initialize local quantities
-    temperature_end = temperature_start
+    temp_end = temp_start
 
     # Calculate the new and mean ionization states
     # xh_intermed = np.copy(xh)  # Placeholder, actual intermediate state calculation may vary
 
-    convergence, niter = False, 0
-    while not convergence:
-        # Save temperature solution from last iteration
-        temperature_previous_iteration = temperature_end
+    converged = np.full(ndens.shape, 400, dtype=np.int32)
+    new_xh = np.zeros_like(xh)
 
-        # At each iteration, the intial condition x(0) is reset. Change happens in the time-average and thus the electron density
-        xh_av_p_old = xh_av_p
+    while (converged > 0).any():
+        # Only call doric on unconverged pixels
+        mask = (converged > 0).nonzero()
+        temp_end_p = temp_end[mask]
+        ndens_p = ndens[mask]
+        xh_p = xh[mask]
+        xh_av_p = xh_av[mask]
+        phi_ion_p = phi_ion[mask]
+        clump_p = clump[mask]
+
+        # Save temperature solution from last iteration
+        temp_prev_p = temp_end_p
+
+        # At each iteration, the intial condition x(0) is reset.
+        # Change happens in the time-average and thus the electron density
+        xh_av_old_p = xh_av_p
 
         # Calculate (mean) electron density
-        de = ndens_p * (xh_av_p + abu_c)
+        de_p = ndens_p * (xh_av_p + abu_c)
 
         # Calculate the new and mean ionization states
-        new_xh_p, xh_av_p = doric(
+        new_xh_p, new_xh_av_p = doric(
             xh_p,
             dt,
-            temperature_end,
-            de,
+            temp_end_p,
+            de_p,
             phi_ion_p,
             bh00,
             albpow,
@@ -122,36 +110,30 @@ def do_chemistry(
 
         # Check for convergence
         cond1 = (
-            np.abs(xh_av_p - xh_av_p_old) / (1 - xh_av_p) < minimum_fractional_change
-        )
-        cond2 = 1 - xh_av_p < minimum_fraction_of_atoms
-        cond3 = (
-            np.abs(temperature_end - temperature_previous_iteration) / temperature_end
+            np.abs(new_xh_av_p - xh_av_old_p) / (1 - new_xh_av_p)
             < minimum_fractional_change
         )
+        cond2 = 1 - new_xh_av_p < minimum_fraction_of_atoms
+        cond3 = (
+            np.abs(temp_end_p - temp_prev_p) / temp_end_p < minimum_fractional_change
+        )
+        converged[mask] = np.where((cond1 | cond2) & cond3, 0, converged[mask] - 1)
 
-        if (cond1 or cond2) and cond3:
-            convergence = True
+        xh_av[mask] = new_xh_av_p
+        new_xh[mask] = new_xh_p
 
-        # Warn about non-convergence and terminate iteration
-        if niter > 400:
-            print("Warning!!! non-convergence. Therefore, terminating iteration.")
-            convergence = True
-        else:
-            niter += 1
-
-    return new_xh_p, xh_av_p, xh_intermed_p
+    return new_xh, xh_av, xh_intermed
 
 
-def doric(xh_old, dt, temp_p, rhe, phi_p, bh00, albpow, colh0, temph0, clumping):
+def doric(xh_old, dt, temp, rhe, phi, bh00, albpow, colh0, temph0, clumping):
     # Calculate the hydrogen recombination rate at the local temperature
-    brech0 = clumping * bh00 * (temp_p / 1e4) ** albpow
+    brech0 = clumping * bh00 * (temp / 1e4) ** albpow
 
     # Calculate the hydrogen collisional ionization rate at the local temperature
-    acolh0 = colh0 * np.sqrt(temp_p) * np.exp(-temph0 / temp_p)
+    acolh0 = colh0 * np.sqrt(temp) * np.exp(-temph0 / temp)
 
     # Find the true photo-ionization rate
-    aphoth0 = phi_p
+    aphoth0 = phi
 
     # Determine ionization states
     aih0 = aphoth0 + rhe * acolh0

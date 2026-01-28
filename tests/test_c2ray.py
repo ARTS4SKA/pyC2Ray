@@ -85,3 +85,13 @@ def test_chemistry_python(data_dir):
 
         expected_xh = np.load(data_dir / "ionized_fraction_average.npy")
         assert np.allclose(xh, expected_xh)
+
+
+def test_benchmark_chemistry(benchmark, data_dir):
+    with setup_chemistry() as args:
+        benchmark(libc2ray.chemistry.global_pass, *args)
+
+
+def test_benchmark_chemistry_python(benchmark, data_dir):
+    with setup_chemistry() as args:
+        benchmark(pysolver.chemistry.global_pass, *args)
