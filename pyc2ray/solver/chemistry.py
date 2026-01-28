@@ -57,7 +57,9 @@ def global_pass(
                     abu_c,
                 )
 
-                # Check for convergence (global flag). In original, convergence is tested using neutral fraction, but testing with ionized fraction should be equivalent. TODO: add temperature convergence criterion when non-isothermal mode is added later on.
+                # Check for convergence (global flag). In original, convergence is tested using neutral fraction,
+                # but testing with ionized fraction should be equivalent.
+                # TODO: add temperature convergence criterion when non-isothermal mode is added later on.
                 xh_av_p_old = new_xh_av[i, j, k]
 
                 cond1 = np.abs(xh_av_p - xh_av_p_old) > minimum_fractional_change
