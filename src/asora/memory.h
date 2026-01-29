@@ -153,6 +153,8 @@ namespace asora {
         photo_heat_thick_table,  ///< Lookup table for optically thick photoheating
         source_flux,             ///< Source flux array
         source_position,         ///< Source position array
+        temperature,             ///< Gas temperature array
+        clumping_factor,         ///< Clumping factor array
     };
 
     /* @brief Singleton managing only one GPU device and its memory pool.

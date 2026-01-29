@@ -5,7 +5,6 @@
 
 #include <cuda_runtime.h>
 
-#include <cassert>
 #include <exception>
 
 namespace asora {

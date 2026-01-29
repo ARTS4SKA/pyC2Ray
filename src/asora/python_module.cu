@@ -1,3 +1,5 @@
+
+#include "chemistry.h"
 #include "memory.h"
 #include "raytracing.cuh"
 
@@ -176,6 +178,51 @@ PyObject *asora_source_data_to_device([[maybe_unused]] PyObject *self, PyObject 
                : nullptr;
 }
 
+PyObject *asora_chemistry_global_pass([[maybe_unused]] PyObject *self, PyObject *args) {
+    double dt;
+    PyArrayObject *ndens;
+    PyArrayObject *temp;
+    PyArrayObject *xh;
+    PyArrayObject *xh_av;
+    PyArrayObject *xh_int;
+    PyArrayObject *phi_ion;
+    PyArrayObject *clump;
+    double bh00;
+    double albpow;
+    double colh0;
+    double temph0;
+    double abu_c;
+    size_t block_size = 512;
+
+    if (!PyArg_ParseTuple(
+            args, "dOOOOOOOddddd|k", &dt, &ndens, &temp, &xh, &xh_av, &xh_int, &phi_ion,
+            &clump, &bh00, &albpow, &colh0, &temph0, &abu_c, &block_size
+        ))
+        return nullptr;
+
+    // Get Array data
+    auto xh_data = static_cast<double *>(PyArray_DATA(xh));
+    auto xh_av_data = static_cast<double *>(PyArray_DATA(xh_av));
+    auto xh_int_data = static_cast<double *>(PyArray_DATA(xh_int));
+    auto temp_data = static_cast<double *>(PyArray_DATA(temp));
+    auto ndens_data = static_cast<double *>(PyArray_DATA(ndens));
+    auto phi_ion_data = static_cast<double *>(PyArray_DATA(phi_ion));
+    auto clump_data = static_cast<double *>(PyArray_DATA(clump));
+    auto n_cells = static_cast<size_t>(PyArray_SIZE(xh));
+
+    try {
+        auto conv_flag = asora::global_pass(
+            xh_data, xh_av_data, xh_int_data, temp_data, ndens_data, phi_ion_data,
+            clump_data, dt, bh00, albpow, colh0, temph0, abu_c, n_cells, block_size
+        );
+        return Py_BuildValue("k", conv_flag);
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return nullptr;
+    }
+    return Py_None;
+}
+
 #ifdef __cplusplus
 extern "C" {
 #endif  // __cplusplus
@@ -193,6 +240,8 @@ static PyMethodDef asoraMethods[] = {
      "Copy radiation tables to the device"},
     {"source_data_to_device", asora_source_data_to_device, METH_VARARGS,
      "Copy source data to the device"},
+    {"chemistry_global_pass", asora_chemistry_global_pass, METH_VARARGS,
+     "Solve chemistry ODE"},
     {NULL, NULL, 0, NULL} /* Sentinel */
 };
 

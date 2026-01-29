@@ -1,11 +1,12 @@
 from contextlib import contextmanager
 
 import numpy as np
+import pytest
 from astropy import constants as cst
 from astropy import units as u
 
 import pyc2ray.solver as pysolver
-from pyc2ray.load_extensions import libc2ray
+from pyc2ray.load_extensions import libasora, libc2ray
 
 
 def test_load_c2ray():
@@ -68,10 +69,11 @@ def test_chemistry(data_dir):
         xh_int = args[5]
 
         for _ in range(1000):
-            libc2ray.chemistry.global_pass(*args)
+            conv = libc2ray.chemistry.global_pass(*args)
             xh[:] = xh_int
 
         expected_xh = np.load(data_dir / "ionized_fraction_average.npy")
+        assert conv == 0
         assert np.allclose(xh, expected_xh)
 
 
@@ -80,18 +82,47 @@ def test_chemistry_python(data_dir):
         xh = args[3]
 
         for _ in range(1000):
-            new_xh, _, _ = pysolver.chemistry.global_pass(*args)
+            new_xh, _, conv = pysolver.chemistry.global_pass(*args)
             xh[:] = new_xh
 
         expected_xh = np.load(data_dir / "ionized_fraction_average.npy")
+        assert conv == 0
+        assert np.allclose(xh, expected_xh)
+
+
+@pytest.fixture
+def init_device():
+    libasora.device_init()
+    yield
+    libasora.device_close()
+
+
+def test_chemistry_asora(data_dir, init_device):
+    with setup_chemistry() as args:
+        xh = args[3]
+        xh_int = args[5]
+
+        for _ in range(1000):
+            conv = libasora.chemistry_global_pass(*args)
+            xh[:] = xh_int
+
+        expected_xh = np.load(data_dir / "ionized_fraction_average.npy")
+
+        assert conv == 0
         assert np.allclose(xh, expected_xh)
 
 
 def test_benchmark_chemistry(benchmark, data_dir):
-    with setup_chemistry() as args:
+    with setup_chemistry(200) as args:
         benchmark(libc2ray.chemistry.global_pass, *args)
 
 
 def test_benchmark_chemistry_python(benchmark, data_dir):
-    with setup_chemistry() as args:
+    with setup_chemistry(200) as args:
         benchmark(pysolver.chemistry.global_pass, *args)
+
+
+@pytest.mark.parametrize("block_size", [512, 640, 768, 896])
+def test_benchmark_chemistry_asora(benchmark, data_dir, init_device, block_size):
+    with setup_chemistry(200) as args:
+        benchmark(libasora.chemistry_global_pass, *args, block_size)
