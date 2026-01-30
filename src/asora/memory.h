@@ -21,7 +21,6 @@ namespace asora {
         std::span<T> view() noexcept {
             return {reinterpret_cast<T *>(data()), _nbytes / sizeof(T)};
         }
-
         template <typename T = std::byte>
         std::span<const T> view() const noexcept {
             return {reinterpret_cast<const T *>(data()), _nbytes / sizeof(T)};
@@ -31,9 +30,27 @@ namespace asora {
         // NOTE: do not access this memory from the host!
         std::byte *data() { return _ptr.get(); }
         const std::byte *data() const { return _ptr.get(); }
+
+        template <typename T>
+        T *data() {
+            return view<T>().data();
+        }
+        template <typename T>
+        const T *data() const {
+            return view<T>().get();
+        }
+
+        // Return the size of the array.
         size_t size() const { return _nbytes; }
 
+        template <typename T>
+        size_t size() const {
+            return _nbytes;
+        }
+
         // Copy from or to memory on the host.
+        void copyFromHost(const void *src);
+        void copyToHost(void *dst) const;
         void copyFromHost(const void *src, size_t nbytes);
         void copyToHost(void *dst, size_t nbytes) const;
 

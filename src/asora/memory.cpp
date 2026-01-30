@@ -21,6 +21,14 @@ namespace asora {
         std::swap(lhs._nbytes, rhs._nbytes);
     }
 
+    void device_buffer::copyFromHost(const void *src) {
+        safe_cuda(cudaMemcpy(data(), src, size(), cudaMemcpyHostToDevice));
+    }
+
+    void device_buffer::copyToHost(void *dst) const {
+        safe_cuda(cudaMemcpy(dst, data(), size(), cudaMemcpyDeviceToHost));
+    }
+
     void device_buffer::copyFromHost(const void *src, size_t nbytes) {
         if (size() != nbytes)
             throw std::invalid_argument("this device buffer is not large enough");

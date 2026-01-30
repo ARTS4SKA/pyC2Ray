@@ -124,7 +124,7 @@ namespace asora {
         //  radius. Currently, this is set s.t. the radius equals the distance from
         //  the source to the middle of the faces of the octahedron. To raytrace the
         //  whole box, the octahedron bust be 1.5*N in size
-        int q_max = std::ceil(c::sqrt3<> * min(R, c::sqrt3<> * m1 / 2.0));
+        int q_max = std::ceil(c::sqrt3<> * std::min(R, c::sqrt3<> * m1 / 2.0));
         if (!device::contains(buffer_tag::column_density))
             device::add<double>(
                 buffer_tag::column_density, grid_size * cells_to_shell(q_max)
@@ -134,14 +134,14 @@ namespace asora {
         // sources. The LOCALRATES flag is for debugging purposes and will be
         // removed later on
         auto phi_buf = device::get(buffer_tag::photo_ionization);
-        auto phi_d = phi_buf.view<double>().data();
+        auto phi_d = phi_buf.data<double>();
         safe_cuda(cudaMemset(phi_d, 0, phi_buf.size()));
 
         // density array is not modified, asora assumes that it has been copied to
         // the device before
         auto xh_buf = device::get(buffer_tag::hydrogen_fraction);
         auto xh_d = xh_buf.view<double>().data();
-        xh_buf.copyFromHost(xh_av, xh_buf.size());
+        xh_buf.copyFromHost(xh_av);
 
         // Since the grid is periodic, we limit the maximum size of the raytraced
         // region to a cube as large as the mesh around the source. See line 93 of
@@ -149,14 +149,12 @@ namespace asora {
         // odd. Basically the idea is that you never touch a cell which is outside a
         // cube of length ~N centered on the source
 
-        auto src_flux_d = device::get(buffer_tag::source_flux).view<double>().data();
-        auto src_pos_d = device::get(buffer_tag::source_position).view<int>().data();
-        auto cdh_d = device::get(buffer_tag::column_density).view<double>().data();
-        auto n_d = device::get(buffer_tag::number_density).view<double>().data();
-        auto ph_thin_d =
-            device::get(buffer_tag::photo_thin_table).view<double>().data();
-        auto ph_thick_d =
-            device::get(buffer_tag::photo_thick_table).view<double>().data();
+        auto src_flux_d = device::get(buffer_tag::source_flux).data<double>();
+        auto src_pos_d = device::get(buffer_tag::source_position).data<int>();
+        auto cdh_d = device::get(buffer_tag::column_density).data<double>();
+        auto n_d = device::get(buffer_tag::number_density).data<double>();
+        auto ph_thin_d = device::get(buffer_tag::photo_thin_table).data<double>();
+        auto ph_thick_d = device::get(buffer_tag::photo_thick_table).data<double>();
 
         // Loop over batches of sources
         for (size_t ns = 0; ns < num_src; ns += grid_size) {
@@ -172,7 +170,7 @@ namespace asora {
 
         // Copy the accumulated ionization fraction back to the host
         // Memcpy blocks until last kernel has finished
-        phi_buf.copyToHost(phi_ion, phi_buf.size());
+        phi_buf.copyToHost(phi_ion);
     }
 
     // ========================================================================
