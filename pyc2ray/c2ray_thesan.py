@@ -5,8 +5,9 @@ import numpy as np
 import tools21cm as t2c
 
 import pyc2ray as pc2r
+import pyc2ray.constants as c
 
-from .c2ray_base import YEAR, C2Ray, m_p
+from .c2ray_base import C2Ray
 from .utils import bin_sources
 from .utils.other_utils import (
     find_bins,
@@ -18,8 +19,6 @@ from .utils.other_utils import (
 
 __all__ = ["C2Ray_Thesan"]
 logger = logging.getLogger(__name__)
-
-# m_p = 1.672661e-24
 
 # ======================================================================
 # This file contains the C2Ray_Thesan subclass of C2Ray, which is a
@@ -162,9 +161,9 @@ class C2Ray_Thesan(C2Ray):
  min, max halo (grid) mass : %.3e  %.3e [Msun] and min, mean, max number of ionising sources : %.3e  %.3e  %.3e [1/s]""",
             normflux.size,
             file,
-            np.sum(normflux * S_star_ref),
+            normflux.sum() * S_star_ref,
             self.tot_phots,
-            dt / (1e6 * YEAR),
+            dt / (1e6 * c.year2s),
             srcmass_msun.min(),
             srcmass_msun.max(),
             normflux.min() * S_star_ref,
@@ -234,7 +233,7 @@ class C2Ray_Thesan(C2Ray):
             self.cosmology.critical_density0.cgs.value
             * self.cosmology.Ob0
             * (1.0 + rdr.load_density_field(file))
-            / (self.mean_molecular * m_p)
+            / (self.mean_molecular * c.m_p)
             * (1 + z) ** 3
         )
         logger.info(
@@ -311,17 +310,9 @@ class C2Ray_Thesan(C2Ray):
             )
 
             # TODO: implement heating
-            temp0 = self._ld["Material"]["temp0"]
-            self.temp = temp0 * np.ones(self.shape, order="F")
+            self.temp = np.full(self.shape, self.material_params.temp0, order="F")
         else:
-            xh0 = self._ld["Material"]["xh0"]
-            temp0 = self._ld["Material"]["temp0"]
-            avg_dens = self._ld["Material"]["avg_dens"]
-
-            self.ndens = avg_dens * np.empty(self.shape, order="F")
-            self.xh = xh0 * np.ones(self.shape, order="F")
-            self.temp = temp0 * np.ones(self.shape, order="F")
-            self.phi_ion = np.zeros(self.shape, order="F")
+            super()._material_init()
 
     def _sources_init(self):
         """Initialize settings to read source files"""

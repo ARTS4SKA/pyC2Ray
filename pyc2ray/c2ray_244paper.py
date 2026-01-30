@@ -3,18 +3,16 @@ import logging
 import h5py
 import numpy as np
 import tools21cm as t2c
-from astropy.cosmology import FlatLambdaCDM
 
-from .c2ray_base import YEAR, C2Ray, Mpc, msun2g
+import pyc2ray.constants as c
+
+from .c2ray_base import C2Ray
 from .utils import get_source_redshifts
-from .utils.logutils import configure_logger
 from .utils.other_utils import find_bins, get_redshifts_from_output
 
 __all__ = ["C2Ray_244Test"]
 
 logger = logging.getLogger(__name__)
-
-m_p = 1.672661e-24
 
 # ======================================================================
 # This file contains the C2Ray_CubeP3M subclass of C2Ray, which is a
@@ -77,7 +75,7 @@ class C2Ray_244Test(C2Ray):
         t_now = self.time
         t_half = t_now + 0.5 * dt
         t_after = t_now + dt
-        logger.info(f" This is time : {t_now / YEAR}\t{t_after / YEAR}")
+        logger.info(f" This is time : {t_now / c.year2s}\t{t_after / c.year2s}")
 
         # Increment redshift by half a time step
         z_half = self.time2zred(t_half)
@@ -154,40 +152,23 @@ class C2Ray_244Test(C2Ray):
 
     def _cosmology_init(self):
         """Set up cosmology from parameters (H0, Omega,..)"""
-        h = self._ld["Cosmology"]["h"]
-        Om0 = self._ld["Cosmology"]["Omega0"]
-        Ob0 = self._ld["Cosmology"]["Omega_B"]
-        Tcmb0 = self._ld["Cosmology"]["cmbtemp"]
-        H0 = 100 * h
-        self.cosmology = FlatLambdaCDM(H0, Om0, Tcmb0, Ob0=Ob0)
+        super()._cosmology_init()
 
-        self.cosmological = self._ld["Cosmology"]["cosmological"]
-        self.zred_0 = self._ld["Cosmology"]["zred_0"]
+        # TODO: it should be:
+        # self.dr = self.cosmology.scale_factor(self.zred_0) * self.dr_c
+        self.dr = self.dr_c / (1 + self.zred_0)
 
-        # H0 *= 1e5/Mpc
+        H0 = 100 * self.cosmology_params.h
+        Om0 = self.cosmology_params.Omega0
+        # H0 *= 1e5/c.Mpc
 
         # self.age_0 = 2.*(1.+self.zred_0)**(-1.5)/(3.*H0*np.sqrt(Om0))
         # self.age_0 = self.zred2time(self.zred_0)
         self.age_0 = (
-            2.0 * (1.0 + self.zred_0) ** (-1.5) / (3.0 * H0 * 1e5 / Mpc * np.sqrt(Om0))
+            2.0
+            * (1.0 + self.zred_0) ** (-1.5)
+            / (3.0 * H0 * 1e5 / c.Mpc * np.sqrt(Om0))
         )
-
-        # TODO: here I force z0 to equal restart slice to test
-        zred_0 = self.zred_0  # 20.134
-
-        # Scale quantities to the initial redshift
-        if self.cosmological:
-            logger.info(
-                f"Cosmology is on, scaling comoving quantities to the initial redshift, which is z0 = {zred_0:.3f}..."
-                f"""Cosmological parameters used:
-h   = {h:.4f}, Tcmb0 = {Tcmb0:.3e}
-Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}"""
-            )
-            # TODO: it should be:
-            # self.dr = self.cosmology.scale_factor(self.zred_0) * self.dr_c
-            self.dr = self.dr_c / (1 + zred_0)
-        else:
-            logger.info("Cosmology is off.")
 
     # =====================================================================================================
     # USER DEFINED METHODS
@@ -218,7 +199,7 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}"""
         # TODO: automatic selection of low mass or high mass.
         # For the moment only high mass:
         # mass2phot = (
-        #     msun2g
+        #     c.msun2g
         #     * self.fgamma_hm
         #     * self.cosmology.Ob0
         #     / (self.mean_molecular * c.m_p.cgs.value * self.ts * self.cosmology.Om0)
@@ -226,10 +207,10 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}"""
         # TODO: for some reason the difference with the orginal Fortran run is of
         # the molecular weight: logger.info(str(self.mean_molecular))
         mass2phot = (
-            msun2g
+            c.msun2g
             * self.fgamma_hm
             * self.cosmology.Ob0
-            / (m_p * ts * self.cosmology.Om0)
+            / (c.m_p * ts * self.cosmology.Om0)
         )
 
         if file.endswith(".hdf5"):
@@ -254,7 +235,7 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}"""
             normflux.size,
             file,
             np.sum(normflux * S_star_ref),
-            ts / (1e6 * YEAR),
+            ts / (1e6 * c.year2s),
             normflux.min() / mass2phot * S_star_ref,
             normflux.max() / mass2phot * S_star_ref,
             normflux.min() * S_star_ref,
@@ -297,10 +278,10 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}"""
         ]
 
         if high_z != self.prev_zdens:
-            file = "%scoarser_densities/%.3fn_all.dat" % (self.inputs_basename, high_z)
+            file = f"{self.inputs_basename}coarser_densities/{high_z:.3f}n_all.dat"
             self.ndens = (
                 t2c.DensityFile(filename=file).cgs_density
-                / (self.mean_molecular * m_p)
+                / (self.mean_molecular * c.m_p)
                 * (1 + redshift) ** 3
             )
             logger.info(
@@ -395,10 +376,9 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}"""
             # get fields at the resuming redshift
             self.ndens = (
                 t2c.DensityFile(
-                    filename="%scoarser_densities/%.3fn_all.dat"
-                    % (self.inputs_basename, self.prev_zdens)
+                    filename="{self.inputs_basename}coarser_densities/{self.prev_zdens:.3f}n_all.dat"
                 ).cgs_density
-                / (self.mean_molecular * m_p)
+                / (self.mean_molecular * c.m_p)
                 * (1 + self.zred) ** 3
             )
             # self.ndens = self.read_density(z=self.zred)
@@ -408,54 +388,29 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}"""
                 order="F",
             )
             # TODO: implement heating
-            temp0 = self._ld["Material"]["temp0"]
-            self.temp = temp0 * np.ones(self.shape, order="F")
+            self.temp = np.full(self.shape, self.material_params.temp0, order="F")
             self.phi_ion = t2c.read_cbin(
                 filename="%sIonRates_%.3f.dat" % (self.results_basename, self.zred),
                 bits=32,
                 order="F",
             )
         else:
-            xh0 = self._ld["Material"]["xh0"]
-            temp0 = self._ld["Material"]["temp0"]
-            avg_dens = self._ld["Material"]["avg_dens"]
+            super()._material_init()
 
-            self.ndens = avg_dens * np.empty(self.shape, order="F")
-            self.xh = xh0 * np.ones(self.shape, order="F")
-            self.temp = temp0 * np.ones(self.shape, order="F")
-            self.phi_ion = np.zeros(self.shape, order="F")
+    @property
+    def fgamma_hm(self) -> float:
+        return self.sources_params.fgamma_hm
 
-    def _output_init(self):
-        """Set up output & log file"""
-        self.results_basename = self._ld["Output"]["results_basename"]
-        self.inputs_basename = self._ld["Output"]["inputs_basename"]
+    @property
+    def fgamma_lm(self) -> float:
+        return self.sources_params.fgamma_lm
 
-        self.logfile = self.results_basename + self._ld["Output"]["logfile"]
-        title = r"""
-                  _________   ____
-     ____  __  __/ ____/__ \ / __ \____ ___  __
-    / __ \/ / / / /    __/ // /_/ / __ `/ / / /
-   / /_/ / /_/ / /___ / __// _, _/ /_/ / /_/ /
-  / .___/\__, /\____//____/_/ |_|\__,_/\__, /
- /_/    /____/                        /____/
-"""
-        if self._ld["Grid"]["resume"]:
-            with open(self.logfile, "r") as f:
-                log = f.readlines()
-            with open(self.logfile, "w") as f:
-                log.append("\n\nResuming" + title[8:] + "\n\n")
-                f.write("".join(log))
-        else:
-            with open(self.logfile, "w") as f:
-                # Clear file and write header line
-                f.write(title + "\nLog file for pyC2Ray.\n\n")
-        configure_logger(self.logfile)
+    @property
+    def ts(self) -> float:
+        return self.sources_params.ts * c.year2s * 1e6
 
     def _sources_init(self):
         """Initialize settings to read source files"""
-        self.fgamma_hm = self._ld["Sources"]["fgamma_hm"]
-        self.fgamma_lm = self._ld["Sources"]["fgamma_lm"]
-        self.ts = self._ld["Sources"]["ts"] * YEAR * 1e6
         logger.info(
             f"Using UV model with fgamma_lm = {self.fgamma_lm:.1f} "
             f"and fgamma_hm = {self.fgamma_hm:.1f}"
@@ -464,11 +419,11 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}"""
     def _grid_init(self):
         """Set up grid properties"""
         # Comoving quantities
-        self.boxsize_c = self._ld["Grid"]["boxsize"] * Mpc / self._ld["Cosmology"]["h"]
+        self.boxsize_c = self.boxsize * c.Mpc / self.cosmology_params.h
         self.dr_c = self.boxsize_c / self.N
 
         logger.info(f"Welcome! Mesh size is N = {self.N:n}.")
-        logger.info(f"Simulation Box size (comoving Mpc): {self.boxsize_c / Mpc:.3e}")
+        logger.info(f"Simulation Box size (comoving Mpc): {self.boxsize_c / c.Mpc:.3e}")
 
         # Initialize cell size to comoving size (if cosmological run,
         # it will be scaled in cosmology_init)
@@ -476,14 +431,11 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}"""
 
         # Set R_max (LLS 3) in cell units
         self.R_max_LLS = (
-            self._ld["Photo"]["R_max_cMpc"]
+            self.sinks_params.R_max_cMpc
             * self.N
-            * self._ld["Cosmology"]["h"]
-            / self._ld["Grid"]["boxsize"]
+            * self.cosmology_params.h
+            / self.grid_params.boxsize
         )
-        R_max_cMpc = self._ld["Photo"]["R_max_cMpc"]
         logger.info(f"""Maximum comoving distance for photons from source (type 3 LLS): 
-{R_max_cMpc: .3e} comoving Mpc
+{self.sinks_params.R_max_cMpc: .3e} comoving Mpc
 This corresponds to {self.R_max_LLS: .3f} grid cells.""")
-
-        self.resume = self._ld["Grid"]["resume"]

@@ -1,23 +1,33 @@
 import atexit
 import logging
 import os
-import re
+from pathlib import Path
 
 import numpy as np
 import tools21cm as t2c
-import yaml
 from astropy import constants as cst
 from astropy import units as u
 from astropy.cosmology import FlatLambdaCDM, z_at_value
 from mpi4py import MPI
 
-try:
-    from yaml import CSafeLoader as SafeLoader
-except ImportError:
-    from yaml import SafeLoader
+import pyc2ray.constants as c
 
 from .asora_core import device_close, device_init, photo_table_to_device
 from .evolve import evolve3D
+from .parameters import (
+    AbundancesParameters,
+    BlackBodyParameters,
+    CGSParameters,
+    CosmologyParameters,
+    GridParameters,
+    MaterialParameters,
+    OutputParameters,
+    PhotoParameters,
+    RaytracingParameters,
+    SinksParameters,
+    SourcesParameters,
+    YmlParameters,
+)
 from .radiation import BlackBodySource, YggdrasilModel, make_tau_table
 from .raytracing import do_raytracing
 from .sinks_model import SinksPhysics
@@ -83,14 +93,6 @@ logger = logging.getLogger(__name__)
 # and the C2Ray values may be visible, thus we use the same exact value
 # for the constants. This can be changed to the
 # astropy values once consistency between the two codes has been established
-pc = (1 * u.pc).cgs.value  # C2Ray value: 3.086e18
-YEAR = (1 * u.yr).cgs.value  # C2Ray value: 3.15576E+07
-ev2fr = 1.0 / (cst.h * u.Hz).to("eV").value  # eV to Frequency (Hz)
-ev2k = 1.0 / (cst.k_B * u.K).to("eV").value  # eV to Kelvin
-kpc = (1 * u.kpc).cgs.value  # kiloparsec in cm
-Mpc = (1 * u.Mpc).cgs.value  # megaparsec in cm
-msun2g = (1 * u.Msun).cgs.value  # solar mass to grams
-m_p = cst.m_p.cgs.value  # proton mass to grams
 
 
 class C2Ray:
@@ -109,16 +111,13 @@ class C2Ray:
         """
         # Read YAML parameter file and set main properties
         self._read_paramfile(paramfile)
-        self._param_init()
 
         # MPI setup
         if self.mpi:
-            self.mpi = MPI
-            self.comm = self.mpi.COMM_WORLD
+            self.comm = MPI.COMM_WORLD
             self.rank = self.comm.Get_rank()
             self.nprocs = self.comm.Get_size()
         else:
-            self.mpi = False
             self.rank = 0
             self.nprocs = 1
 
@@ -256,7 +255,7 @@ class C2Ray:
             dr=self.dr,
             src_flux=src_flux,
             src_pos=src_pos,
-            src_batch_size=self._ld["Raytracing"]["source_batch_size"],
+            src_batch_size=self.raytracing_params.source_batch_size,
             use_gpu=self.gpu,
             max_subbox=self.max_subbox,
             subboxsize=self.subboxsize,
@@ -296,7 +295,7 @@ class C2Ray:
         t_now = self.time
         t_half = t_now + 0.5 * dt
         t_after = t_now + dt
-        # logger.info(f" This is time : {t_now / YEAR}\t{t_after / YEAR}")
+        # logger.info(f" This is time : {t_now / c.year2s}\t{t_after / c.year2s}")
 
         # Increment redshift by half a time step
         z_half = self.time2zred(t_half)
@@ -459,7 +458,7 @@ This corresponds to %.3f grid cells.""",
         src_pos : 2D-array of shape (3,numsrc)
             Array containing the 3D grid position of each source, in Fortran indexing (from 1)
         """
-        gamma = do_raytracing(
+        gamma_ion, _ = do_raytracing(
             self.dr,
             src_flux,
             src_pos,
@@ -471,80 +470,203 @@ This corresponds to %.3f grid cells.""",
             self.xh,
             self.photo_thin_table,
             self.photo_thick_table,
+            None,
+            None,
             self.minlogtau,
             self.dlogtau,
             self.R_max_LLS,
             self.sig,
         )
-        self.phi_ion = gamma
-        return gamma
+        self.phi_ion = gamma_ion
+        return gamma_ion
 
     # =====================================================================================================
     # INITIALIZATION METHODS (PRIVATE)
     # =====================================================================================================
 
-    def _param_init(self):
-        """Set up general constants and parameters
+    # TODO: figure out if all these propery methods are necessary
+    @property
+    def N(self) -> int:
+        return self.grid_params.meshsize
 
-        Computes additional required quantities from the read-in parameters
-        and stores them as attributes
-        """
-        self.N = self._ld["Grid"]["meshsize"]
-        self.gpu = self._ld["Grid"]["gpu"]
-        self.mpi = self._ld["Grid"]["mpi"]
-        self.eth0 = self._ld["CGS"]["eth0"]
-        self.ethe0 = self._ld["CGS"]["ethe0"]
-        self.ethe1 = self._ld["CGS"]["ethe1"]
-        self.bh00 = self._ld["CGS"]["bh00"]
-        self.fh0 = self._ld["CGS"]["fh0"]
-        self.xih0 = self._ld["CGS"]["xih0"]
-        self.albpow = self._ld["CGS"]["albpow"]
-        self.abu_h = self._ld["Abundances"]["abu_h"]
-        self.abu_he = self._ld["Abundances"]["abu_he"]
-        self.mean_molecular = self.abu_h + 4.0 * self.abu_he
-        self.abu_c = self._ld["Abundances"]["abu_c"]
-        self.colh0 = self._ld["CGS"]["colh0_fact"] * self.fh0 * self.xih0 / self.eth0**2
-        self.temph0 = self.eth0 * ev2k
-        self.sig = self._ld["Photo"]["sigma_HI_at_ion_freq"]
-        self.loss_fraction = self._ld["Raytracing"]["loss_fraction"]
-        self.convergence_fraction = self._ld["Raytracing"]["convergence_fraction"]
-        self.max_subbox = self._ld["Raytracing"]["max_subbox"]
-        self.subboxsize = self._ld["Raytracing"]["subboxsize"]
+    @property
+    def boxsize(self) -> float:
+        return self.grid_params.boxsize
+
+    @property
+    def gpu(self) -> bool:
+        return self.grid_params.gpu
+
+    @property
+    def mpi(self) -> bool:
+        return self.grid_params.mpi
+
+    @property
+    def resume(self) -> bool:
+        return self.grid_params.resume
+
+    @property
+    def eth0(self) -> float:
+        return self.cgs_params.eth0
+
+    @property
+    def ethe0(self) -> float:
+        return self.cgs_params.ethe0
+
+    @property
+    def ethe1(self) -> float:
+        return self.cgs_params.ethe1
+
+    @property
+    def bh00(self) -> float:
+        return self.cgs_params.bh00
+
+    @property
+    def fh0(self) -> float:
+        return self.cgs_params.fh0
+
+    @property
+    def xih0(self) -> float:
+        return self.cgs_params.xih0
+
+    @property
+    def albpow(self) -> float:
+        return self.cgs_params.albpow
+
+    @property
+    def colh0(self) -> float:
+        return self.cgs_params.colh0
+
+    @property
+    def temph0(self) -> float:
+        return self.cgs_params.temph0
+
+    @property
+    def abu_h(self) -> float:
+        return self.abundance_params.abu_h
+
+    @property
+    def abu_he(self) -> float:
+        return self.abundance_params.abu_he
+
+    @property
+    def abu_c(self) -> float:
+        return self.abundance_params.abu_c
+
+    @property
+    def mean_molecular(self) -> float:
+        return self.abundance_params.mean_molecular
+
+    @property
+    def sig(self) -> float:
+        return self.photo_params.sigma_HI_at_ion_freq
+
+    @property
+    def loss_fraction(self) -> float:
+        return self.raytracing_params.loss_fraction
+
+    @property
+    def convergence_fraction(self) -> float:
+        return self.raytracing_params.convergence_fraction
+
+    @property
+    def max_subbox(self) -> int:
+        return self.raytracing_params.max_subbox
+
+    @property
+    def subboxsize(self) -> int:
+        return self.raytracing_params.subboxsize
+
+    @property
+    def cosmological(self) -> bool:
+        return self.cosmology_params.cosmological
+
+    @property
+    def zred_0(self) -> float:
+        return self.cosmology_params.zred_0
 
     def _cosmology_init(self):
         """Set up cosmology from parameters (H0, Omega,..)"""
-        h = self._ld["Cosmology"]["h"]
-        Om0 = self._ld["Cosmology"]["Omega0"]
-        Ob0 = self._ld["Cosmology"]["Omega_B"]
-        Tcmb0 = self._ld["Cosmology"]["cmbtemp"]
+        h = self.cosmology_params.h
+        Om0 = self.cosmology_params.Omega0
+        Ob0 = self.cosmology_params.Omega_B
+        Tcmb0 = self.cosmology_params.cmbtemp
         H0 = 100 * h
         self.cosmology = FlatLambdaCDM(H0, Om0, Tcmb0, Ob0=Ob0)
 
-        self.cosmological = self._ld["Cosmology"]["cosmological"]
-        self.zred_0 = self._ld["Cosmology"]["zred_0"]
         self.age_0 = self.zred2time(self.zred_0)
 
         # Scale quantities to the initial redshift
         if self.cosmological:
-            logger.info(
-                f"""Cosmology is on, scaling comoving quantities to the initial redshift, which is z0 = {self.zred_0:.3f}...
+            logger.info(f"""Cosmology is on, scaling comoving quantities to the initial redshift, which is z0 = {self.zred_0:.3f}...
 Cosmological parameters used:
 h   = {h:.4f}, Tcmb0 = {Tcmb0:.3e}
-Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}"""
-            )
+Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}""")
             self.dr = self.cosmology.scale_factor(self.zred_0) * self.dr_c
         else:
             logger.info("Cosmology is off.")
 
+    @property
+    def minlogtau(self) -> float:
+        return self.photo_params.minlogtau
+
+    @property
+    def maxlogtau(self) -> float:
+        return self.photo_params.maxlogtau
+
+    @property
+    def NumTau(self) -> int:
+        return self.photo_params.NumTau
+
+    @property
+    def SourceType(self) -> str:
+        return self.photo_params.SourceType
+
+    @property
+    def grey(self) -> bool:
+        return self.photo_params.grey
+
+    @property
+    def compute_heating_rates(self) -> bool:
+        return self.photo_params.compute_heating_rates
+
+    @property
+    def cs_pl_idx_h(self) -> float:
+        return self.blackbody_params.cross_section_pl_index
+
+    @property
+    def bb_Teff(self) -> float:
+        return self.blackbody_params.Teff
+
+    @property
+    def results_basename(self) -> Path:
+        res_dir = Path(self.output_params.results_basename)
+        if not res_dir.is_dir() and self.rank == 0:
+            res_dir.mkdir()
+        return res_dir
+
+    @property
+    def inputs_basename(self) -> str:
+        assert self.output_params.inputs_basename is not None
+        return self.output_params.inputs_basename
+
+    @property
+    def sources_basename(self) -> str:
+        assert self.output_params.sources_basename is not None
+        return self.output_params.sources_basename
+
+    @property
+    def density_basename(self) -> str:
+        assert self.output_params.density_basename is not None
+        return self.output_params.density_basename
+
+    @property
+    def logfile(self) -> Path:
+        return self.results_basename / self.output_params.logfile
+
     def _radiation_init(self):
         """Set up radiation tables for ionization/heating rates"""
         # Create optical depth table (log-spaced)
-        self.minlogtau = self._ld["Photo"]["minlogtau"]
-        self.maxlogtau = self._ld["Photo"]["maxlogtau"]
-        self.NumTau = self._ld["Photo"]["NumTau"]
-        self.SourceType = self._ld["Photo"]["SourceType"]
-        self.grey = self._ld["Photo"]["grey"]
-        self.compute_heating_rates = self._ld["Photo"]["compute_heating_rates"]
 
         if self.grey:
             logger.info("Warning: Using grey opacity")
@@ -559,8 +681,8 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}"""
             self.minlogtau, self.maxlogtau, self.NumTau
         )
 
-        ion_freq_HI = ev2fr * self.eth0
-        ion_freq_HeII = ev2fr * self.ethe1
+        ion_freq_HI = c.ev2fr * self.eth0
+        ion_freq_HeII = c.ev2fr * self.ethe1
 
         # Black-Body source type
         if self.SourceType == "blackbody":
@@ -568,15 +690,13 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}"""
             freq_max = 10 * ion_freq_HeII
 
             # Initialize spectrum parameters
-            self.bb_Teff = self._ld["BlackBodySource"]["Teff"]
-            self.cs_pl_idx_h = self._ld["BlackBodySource"]["cross_section_pl_index"]
             radsource = BlackBodySource(
                 self.bb_Teff, self.grey, ion_freq_HI, self.cs_pl_idx_h
             )
 
             logger.info(f"""Using Black-Body sources with effective temperature T = {radsource.temp:.1e} K and Radius {(radsource.R_star / cst.R_sun.to("cm")).value: .3e} rsun
 Spectrum Frequency Range: {freq_min:.3e} to {freq_max:.3e} Hz
-This is Energy:           {freq_min / ev2fr:.3e} to {freq_max / ev2fr:.3e} eV""")
+This is Energy:           {freq_min / c.ev2fr:.3e} to {freq_max / c.ev2fr:.3e} eV""")
         elif self.SourceType == "powerlaw":
             # TODO: power law spectra is already implemented in radiation folder
             pass
@@ -584,8 +704,7 @@ This is Energy:           {freq_min / ev2fr:.3e} to {freq_max / ev2fr:.3e} eV"""
             freq_min = ion_freq_HI
             freq_max = 10 * ion_freq_HI  # maximum frequency in Zackrisson tables
 
-            self.cs_pl_idx_h = self._ld["BlackBodySource"]["cross_section_pl_index"]
-            fname = self._ld["Photo"]["sed_table"]
+            fname = self.photo_params.sed_table
             radsource = YggdrasilModel(
                 tabname=fname,
                 grey=self.grey,
@@ -597,7 +716,7 @@ This is Energy:           {freq_min / ev2fr:.3e} to {freq_max / ev2fr:.3e} eV"""
             logger.info(
                 """Using Yggdrasil Models for SED, Zackrisson et al (2011), for PopIII or PopII sources
 Spectrum Frequency Range: {freq_min:.3e} to {freq_max:.3e} Hz
-This is Energy:           {freq_min / ev2fr:.3e} to {freq_max / ev2fr:.3e} eV"""
+This is Energy:           {freq_min / c.ev2fr:.3e} to {freq_max / c.ev2fr:.3e} eV"""
             )
         else:
             raise NameError("Unknown source type : ", self.SourceType)
@@ -631,8 +750,7 @@ This is Energy:           {freq_min / ev2fr:.3e} to {freq_max / ev2fr:.3e} eV"""
     def _grid_init(self):
         """Set up grid properties"""
         # Comoving quantities
-        self.boxsize = self._ld["Grid"]["boxsize"]
-        self.boxsize_c = self.boxsize * Mpc
+        self.boxsize_c = self.boxsize * c.Mpc
         self.dr_c = self.boxsize_c / self.N
 
         logger.info(
@@ -643,20 +761,10 @@ Simulation Box size (comoving Mpc): {self.boxsize:.3e}"""
         # Initialize cell size to comoving size (if cosmological run, it will be scaled in cosmology_init)
         self.dr = self.dr_c
 
-        # flag to set the resume
         # TODO: need to give the index of start for the redshift loop in the main
-        self.resume = self._ld["Grid"]["resume"]
 
     def _output_init(self):
         """Set up output & log file"""
-        self.results_basename = self._ld["Output"]["results_basename"]
-        if not os.path.exists(self.results_basename) and self.rank == 0:
-            os.mkdir(self.results_basename)
-        self.inputs_basename = self._ld["Output"]["inputs_basename"]
-        self.sources_basename = self._ld["Output"]["sources_basename"]
-        self.density_basename = self._ld["Output"]["density_basename"]
-
-        self.logfile = self.results_basename + self._ld["Output"]["logfile"]
         title = r"""
                  _________   ____            
     ____  __  __/ ____/__ \ / __ \____ ___  __
@@ -667,7 +775,7 @@ Simulation Box size (comoving Mpc): {self.boxsize:.3e}"""
 """
 
         if self.rank == 0:
-            if self._ld["Grid"]["resume"]:
+            if self.resume:
                 title = "\n\nResuming" + title[8:] + "\n\n"
                 print(title)
                 with open(self.logfile, "r") as f:
@@ -690,18 +798,16 @@ Simulation Box size (comoving Mpc): {self.boxsize:.3e}"""
         """Initialize sinks physics class for the mean-free path and clumping factor"""
 
         # init sink physics class for MFP and clumping
-        self.sinks = SinksPhysics(params=self._ld, N=self.N)
+        self.sinks = SinksPhysics(self.sinks_params, self.N, self.boxsize)
 
         # for clumping factor
         if self.sinks.clumping_model == "constant":
             self.clumping_factor = self.sinks.calculate_clumping
         elif self.sinks.clumping_model == "redshift":
-            self.clumping_factor = self.sinks.calculate_clumping(
-                z=self._ld["Cosmology"]["zred_0"]
-            )
+            self.clumping_factor = self.sinks.calculate_clumping(z=self.zred_0)
         else:
             self.clumping_factor = self.sinks.calculate_clumping(
-                z=self._ld["Cosmology"]["zred_0"], ndens=self.ndens
+                z=self.zred_0, ndens=self.ndens
             )
 
         logger.info(
@@ -730,9 +836,7 @@ This corresponds to %.3f grid cells.
             )
         elif self.sinks.mfp_model == "Worseck2014":
             # set mean-free-path to the initial redshift
-            self.R_max_LLS = self.sinks.mfp_Worseck2014(
-                z=self._ld["Cosmology"]["zred_0"]
-            )  # in cMpc
+            self.R_max_LLS = self.sinks.mfp_Worseck2014(z=self.zred_0)  # in cMpc
             self.R_max_LLS *= self.N / self.boxsize
             logger.info(
                 """
@@ -757,15 +861,10 @@ This corresponds to %.3f grid cells.
 
     def _material_init(self):
         """Initialize material properties of the grid"""
-        xh0 = self._ld["Material"]["xh0"]
-        temp0 = self._ld["Material"]["temp0"]
-        avg_dens = self._ld["Material"]["avg_dens"]
-
-        self.ndens = avg_dens * np.empty(self.shape, order="F")
-        self.xh = xh0 * np.ones(self.shape, order="F")
-        self.temp = temp0 * np.ones(self.shape, order="F")
+        self.ndens = np.empty(self.shape, order="F")
+        self.xh = np.full(self.shape, self.material_params.xh0, order="F")
+        self.temp = np.full(self.shape, self.material_params.temp0, order="F")
         self.phi_ion = np.zeros(self.shape, order="F")
-        pass
 
     def _sources_init(self):
         """Initialize settings to read source files"""
@@ -777,24 +876,18 @@ This corresponds to %.3f grid cells.
 
     def _read_paramfile(self, paramfile):
         """Read in YAML parameter file"""
-        loader = SafeLoader
-        # Configure to read scientific notation as floats rather than strings
-        loader.add_implicit_resolver(
-            "tag:yaml.org,2002:float",
-            re.compile(
-                """^(?:
-            [-+]?(?:[0-9][0-9_]*)\\.[0-9_]*(?:[eE][-+]?[0-9]+)?
-            |[-+]?(?:[0-9][0-9_]*)(?:[eE][-+]?[0-9]+)
-            |\\.[0-9_]+(?:[eE][-+][0-9]+)?
-            |[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\\.[0-9_]*
-            |[-+]?\\.(?:inf|Inf|INF)
-            |\\.(?:nan|NaN|NAN))$""",
-                re.X,
-            ),
-            list("-+0123456789."),
-        )
-        with open(paramfile, "r") as f:
-            self._ld = yaml.load(f, loader)
+        ld = YmlParameters.load_yaml(paramfile)
+        self.output_params = OutputParameters.from_dict(ld["Output"])
+        self.grid_params = GridParameters.from_dict(ld["Grid"])
+        self.raytracing_params = RaytracingParameters.from_dict(ld["Raytracing"])
+        self.material_params = MaterialParameters.from_dict(ld["Material"])
+        self.cgs_params = CGSParameters.from_dict(ld["CGS"])
+        self.cosmology_params = CosmologyParameters.from_dict(ld["Cosmology"])
+        self.abundance_params = AbundancesParameters.from_dict(ld["Abundances"])
+        self.photo_params = PhotoParameters.from_dict(ld["Photo"])
+        self.sinks_params = SinksParameters.from_dict(ld["Sinks"])
+        self.blackbody_params = BlackBodyParameters.from_dict(ld["BlackBodySource"])
+        self.sources_params = SourcesParameters.from_dict(ld["Sources"])
 
     def _gpu_close(self):
         """Deallocate GPU memory"""

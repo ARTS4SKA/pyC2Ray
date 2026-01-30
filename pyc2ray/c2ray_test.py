@@ -1,11 +1,11 @@
 import logging
-import os
 import pickle as pkl
 
 import numpy as np
 
-from .c2ray_base import YEAR, C2Ray
-from .utils.logutils import configure_logger
+import pyc2ray.constants as c
+
+from .c2ray_base import C2Ray
 from .utils.sourceutils import read_test_sources
 
 __all__ = ["C2Ray_Test"]
@@ -153,7 +153,7 @@ class C2Ray_Test(C2Ray):
         zred_array : 1D-array
             List of redshifts (including initial one)
         """
-        step = delta_t * YEAR
+        step = delta_t * c.year2s
         zred_array = np.empty(num_zred)
         for i in range(num_zred):
             zred_array[i] = self.time2zred(self.age_0 + i * step)
@@ -168,33 +168,6 @@ class C2Ray_Test(C2Ray):
         self.time = self.age_0
         self.zred = self.zred_0
 
-    def _material_init(self):
-        """Initialize material properties of the grid"""
-        xh0 = self._ld["Material"]["xh0"]
-        temp0 = self._ld["Material"]["temp0"]
-
-        self.ndens = np.empty(self.shape, order="F")
-        self.xh = xh0 * np.ones(self.shape, order="F")
-        self.temp = temp0 * np.ones(self.shape, order="F")
-        self.phi_ion = np.zeros(self.shape, order="F")
-        self.avg_dens = self._ld["Material"]["avg_dens"]
-
-    def _output_init(self):
-        """Set up output & log file"""
-        self.results_basename = self._ld["Output"]["results_basename"]
-        if (self.rank == 0) and not os.path.exists(self.results_basename):
-            os.mkdir(self.results_basename)
-
-        self.logfile = self.results_basename + self._ld["Output"]["logfile"]
-        configure_logger(self.logfile)
-
-        title = r"""
-                 _________   ____            
-    ____  __  __/ ____/__ \ / __ \____ ___  __
-   / __ \/ / / / /    __/ // /_/ / __ `/ / / /
-  / /_/ / /_/ / /___ / __// _, _/ /_/ / /_/ /
- / .___/\__, /\____//____/_/ |_|\__,_/\__, /
-/_/    /____/                        /____/
-"""
-        if self.rank == 0:
-            logger.info("\nLog file for pyC2Ray \n\n" + title)
+    @property
+    def avg_dens(self) -> float:
+        return self.material_params.avg_dens

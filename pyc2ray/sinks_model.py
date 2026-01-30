@@ -3,33 +3,35 @@ import numpy as np
 # FIXME: use other way to get to __path__, risk of circular import!
 import pyc2ray as pc2r
 
+from .parameters import SinksParameters
 from .utils.other_utils import find_bins
 
 
 class SinksPhysics:
-    def __init__(self, params=None, N=None):
-        self.clumping_model = params["Sinks"]["clumping_model"]
-        self.mfp_model = params["Sinks"]["mfp_model"]
-        self.N = N
+    def __init__(self, sinks_params: SinksParameters, meshsize: int, boxsize: float):
+        self.clumping_model = sinks_params.clumping_model
+        self.mfp_model = sinks_params.mfp_model
+        self.N = meshsize
 
-        res = params["Grid"]["boxsize"] / self.N
+        res = boxsize / self.N
 
         # MFP parameters
         if self.mfp_model == "constant":
             # Set R_max (LLS 3) in cell units
-            self.R_mfp_cell_unit = params["Sinks"]["R_max_cMpc"] / res
+            self.R_mfp_cell_unit = sinks_params.R_max_cMpc / res
         elif self.mfp_model == "Worseck2014":
-            self.A_mfp = params["Sinks"]["A_mfp"]
-            self.etha_mfp = params["Sinks"]["eta_mfp"]
-            self.z1_mfp = params["Sinks"]["z1_mfp"]
-            self.eta1_mfp = params["Sinks"]["eta1_mfp"]
+            self.A_mfp = sinks_params.A_mfp
+            self.etha_mfp = sinks_params.eta_mfp
+            self.z1_mfp = sinks_params.z1_mfp
+            self.eta1_mfp = sinks_params.eta1_mfp
         else:
-            ValueError(" MFP model not implemented : %s" % self.mfp_model)
+            raise ValueError(" MFP model not implemented : %s" % self.mfp_model)
 
         # Clumping factor parameters
         if self.clumping_model == "constant":
             self.calculate_clumping = (
-                np.ones((N, N, N), dtype=np.float64) * params["Sinks"]["clumping"]
+                np.ones((self.N, self.N, self.N), dtype=np.float64)
+                * sinks_params.clumping
             )
         else:
             self.model_res = np.loadtxt(
@@ -54,7 +56,7 @@ class SinksPhysics:
             elif self.clumping_model == "stochastic":
                 self.calculate_clumping = self.stochastic_clumping
             else:
-                ValueError(
+                raise ValueError(
                     " Cluming factor model not implemented : %s" % self.clumping_model
                 )
 

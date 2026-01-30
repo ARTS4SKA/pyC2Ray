@@ -4,7 +4,9 @@ import h5py
 import numpy as np
 import tools21cm as t2c
 
-from .c2ray_base import YEAR, C2Ray, m_p, msun2g
+import pyc2ray.constants as c
+
+from .c2ray_base import C2Ray
 from .source_model import BurstySFR, EscapeFraction, StellarToHaloRelation
 from .utils import bin_sources
 from .utils.other_utils import (
@@ -15,8 +17,6 @@ from .utils.other_utils import (
 
 __all__ = ["C2Ray_fstar"]
 logger = logging.getLogger(__name__)
-
-# m_p = 1.672661e-24
 
 # ======================================================================
 # This file contains the C2Ray_CubeP3M subclass of C2Ray, which is a
@@ -82,8 +82,8 @@ class C2Ray_fstar(C2Ray):
             fstar = self.fstar_model.get(
                 Mhalo=srcmass_msun,
                 z=z,
-                a_s=self.fstar_pars["a_s"],
-                b_s=self.fstar_pars["b_s"],
+                a_s=self.sources_params.a_s,
+                b_s=self.sources_params.b_s,
             )
         else:
             fstar = self.fstar_model.get(Mhalo=srcmass_msun)
@@ -112,7 +112,7 @@ class C2Ray_fstar(C2Ray):
             fesc = self.fesc_model.get(Mhalo=srcmass_msun, z=z)
 
         # get for star formation history
-        if self.bursty_kind == "instant" or self.bursty_kind == "integrate":
+        if self.bursty_sfr == "instant" or self.bursty_sfr == "integrate":
             burst_mask = self.bursty_model.get_bursty(mass=srcmass_msun, z=z)
 
             nr_switchon = np.count_nonzero(burst_mask)
@@ -152,7 +152,9 @@ class C2Ray_fstar(C2Ray):
                 )
 
                 # normalize flux
-                normflux = msun2g * self.fstar_pars["Nion"] * sfr / (m_p * S_star_ref)
+                normflux = (
+                    c.msun2g * self.sources_params.Nion * sfr / (c.m_p * S_star_ref)
+                )
             else:
                 # get stellar mass
                 mstar_msun = fesc * fstar * srcmass_msun
@@ -167,10 +169,10 @@ class C2Ray_fstar(C2Ray):
 
                 # normalize flux
                 normflux = (
-                    msun2g
-                    * self.fstar_pars["Nion"]
+                    c.msun2g
+                    * self.sources_params.Nion
                     * srcmstar
-                    / (m_p * ts * S_star_ref)
+                    / (c.m_p * ts * S_star_ref)
                 )
 
             # calculate total number of ionizing photons
@@ -187,14 +189,14 @@ class C2Ray_fstar(C2Ray):
                 file,
                 np.sum(normflux * S_star_ref),
                 self.tot_phots,
-                ts / (1e6 * YEAR),
+                ts / (1e6 * c.year2s),
             )
             if "spice" in self.fstar_kind:
                 logger.info(
                     " min, max SFR (grid) : %.3e  %.3e [Msun/yr] and"
                     " min, mean, max number of ionising sources : %.3e  %.3e  %.3e [1/s]",
-                    sfr.min() / YEAR,
-                    sfr.max() / YEAR,
+                    sfr.min() / c.year2s,
+                    sfr.max() / c.year2s,
                     normflux.min() * S_star_ref,
                     normflux.mean() * S_star_ref,
                     normflux.max() * S_star_ref,
@@ -285,7 +287,7 @@ class C2Ray_fstar(C2Ray):
             self.cosmology.critical_density0.cgs.value
             * self.cosmology.Ob0
             * (1.0 + rdr.load_density_field(file))
-            / (self.mean_molecular * m_p)
+            / (self.mean_molecular * c.m_p)
             * (1 + z) ** 3
         )
         logger.info(
@@ -362,113 +364,117 @@ class C2Ray_fstar(C2Ray):
             )
 
             # TODO: implement heating
-            temp0 = self._ld["Material"]["temp0"]
-            self.temp = temp0 * np.ones(self.shape, order="F")
+            self.temp = np.full(self.shape, self.material_params.temp0, order="F")
         else:
-            xh0 = self._ld["Material"]["xh0"]
-            temp0 = self._ld["Material"]["temp0"]
-            avg_dens = self._ld["Material"]["avg_dens"]
+            super()._material_init()
 
-            self.ndens = avg_dens * np.empty(self.shape, order="F")
-            self.xh = xh0 * np.ones(self.shape, order="F")
-            self.temp = temp0 * np.ones(self.shape, order="F")
-            self.phi_ion = np.zeros(self.shape, order="F")
+    @property
+    def fstar_kind(self) -> str:
+        return self.sources_params.fstar_kind
+
+    @property
+    def acc_kind(self) -> str:
+        return self.sources_params.accretion_model
+
+    @property
+    def bursty_sfr(self) -> str:
+        return self.sources_params.bursty_sfr
+
+    @property
+    def fesc_kind(self) -> str:
+        return self.sources_params.fesc_model
 
     def _sources_init(self):
         """Initialize settings to read source files"""
         # --- Stellar-to-Halo Source model ---
-        self.fstar_kind = self._ld["Sources"]["fstar_kind"]
 
         # dictionary with all the f_star parameters
-        self.fstar_pars = {
-            "Nion": self._ld["Sources"]["Nion"],
-            "f0": self._ld["Sources"]["f0"],
-            "Mt": self._ld["Sources"]["Mt"],
-            "Mp": self._ld["Sources"]["Mp"],
-            "g1": self._ld["Sources"]["g1"],
-            "g2": self._ld["Sources"]["g2"],
-            "g3": self._ld["Sources"]["g3"],
-            "g4": self._ld["Sources"]["g4"],
-            "alpha_h": self._ld["Sources"]["alpha_h"],
-            "a_s": self._ld["Sources"]["a_s"],
-            "b_s": self._ld["Sources"]["b_s"],
+        fstar_pars = {
+            "Nion": self.sources_params.Nion,
+            "f0": self.sources_params.f0,
+            "Mt": self.sources_params.Mt,
+            "Mp": self.sources_params.Mp,
+            "g1": self.sources_params.g1,
+            "g2": self.sources_params.g2,
+            "g3": self.sources_params.g3,
+            "g4": self.sources_params.g4,
+            "alpha_h": self.sources_params.alpha_h,
+            "a_s": self.sources_params.a_s,
+            "b_s": self.sources_params.b_s,
         }
 
         # print message that inform of the f_star model employed
         if self.fstar_kind == "fgamma":
             logger.info(
-                f"Using constant stellar-to-halo relation model with f_star = {self.fstar_pars['f0']:.1f}, Nion = {self.fstar_pars['Nion']:.1f}"
+                f"Using constant stellar-to-halo relation model with f_star = {self.sources_params.f0:.1f}, "
+                f"Nion = {self.sources_params.Nion:.1f}"
             )
-        elif self.fstar_kind == "dpl" or self.fstar_kind == "lognorm":
+        elif self.fstar_kind in ("dpl", "lognorm"):
             logger.info(
-                f"Using {self.fstar_kind} to model the stellar-to-halo relation with parameters: {self.fstar_pars}."
+                f"Using {self.fstar_kind} to model the stellar-to-halo relation with parameters: {fstar_pars}."
             )
         elif self.fstar_kind == "Muv":
             logger.info(
-                f"Using {self.fstar_kind} to model the stellar-to-halo relation with scatter and average value with parameters: {self.fstar_pars}."
+                f"Using {self.fstar_kind} to model the stellar-to-halo relation with scatter "
+                "and average value with parameters: {fstar_pars}."
             )
         elif self.fstar_kind == "spice":
             logger.info(
-                f"Using {self.fstar_kind} to model the star formation rate with scatter (Basu+ 2025). We use a 'dpl' model to define the mean SFR."
+                f"Using {self.fstar_kind} to model the star formation rate with scatter (Basu+ 2025). "
+                "We use a 'dpl' model to define the mean SFR."
             )
 
         # define the f_star model class (to call self.fstar_model.get_fstar(Mhalo) when reading the sources)
         self.fstar_model = StellarToHaloRelation(
-            model=self.fstar_kind, pars=self.fstar_pars, cosmo=self.cosmology
+            model=self.fstar_kind, pars=fstar_pars, cosmo=self.cosmology
         )
 
         # --- Halo Accretion Model ---
         # TODO: Create class etc...
-        self.acc_kind = self._ld["Sources"]["accretion_model"]
         logger.info(f"Using {self.acc_kind} accretion to model.")
-        self.alph_h = self.fstar_pars["alpha_h"]
-
-        # --- Burstiness Model for Star Formation ---
-        self.bursty_kind = self._ld["Sources"]["bursty_sfr"]
 
         # dictionary with all the burstiness parameters
-        if self.bursty_kind == "instant" or self.bursty_kind == "integrate":
-            self.bursty_pars = {
-                "beta1": self._ld["Sources"]["beta1"],
-                "beta2": self._ld["Sources"]["beta2"],
-                "tB0": self._ld["Sources"]["tB0"],
-                "tQ_frac": self._ld["Sources"]["tQ_frac"],
-                "z0": self._ld["Sources"]["z0"],
+        if self.bursty_sfr == "instant" or self.bursty_sfr == "integrate":
+            bursty_pars = {
+                "beta1": self.sources_params.beta1,
+                "beta2": self.sources_params.beta2,
+                "tB0": self.sources_params.tB0,
+                "tQ_frac": self.sources_params.tQ_frac,
+                "z0": self.sources_params.z0,
             }
 
             logger.info(
-                f"Using {self.bursty_kind} bustiness to model the star formation history with parameters: {self.bursty_pars}."
+                f"Using {self.bursty_sfr} bustiness to model the star formation history with parameters: {bursty_pars}."
             )
 
             # define the burstiness SF model class
             self.bursty_model = BurstySFR(
-                model=self.bursty_kind,
-                pars=self.bursty_pars,
-                alpha_h=self.alph_h,
+                model=self.bursty_sfr,
+                pars=bursty_pars,
+                alpha_h=self.sources_params.alpha_h,
                 cosmo=self.cosmology,
             )
         else:
             logger.info("No bustiness model for the star formation history.")
 
         # --- Escaping fraction Model ---
-        self.fesc_kind = self._ld["Sources"]["fesc_model"]
-        self.fesc_pars = {
-            "f0_esc": self._ld["Sources"]["f0_esc"],
-            "Mp_esc": self._ld["Sources"]["Mp_esc"],
-            "al_esc": self._ld["Sources"]["al_esc"],
+        fesc_pars = {
+            "f0_esc": self.sources_params.f0_esc,
+            "Mp_esc": self.sources_params.Mp_esc,
+            "al_esc": self.sources_params.al_esc,
         }
         if self.fesc_kind == "constant":
             logger.info(
                 "Using constant escaping fraction model with f0_esc = %.1f",
-                self.fesc_pars["f0_esc"],
+                self.sources_params.f0_esc,
             )
         elif self.fesc_kind == "power":
             logger.info(
-                f"Using mass-dependent power law model for the escaping fraction with parameters: {self.fesc_pars}"
+                f"Using mass-dependent power law model for the escaping fraction with parameters: {fesc_pars}"
             )
         elif self.fesc_kind == "Gelli2024":
             logger.info(
-                f"Using UV magnitude-dependent power law model for the escaping fraction with parameters: {self.fesc_pars}"
+                f"Using UV magnitude-dependent power law model for the escaping fraction with parameters: {fesc_pars}"
             )
 
-        self.fesc_model = EscapeFraction(model=self.fesc_kind, pars=self.fesc_pars)
+        self.fesc_model = EscapeFraction(model=self.fesc_kind, pars=fesc_pars)

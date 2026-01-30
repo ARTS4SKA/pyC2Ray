@@ -192,7 +192,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
         # (1): Raytracing Step
         # --------------------
         trt0 = time.time()
-        with disable_newline(logger):
+        with disable_newline():
             logger.info("Doing Raytracing...")
         # Set rates to 0. When using ASORA, this is done internally by the library (directly on the GPU)
         if not use_gpu:
@@ -257,7 +257,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
         # (2): ODE Solving Step
         # ---------------------
         tch0 = time.time()
-        with disable_newline(logger):
+        with disable_newline():
             logger.info("Doing Chemistry...")
         # Apply the global rates to compute the updated ionization fraction
         conv_flag = libc2ray.chemistry.global_pass(
@@ -500,7 +500,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
         # (1): Raytracing Step
         # --------------------
         trt0 = time.time()
-        with disable_newline(logger):
+        with disable_newline():
             logger.info(f"Doing Raytracing (rank={rank:n})...")
         # Set rates to 0. When using ASORA, this is done internally by the library (directly on the GPU)
         if not use_gpu:
@@ -574,7 +574,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             # (2): ODE Solving Step
             # ---------------------
             tch0 = time.time()
-            with disable_newline(logger):
+            with disable_newline():
                 logger.info("Doing Chemistry...")
 
             # Apply the global rates to compute the updated ionization fraction

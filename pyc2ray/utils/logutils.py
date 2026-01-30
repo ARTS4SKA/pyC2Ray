@@ -56,6 +56,8 @@ def configure_logger(
                 "To allow reconfiguration, set allow_reconfigure=True.",
             )
             return
+        for hand in module_logger.handlers:
+            hand.close()
         module_logger.handlers.clear()
 
     lev0 = logging.INFO if not verbose else logging.DEBUG

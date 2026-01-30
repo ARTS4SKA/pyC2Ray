@@ -3,11 +3,11 @@ import logging
 import h5py
 import numpy as np
 import tools21cm as t2c
-from astropy import constants as c
 from astropy import units as u
 
-from .c2ray_base import C2Ray, msun2g
-from .utils.logutils import configure_logger
+import pyc2ray.constants as c
+
+from .c2ray_base import C2Ray
 from .utils.other_utils import find_bins, get_redshifts_from_output
 
 __all__ = ["C2Ray_CubeP3M"]
@@ -75,10 +75,10 @@ class C2Ray_CubeP3M(C2Ray):
 
         # TODO: automatic selection of low mass or high mass. For the moment only high mass
         mass2phot = (
-            msun2g
+            c.msun2g
             * self.fgamma_hm
             * self.cosmology.Ob0
-            / (self.mean_molecular * c.m_p.cgs.value * self.ts * self.cosmology.Om0)
+            / (self.mean_molecular * c.m_p * self.ts * self.cosmology.Om0)
         )
 
         if file.endswith(".hdf5"):
@@ -143,7 +143,7 @@ class C2Ray_CubeP3M(C2Ray):
             file = "%scoarser_densities/%.3fn_all.dat" % (self.inputs_basename, high_z)
             self.ndens = (
                 t2c.DensityFile(filename=file).cgs_density
-                / (self.mean_molecular * c.m_p.cgs.value)
+                / (self.mean_molecular * c.m_p)
                 * (1 + redshift) ** 3
             )
             self.prev_zdens = high_z
@@ -238,7 +238,7 @@ class C2Ray_CubeP3M(C2Ray):
                     filename="%scoarser_densities/%.3fn_all.dat"
                     % (self.inputs_basename, self.prev_zdens)
                 ).cgs_density
-                / (self.mean_molecular * c.m_p.cgs.value)
+                / (self.mean_molecular * c.m_p)
                 * (1 + self.zred) ** 3
             )
             # self.ndens = self.read_density(z=self.zred)
@@ -248,59 +248,23 @@ class C2Ray_CubeP3M(C2Ray):
                 order="F",
             )
             # TODO: implement heating
-            temp0 = self._ld["Material"]["temp0"]
-            self.temp = temp0 * np.ones(self.shape, order="F")
+            self.temp = np.full(self.shape, self.material_params.temp0, order="F")
             self.phi_ion = t2c.read_cbin(
                 filename="%sIonRates_%.3f.dat" % (self.results_basename, self.zred),
                 bits=32,
                 order="F",
             )
         else:
-            xh0 = self._ld["Material"]["xh0"]
-            temp0 = self._ld["Material"]["temp0"]
-            avg_dens = self._ld["Material"]["avg_dens"]
+            super()._material_init()
 
-            self.ndens = avg_dens * np.empty(self.shape, order="F")
-            self.xh = xh0 * np.ones(self.shape, order="F")
-            self.temp = temp0 * np.ones(self.shape, order="F")
-            self.phi_ion = np.zeros(self.shape, order="F")
+    @property
+    def fgamma_hm(self) -> float:
+        return self.sources_params.fgamma_hm
 
-    def _output_init(self):
-        """Set up output & log file"""
-        self.results_basename = self._ld["Output"]["results_basename"]
-        self.inputs_basename = self._ld["Output"]["inputs_basename"]
+    @property
+    def fgamma_lm(self) -> float:
+        return self.sources_params.fgamma_lm
 
-        self.logfile = self.results_basename + self._ld["Output"]["logfile"]
-        title = r"""
-                 _________   ____
-    ____  __  __/ ____/__ \ / __ \____ ___  __
-   / __ \/ / / / /    __/ // /_/ / __ `/ / / /
-  / /_/ / /_/ / /___ / __// _, _/ /_/ / /_/ /
- / .___/\__, /\____//____/_/ |_|\__,_/\__, /
-/_/    /____/                        /____/
-"""
-        if self._ld["Grid"]["resume"]:
-            with open(self.logfile, "r") as f:
-                log = f.readlines()
-            with open(self.logfile, "w") as f:
-                log.append("\n\nResuming" + title[8:] + "\n\n")
-                f.write("".join(log))
-        else:
-            with open(self.logfile, "w") as f:
-                # Clear file and write header line
-                f.write(title + "\nLog file for pyC2Ray.\n\n")
-        configure_logger(self.logfile)
-
-    def _sources_init(self):
-        """Initialize settings to read source files"""
-        self.fgamma_hm = self._ld["Sources"]["fgamma_hm"]
-        self.fgamma_lm = self._ld["Sources"]["fgamma_lm"]
-        self.ts = (self._ld["Sources"]["ts"] * u.Myr).cgs.value
-
-    def _grid_init(self):
-        """Set up grid properties"""
-        super()._grid_init()
-
-        # TODO: introduce an error due to the fact that we do not use 1/h
-        # t2c.set_sim_constants(boxsize_cMpc=self._ld['Grid']['boxsize'])
-        self.resume = self._ld["Grid"]["resume"]
+    @property
+    def ts(self) -> float:
+        return (self.sources_params.ts * u.Myr).cgs.value
