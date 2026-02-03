@@ -1,3 +1,5 @@
+import logging
+
 import h5py
 import numpy as np
 import tools21cm as t2c
@@ -12,6 +14,7 @@ from .utils.other_utils import (
 )
 
 __all__ = ["C2Ray_fstar"]
+logger = logging.getLogger(__name__)
 
 # m_p = 1.672661e-24
 
@@ -36,7 +39,7 @@ class C2Ray_fstar(C2Ray):
 
         """
         super().__init__(paramfile)
-        self.printlog('Running: "C2Ray for %d Mpc/h volume"' % self.boxsize)
+        logger.info('Running: "C2Ray for %d Mpc/h volume"', self.boxsize)
 
     # =====================================================================================================
     # USER DEFINED METHODS
@@ -115,9 +118,11 @@ class C2Ray_fstar(C2Ray):
             nr_switchon = np.count_nonzero(burst_mask)
             self.perc_switchon = 100 * nr_switchon / burst_mask.size
 
-            self.printlog(
-                " A total of %.2f %% of galaxies (%d out of %d) have bursty star-formation."
-                % (self.perc_switchon, nr_switchon, burst_mask.size)
+            logger.info(
+                " A total of %.2f %% of galaxies (%d out of %d) have bursty star-formation.",
+                self.perc_switchon,
+                nr_switchon,
+                burst_mask.size,
             )
 
             # mask the sources that are switched off
@@ -171,44 +176,51 @@ class C2Ray_fstar(C2Ray):
             # calculate total number of ionizing photons
             self.tot_phots = np.sum(normflux * dt * S_star_ref)
 
-            self.printlog(
-                "\n---- Reading source file with total of %d ionizing source:\n%s"
-                % (normflux.size, file)
+            logger.info(
+                """
+---- Reading source file with total of %d ionizing source:
+%s
+ Total Flux : %e [1/s]
+ Total number of ionizing photons : %e
+ Source lifetime : %f Myr""",
+                normflux.size,
+                file,
+                np.sum(normflux * S_star_ref),
+                self.tot_phots,
+                ts / (1e6 * YEAR),
             )
-            self.printlog(" Total Flux : %e [1/s]" % np.sum(normflux * S_star_ref))
-            self.printlog(" Total number of ionizaing photons : %e" % self.tot_phots)
-            self.printlog(" Source lifetime : %f Myr" % (ts / (1e6 * YEAR)))
             if "spice" in self.fstar_kind:
-                self.printlog(
-                    " min, max SFR (grid) : %.3e  %.3e [Msun/yr] and min, mean, max number of ionising sources : %.3e  %.3e  %.3e [1/s]"
-                    % (
-                        sfr.min() / YEAR,
-                        sfr.max() / YEAR,
-                        normflux.min() * S_star_ref,
-                        normflux.mean() * S_star_ref,
-                        normflux.max() * S_star_ref,
-                    )
+                logger.info(
+                    " min, max SFR (grid) : %.3e  %.3e [Msun/yr] and"
+                    " min, mean, max number of ionising sources : %.3e  %.3e  %.3e [1/s]",
+                    sfr.min() / YEAR,
+                    sfr.max() / YEAR,
+                    normflux.min() * S_star_ref,
+                    normflux.mean() * S_star_ref,
+                    normflux.max() * S_star_ref,
                 )
             else:
-                self.printlog(
-                    " min, max stellar (grid) mass : %.3e  %.3e [Msun] and min, mean, max number of ionising sources : %.3e  %.3e  %.3e [1/s]"
-                    % (
-                        srcmstar.min(),
-                        srcmstar.max(),
-                        normflux.min() * S_star_ref,
-                        normflux.mean() * S_star_ref,
-                        normflux.max() * S_star_ref,
-                    )
+                logger.info(
+                    " min, max stellar (grid) mass : %.3e  %.3e [Msun] and"
+                    " min, mean, max number of ionising sources : %.3e  %.3e  %.3e [1/s]",
+                    srcmstar.min(),
+                    srcmstar.max(),
+                    normflux.min() * S_star_ref,
+                    normflux.mean() * S_star_ref,
+                    normflux.max() * S_star_ref,
                 )
 
             return srcpos, normflux
 
         else:
-            self.printlog(
-                "\n---- Reading source file with total of %d ionizing source:\n%s"
-                % (srcmass_msun.size, file)
+            logger.info(
+                """
+---- Reading source file with total of %d ionizing source:
+%s
+ No sources switch on. Skip computing the raytracing.""",
+                srcmass_msun.size,
+                file,
             )
-            self.printlog(" No sources switch on. Skip computing the raytracing.")
 
             self.tot_phots = 0
             return 0, 0
@@ -276,10 +288,15 @@ class C2Ray_fstar(C2Ray):
             / (self.mean_molecular * m_p)
             * (1 + z) ** 3
         )
-        self.printlog("\n---- Reading density file:\n  %s" % file)
-        self.printlog(
-            " min, mean and max density : %.3e  %.3e  %.3e [1/cm3]"
-            % (self.ndens.min(), self.ndens.mean(), self.ndens.max())
+        logger.info(
+            """
+---- Reading density file:
+  %s
+ min, mean and max density : %.3e  %.3e  %.3e [1/cm3]""",
+            file,
+            self.ndens.min(),
+            self.ndens.mean(),
+            self.ndens.max(),
         )
 
     # =====================================================================================================
@@ -333,10 +350,15 @@ class C2Ray_fstar(C2Ray):
                     % (self.results_basename, self.zred)
                 )
 
-            self.printlog("\n---- Reading ionized fraction field:\n %s" % fname)
-            self.printlog(
-                " min, mean and max density : %.5e  %.5e  %.5e"
-                % (self.xh.min(), self.xh.mean(), self.xh.max())
+            logger.info(
+                """
+---- Reading ionized fraction field:
+%s
+ min, mean and max density : %.5e  %.5e  %.5e""",
+                fname,
+                self.xh.min(),
+                self.xh.mean(),
+                self.xh.max(),
             )
 
             # TODO: implement heating
@@ -374,19 +396,19 @@ class C2Ray_fstar(C2Ray):
 
         # print message that inform of the f_star model employed
         if self.fstar_kind == "fgamma":
-            self.printlog(
+            logger.info(
                 f"Using constant stellar-to-halo relation model with f_star = {self.fstar_pars['f0']:.1f}, Nion = {self.fstar_pars['Nion']:.1f}"
             )
         elif self.fstar_kind == "dpl" or self.fstar_kind == "lognorm":
-            self.printlog(
+            logger.info(
                 f"Using {self.fstar_kind} to model the stellar-to-halo relation with parameters: {self.fstar_pars}."
             )
         elif self.fstar_kind == "Muv":
-            self.printlog(
+            logger.info(
                 f"Using {self.fstar_kind} to model the stellar-to-halo relation with scatter and average value with parameters: {self.fstar_pars}."
             )
         elif self.fstar_kind == "spice":
-            self.printlog(
+            logger.info(
                 f"Using {self.fstar_kind} to model the star formation rate with scatter (Basu+ 2025). We use a 'dpl' model to define the mean SFR."
             )
 
@@ -398,7 +420,7 @@ class C2Ray_fstar(C2Ray):
         # --- Halo Accretion Model ---
         # TODO: Create class etc...
         self.acc_kind = self._ld["Sources"]["accretion_model"]
-        self.printlog(f"Using {self.acc_kind} accretion to model.")
+        logger.info(f"Using {self.acc_kind} accretion to model.")
         self.alph_h = self.fstar_pars["alpha_h"]
 
         # --- Burstiness Model for Star Formation ---
@@ -414,7 +436,7 @@ class C2Ray_fstar(C2Ray):
                 "z0": self._ld["Sources"]["z0"],
             }
 
-            self.printlog(
+            logger.info(
                 f"Using {self.bursty_kind} bustiness to model the star formation history with parameters: {self.bursty_pars}."
             )
 
@@ -426,7 +448,7 @@ class C2Ray_fstar(C2Ray):
                 cosmo=self.cosmology,
             )
         else:
-            self.printlog("No bustiness model for the star formation history.")
+            logger.info("No bustiness model for the star formation history.")
 
         # --- Escaping fraction Model ---
         self.fesc_kind = self._ld["Sources"]["fesc_model"]
@@ -436,16 +458,16 @@ class C2Ray_fstar(C2Ray):
             "al_esc": self._ld["Sources"]["al_esc"],
         }
         if self.fesc_kind == "constant":
-            self.printlog(
-                "Using constant escaping fraction model with f0_esc = %.1f"
-                % (self.fesc_pars["f0_esc"])
+            logger.info(
+                "Using constant escaping fraction model with f0_esc = %.1f",
+                self.fesc_pars["f0_esc"],
             )
         elif self.fesc_kind == "power":
-            self.printlog(
+            logger.info(
                 f"Using mass-dependent power law model for the escaping fraction with parameters: {self.fesc_pars}"
             )
         elif self.fesc_kind == "Gelli2024":
-            self.printlog(
+            logger.info(
                 f"Using UV magnitude-dependent power law model for the escaping fraction with parameters: {self.fesc_pars}"
             )
 

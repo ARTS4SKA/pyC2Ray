@@ -1,12 +1,15 @@
+import logging
 import os
 import pickle as pkl
 
 import numpy as np
 
 from .c2ray_base import YEAR, C2Ray
+from .utils.logutils import configure_logger
 from .utils.sourceutils import read_test_sources
 
 __all__ = ["C2Ray_Test"]
+logger = logging.getLogger(__name__)
 
 # ======================================================================
 # This file contains the C2Ray_Test subclass of C2Ray, which is a
@@ -30,7 +33,7 @@ class C2Ray_Test(C2Ray):
         """
         super().__init__(paramfile)
         if self.rank == 0:
-            self.printlog('Running: "C2Ray Test"')
+            logger.info('Running: "C2Ray Test"')
 
     def read_sources(self, file, numsrc, S_star_ref=1e48):
         """Read in a source file formatted for Test-C2Ray
@@ -183,6 +186,8 @@ class C2Ray_Test(C2Ray):
             os.mkdir(self.results_basename)
 
         self.logfile = self.results_basename + self._ld["Output"]["logfile"]
+        configure_logger(self.logfile)
+
         title = r"""
                  _________   ____            
     ____  __  __/ ____/__ \ / __ \____ ___  __
@@ -192,6 +197,4 @@ class C2Ray_Test(C2Ray):
 /_/    /____/                        /____/
 """
         if self.rank == 0:
-            with open(self.logfile, "w") as f:
-                f.write("\nLog file for pyC2Ray \n\n")
-            self.printlog(title)
+            logger.info("\nLog file for pyC2Ray \n\n" + title)

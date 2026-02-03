@@ -1,4 +1,5 @@
 import array
+import logging
 import time
 
 import numpy as np
@@ -7,7 +8,8 @@ from mpi4py import MPI
 
 from .asora_core import cuda_is_init
 from .load_extensions import load_asora, load_c2ray
-from .utils import display_time, printlog
+from .utils import display_time
+from .utils.logutils import disable_newline
 from .utils.sourceutils import format_sources
 
 # Load extension modules
@@ -15,6 +17,8 @@ libc2ray = load_c2ray()
 libasora = load_asora()
 
 __all__ = ["evolve3D"]
+
+logger = logging.getLogger(__name__)
 
 # =========================================================================
 # This file contains the main time-evolution subroutine, which updates
@@ -70,8 +74,6 @@ def evolve3D(
     colh0: float,
     temph0: float,
     abu_c: float,
-    logfile: str = "pyC2Ray.log",
-    quiet: bool = False,
 ) -> tuple[npt.NDArray, npt.NDArray]:
     """Evolves the ionization fraction over one timestep for the whole grid
 
@@ -127,10 +129,6 @@ def evolve3D(
         Hydrogen ionization energy expressed in K
     abu_c : float
         Carbon abundance
-    logfile : str
-        Name of the file to append logs to. Default: pyC2Ray.log
-    quiet : bool
-        Don't write logs to stdout. Default is false
 
     Returns
     -------
@@ -189,7 +187,7 @@ def evolve3D(
             srcpos_flat, normflux_flat = format_sources(
                 src_pos[:, i_start:i_end], src_flux[i_start:i_end]
             )
-            printlog(f"...rank={rank:n} has {NumSrc:n} sources.", logfile, quiet)
+            logger.info(f"...rank={rank:n} has {NumSrc:n} sources.")
         else:
             srcpos_flat, normflux_flat = format_sources(src_pos, src_flux)
 
@@ -203,33 +201,21 @@ def evolve3D(
         # Copy density field to GPU once at the beginning of timestep (!! do_all_sources assumes this !!)
         libasora.density_to_device(ndens_flat)
         if use_mpi:
-            printlog("Copied source data to device.", logfile, quiet)
+            logger.info("Copied source data to device.")
         else:
-            printlog("Rank %d copied source data to device." % rank, logfile, quiet)
+            logger.info(f"Rank {rank} copied source data to device.")
 
     # -----------------------------------------------------------
     # Start Evolve step, Iterate until convergence in <x> and <y>
     # -----------------------------------------------------------
     if rank == 0:
-        printlog("Calling evolve3D...", logfile, quiet)
-        printlog(f"dr [Mpc]: {dr / 3.086e24:.3e}", logfile, quiet)
-        printlog(f"dt [years]: {dt / 3.15576e07:.3e}", logfile, quiet)
-        printlog(
-            f"Running on {NumSrc:n} source(s), total normalized ionizing flux: {src_flux.sum():.2e}",
-            logfile,
-            quiet,
-        )
-        printlog(
-            f"Mean density (cgs): {ndens.mean():.3e}, Mean ionized fraction: {xh.mean():.3e}",
-            logfile,
-            quiet,
-        )
-        printlog(
-            f"Convergence Criterion (Number of points): {conv_criterion: n}",
-            logfile,
-            quiet,
-            end="\n\n",
-        )
+        logger.info(f"""Calling evolve3D...
+dr [Mpc]: {dr / 3.086e24:.3e}
+dt [years]: {dt / 3.15576e07:.3e}
+Running on {NumSrc:n} source(s), total normalized ionizing flux: {src_flux.sum():.2e}
+Mean density (cgs): {ndens.mean():.3e}, Mean ionized fraction: {xh.mean():.3e}
+Convergence Criterion (Number of points): {conv_criterion: n}
+""")
         n_count = 0
 
     while not converged:
@@ -239,10 +225,11 @@ def evolve3D(
         # (1): Raytracing Step
         # --------------------
         trt0 = time.time()
-        if use_mpi:
-            printlog("Doing Raytracing...", logfile, quiet, " ")
-        else:
-            printlog("Rank=%d is doing Raytracing..." % rank, logfile, quiet, " ")
+        with disable_newline():
+            if use_mpi:
+                logger.info("Doing Raytracing...")
+            else:
+                logger.info(f"Rank={rank} is doing Raytracing...")
 
         # Do the raytracing part for each source. This computes the cumulative ionization rate for each cell.
         if use_gpu:
@@ -292,18 +279,16 @@ def evolve3D(
 
         trt1 = time.time() - trt0
         if use_mpi:
-            printlog("rank=%d took %s." % (rank, display_time(trt1)), logfile, quiet)
+            logger.info(f"  rank={rank} took {display_time(trt1)}.")
         else:
-            printlog("took %s." % display_time(trt1), logfile, quiet)
+            logger.info(f"  took {display_time(trt1)}")
 
         # Since chemistry (ODE solving) is done on the CPU in Fortran, flattened CUDA arrays need to be reshaped
         if use_gpu:
             phi_ion = np.reshape(phi_ion_flat, (N, N, N))
         else:
-            printlog(
-                f"Average number of subboxes: {nsubbox / NumSrc:n}, Total photon loss: {photonloss:.3e}",
-                logfile,
-                quiet,
+            logger.info(
+                f"Average number of subboxes: {nsubbox / NumSrc:n}, Total photon loss: {photonloss:.3e}"
             )
 
         if use_mpi:
@@ -321,7 +306,8 @@ def evolve3D(
             # (2): ODE Solving Step
             # ---------------------
             tch0 = time.time()
-            printlog("Doing Chemistry...", logfile, quiet, " ")
+            with disable_newline():
+                logger.info("Doing Chemistry...")
             # Apply the global rates to compute the updated ionization fraction
             conv_flag = libc2ray.chemistry.global_pass(
                 dt,
@@ -342,7 +328,7 @@ def evolve3D(
             # TODO: the line blow is the same function but completely in python (much slower then the fortran version, due to a lot of loops)
             # xh_intermed, xh_av, conv_flag = global_pass(dt, ndens, temp, xh, xh_av, xh_intermed, phi_ion, clump, bh00, albpow, colh0, temph0, abu_c)
 
-            printlog(f"took {(time.time() - tch0): .1f} s.", logfile, quiet)
+            logger.info(f"  took {(time.time() - tch0): .1f} s.")
 
             # ----------------------------
             # (3): Test Global Convergence
@@ -361,10 +347,9 @@ def evolve3D(
                 rel_change_xh0 = 1.0
 
             # Display convergence
-            printlog(
-                f"Number of non-converged points: {conv_flag} of {NumCells} ({conv_flag / NumCells * 100: .3f} % ), Relative change in ionfrac: {rel_change_xh1: .2e}",
-                logfile,
-                quiet,
+            logger.info(
+                f"Number of non-converged points: {conv_flag} of {NumCells} ({conv_flag / NumCells * 100: .3f} % ), "
+                f"Relative change in ionfrac: {rel_change_xh1: .2e}",
             )
 
             converged = (conv_flag < conv_criterion) or (
@@ -401,11 +386,8 @@ def evolve3D(
             pass
     if rank == 0:
         # When converged, return the updated ionization fractions at the end of the timestep
-        printlog(
-            "Multiple source convergence reached after %d ray-tracing iterations."
-            % n_count,
-            logfile,
-            quiet,
+        logger.info(
+            f"Multiple source convergence reached after {n_count} ray-tracing iterations."
         )
         xh_new = xh_intermed
 

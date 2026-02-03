@@ -1,3 +1,5 @@
+import logging
+
 import h5py
 import numpy as np
 import tools21cm as t2c
@@ -5,9 +7,12 @@ from astropy import constants as c
 from astropy import units as u
 
 from .c2ray_base import C2Ray, msun2g
+from .utils.logutils import configure_logger
 from .utils.other_utils import find_bins, get_redshifts_from_output
 
 __all__ = ["C2Ray_CubeP3M"]
+
+logger = logging.getLogger(__name__)
 
 # ======================================================================
 # This file contains the C2Ray_CubeP3M subclass of C2Ray, which is a
@@ -29,7 +34,7 @@ class C2Ray_CubeP3M(C2Ray):
             Whether to use the GPU-accelerated ASORA library for raytracing
         """
         super().__init__(paramfile, Nmesh, use_gpu)
-        self.printlog('Running: "C2Ray CubeP3M"')
+        logger.info('Running: "C2Ray CubeP3M"')
 
     def read_sources(self, file, mass="hm"):
         """Read sources from a C2Ray-formatted file
@@ -88,19 +93,18 @@ class C2Ray_CubeP3M(C2Ray):
             srcpos = src.sources_list[:, :3].T
             normflux = src.sources_list[:, -1] * mass2phot / S_star_ref
 
-        self.printlog(
-            "\n---- Reading source file with total of %d ionizing source:\n%s"
-            % (normflux.size, file)
-        )
-        self.printlog(
-            " min, max source mass : %.3e  %.3e [Msun] and min, mean, max number of ionising sources : %.3e  %.3e  %.3e [1/s]"
-            % (
-                normflux.min() / mass2phot * S_star_ref,
-                normflux.max() / mass2phot * S_star_ref,
-                normflux.min() * S_star_ref,
-                normflux.mean() * S_star_ref,
-                normflux.max() * S_star_ref,
-            )
+        logger.info(
+            """
+---- Reading source file with total of %d ionizing source:
+%s
+ min, max source mass : %.3e  %.3e [Msun] and min, mean, max number of ionising sources : %.3e  %.3e  %.3e [1/s]""",
+            normflux.size,
+            file,
+            normflux.min() / mass2phot * S_star_ref,
+            normflux.max() / mass2phot * S_star_ref,
+            normflux.min() * S_star_ref,
+            normflux.mean() * S_star_ref,
+            normflux.max() * S_star_ref,
         )
         return srcpos, normflux
 
@@ -137,17 +141,23 @@ class C2Ray_CubeP3M(C2Ray):
 
         if high_z != self.prev_zdens:
             file = "%scoarser_densities/%.3fn_all.dat" % (self.inputs_basename, high_z)
-            self.printlog("\n---- Reading density file:\n " + file)
             self.ndens = (
                 t2c.DensityFile(filename=file).cgs_density
                 / (self.mean_molecular * c.m_p.cgs.value)
                 * (1 + redshift) ** 3
             )
-            self.printlog(
-                " min, mean and max density : %.3e  %.3e  %.3e [1/cm3]"
-                % (self.ndens.min(), self.ndens.mean(), self.ndens.max())
-            )
             self.prev_zdens = high_z
+
+            logger.info(
+                """
+---- Reading density file:
+%s
+ min, mean and max density : %.3e  %.3e  %.3e [1/cm3]""",
+                file,
+                self.ndens.min(),
+                self.ndens.mean(),
+                self.ndens.max(),
+            )
         else:
             # no need to re-read the same file again
             # TODO: in the future use this values for a 3D interpolation for the density (can be extended to sources too)
@@ -175,18 +185,21 @@ class C2Ray_CubeP3M(C2Ray):
             order="F",
         )
 
-        self.printlog("\n--- Reionization History ----")
-        self.printlog(
-            " min, mean, max xHII : %.3e  %.3e  %.3e"
-            % (self.xh.min(), self.xh.mean(), self.xh.max())
-        )
-        self.printlog(
-            " min, mean, max Irate : %.3e  %.3e  %.3e [1/s]"
-            % (self.phi_ion.min(), self.phi_ion.mean(), self.phi_ion.max())
-        )
-        self.printlog(
-            " min, mean, max density : %.3e  %.3e  %.3e [1/cm3]"
-            % (self.ndens.min(), self.ndens.mean(), self.ndens.max())
+        logger.info(
+            """
+--- Reionization History ----
+ min, mean, max xHII : %.3e  %.3e  %.3e
+ min, mean, max Irate : %.3e  %.3e  %.3e [1/s]
+ min, mean, max density : %.3e  %.3e  %.3e [1/cm3]""",
+            self.xh.min(),
+            self.xh.mean(),
+            self.xh.max(),
+            self.phi_ion.min(),
+            self.phi_ion.mean(),
+            self.phi_ion.max(),
+            self.ndens.min(),
+            self.ndens.mean(),
+            self.ndens.max(),
         )
 
     # =====================================================================================================
@@ -276,6 +289,7 @@ class C2Ray_CubeP3M(C2Ray):
             with open(self.logfile, "w") as f:
                 # Clear file and write header line
                 f.write(title + "\nLog file for pyC2Ray.\n\n")
+        configure_logger(self.logfile)
 
     def _sources_init(self):
         """Initialize settings to read source files"""

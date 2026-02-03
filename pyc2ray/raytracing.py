@@ -1,10 +1,11 @@
+import logging
 import time
 
 import numpy as np
 
 from .asora_core import cuda_is_init
 from .load_extensions import load_asora, load_c2ray
-from .utils import printlog
+from .utils.logutils import disable_newline
 from .utils.sourceutils import format_sources
 
 # Load extension modules
@@ -12,6 +13,8 @@ libc2ray = load_c2ray()
 libasora = load_asora()
 
 __all__ = ["do_raytracing"]
+
+logger = logging.getLogger(__name__)
 
 # =========================================================================
 # This file contains the standalone raytracing subroutine, which may be
@@ -51,8 +54,6 @@ def do_raytracing(
     dlogtau,
     R_max_LLS,
     sig,
-    logfile="pyC2Ray.log",
-    quiet=False,
     stats=False,
 ):
     # Allow a call with GPU only if 1. the asora library is present and 2. the GPU memory has been allocated using device_init()
@@ -83,22 +84,15 @@ def do_raytracing(
 
         # Copy density field to GPU once at the beginning of timestep (!! do_all_sources assumes this !!)
         libasora.density_to_device(ndens_flat, N)
-        printlog("Copied source data to device.", logfile, quiet)
+        logger.info("Copied source data to device.")
 
-    printlog(f"dr [Mpc]: {dr / 3.086e24:.3e}", logfile, quiet)
-    printlog(
-        f"Running on {NumSrc:n} source(s), total normalized ionizing flux: {src_flux.sum():.2e}",
-        logfile,
-        quiet,
-    )
-    printlog(
-        f"Mean density (cgs): {ndens.mean():.3e}, Mean ionized fraction: {xh_av.mean():.3e}",
-        logfile,
-        quiet,
-    )
+    logger.info(f"""dr [Mpc]: {dr / 3.086e24:.3e}
+Running on {NumSrc:n} source(s), total normalized ionizing flux: {src_flux.sum():.2e}
+Mean density (cgs): {ndens.mean():.3e}, Mean ionized fraction: {xh_av.mean():.3e}""")
 
     trt0 = time.time()
-    printlog("Doing Raytracing...", logfile, quiet, " ")
+    with disable_newline():
+        logger.info("Doing Raytracing...")
     # Set rates to 0. When using ASORA, this is done internally by the library (directly on the GPU)
     if not use_gpu:
         phi_ion = np.zeros((N, N, N), order="F")
@@ -145,16 +139,14 @@ def do_raytracing(
             dlogtau,
             R_max_LLS,
         )
-    printlog(f"took {(time.time() - trt0): .1f} s.", logfile, quiet)
+    logger.info(f"  took {(time.time() - trt0): .1f} s.")
 
     # Since chemistry (ODE solving) is done on the CPU in Fortran, flattened CUDA arrays need to be reshaped
     if use_gpu:
         phi_ion = np.reshape(phi_ion_flat, (N, N, N))
     else:
-        printlog(
-            f"Average number of subboxes: {nsubbox / NumSrc:n}, Total photon loss: {photonloss:.3e}",
-            logfile,
-            quiet,
+        logger.info(
+            f"Average number of subboxes: {nsubbox / NumSrc:n}, Total photon loss: {photonloss:.3e}"
         )
 
     if stats and not use_gpu:

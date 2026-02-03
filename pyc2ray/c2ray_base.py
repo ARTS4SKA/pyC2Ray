@@ -1,4 +1,5 @@
 import atexit
+import logging
 import os
 import re
 
@@ -20,7 +21,10 @@ from .evolve import evolve3D
 from .radiation import BlackBodySource, YggdrasilModel, make_tau_table
 from .raytracing import do_raytracing
 from .sinks_model import SinksPhysics
-from .utils.logutils import printlog
+from .utils.logutils import configure_logger
+
+logger = logging.getLogger(__name__)
+
 
 # ======================================================================
 # This file defines the abstract C2Ray object class, which is the basis
@@ -149,22 +153,26 @@ class C2Ray:
         self._sources_init()
         self._radiation_init()
         self._sinks_init()
+
         if self.gpu:
-            # self.printlog('\tNode name: %s\n\ttask_id: %d\n\tlocal task id: %d\n\tgpu_ids: %s\n\ttot gpu job: %s\n\ttot gpu on node: %d' %(node_name, task_id, local_task_id, gpu_ids, tot_gpus, nr_gpus))
+            # logger.info(
+            #     "\tNode name: %s\n\ttask_id: %d\n\tlocal task id: %d\n\tgpu_ids: %s\n"
+            #     "\ttot gpu job: %s\n\ttot gpu on node: %d",
+            #     node_name, task_id, local_task_id, gpu_ids, tot_gpus, nr_gpus,
+            # )
             # Print maximum shell size for info, based on LLS (qmax is s.t. Rmax fits inside of it)
             q_max = np.ceil(np.sqrt(3) * min(self.R_max_LLS, np.sqrt(3) * self.N / 2))
-            self.printlog("Using ASORA Raytracing ( q_max = %d )" % q_max)
+            logger.info(f"Using ASORA Raytracing (q_max = {q_max})")
         else:
             # Print info about subbox algorithm
-            self.printlog(
-                "Using CPU Raytracing (subboxsize = %d, max_subbox = %d)"
-                % (self.subboxsize, self.max_subbox)
+            logger.info(
+                f"Using CPU Raytracing (subboxsize = {self.subboxsize}, max_subbox = {self.max_subbox})"
             )
         if self.mpi:
-            self.printlog("Using %d MPI Ranks" % self.nprocs)
+            logger.info(f"Using {self.nprocs} MPI Ranks")
         else:
-            self.printlog("Running in non-MPI (single-GPU/CPU) mode")
-        self.printlog("Starting simulation... \n\n")
+            logger.info("Running in non-MPI (single-GPU/CPU) mode")
+        logger.info("Starting simulation... \n\n")
 
     # =====================================================================================================
     # TIME-EVOLUTION METHODS
@@ -209,7 +217,7 @@ class C2Ray:
             # Set cell size to current proper size
             # self.dr = self.dr_c * self.cosmology.scale_factor(z_half)
             self.dr /= dilution_factor
-            # self.printlog(f"zfactor = {1.0 / dilution_factor: .10f}")
+            # logger.info(f"zfactor = {1.0 / dilution_factor: .10f}")
         # Set new time and redshift (after timestep)
         self.zred = z_now
 
@@ -273,8 +281,6 @@ class C2Ray:
             colh0=self.colh0,
             temph0=self.temph0,
             abu_c=self.abu_c,
-            logfile=self.logfile,
-            quiet=False,
         )
 
     def cosmo_evolve(self, dt):
@@ -290,7 +296,7 @@ class C2Ray:
         t_now = self.time
         t_half = t_now + 0.5 * dt
         t_after = t_now + dt
-        # self.printlog(' This is time : %f\t %f' %(t_now/YEAR, t_after/YEAR))
+        # logger.info(f" This is time : {t_now / YEAR}\t{t_after / YEAR}")
 
         # Increment redshift by half a time step
         z_half = self.time2zred(t_half)
@@ -313,14 +319,12 @@ class C2Ray:
                     z=self.zred, ndens=self.ndens
                 )
 
-            self.printlog(
-                " min, mean and max clumping factor at z = %.3f: %.2f  %.2f  %.2f"
-                % (
-                    self.zred,
-                    self.clumping_factor.min(),
-                    self.clumping_factor.mean(),
-                    self.clumping_factor.max(),
-                )
+            logger.info(
+                " min, mean and max clumping factor at z = %.3f: %.2f  %.2f  %.2f",
+                self.zred,
+                self.clumping_factor.min(),
+                self.clumping_factor.mean(),
+                self.clumping_factor.max(),
             )
 
         # Set new time and redshift (after timestep)
@@ -331,28 +335,13 @@ class C2Ray:
         if self.sinks.mfp_model == "Worseck2014":
             self.R_max_LLS = self.sinks.mfp_Worseck2014(z=self.zred)  # in cMpc
             self.R_max_LLS *= self.N / self.boxsize  # in number of grids
-            self.printlog(
-                "Mean-free-path for photons at z = %.3f (Worseck+ 2014): %.3e cMpc"
-                % (self.zred, self.R_max_LLS * self.boxsize / self.N)
+            logger.info(
+                """Mean-free-path for photons at z = %.3f (Worseck+ 2014): %.3e cMpc
+This corresponds to %.3f grid cells.""",
+                self.zred,
+                self.R_max_LLS * self.boxsize / self.N,
+                self.R_max_LLS,
             )
-            self.printlog("This corresponds to %.3f grid cells." % self.R_max_LLS)
-
-    def printlog(self, s, quiet=False):
-        """Print to log file and standard output
-
-        Parameters
-        ----------
-        s : str
-            String to print
-        quiet : bool
-            Whether to print only to log file or also to standard output (default)
-        """
-        if self.rank == 0:
-            # the rank = 0 assures that we do not log many time the same text when
-            if self.logfile is None:
-                raise RuntimeError("Please set the log file in output_ini")
-            else:
-                printlog(s, self.logfile, quiet)
 
     def write_output(self, z, ext=".dat"):
         """Write ionization fraction & ionization rates as C2Ray binary files
@@ -388,18 +377,21 @@ class C2Ray:
                 # np.save(file=self.results_basename + "coldens" + suffix, arr=self.coldens)
 
             # print min, max and average quantities
-            self.printlog("\n--- Reionization History ----")
-            self.printlog(
-                " min, mean, max xHII : %.5e  %.5e  %.5e"
-                % (self.xh.min(), self.xh.mean(), self.xh.max())
-            )
-            self.printlog(
-                " min, mean, max Irate : %.5e  %.5e  %.5e [1/s]"
-                % (self.phi_ion.min(), self.phi_ion.mean(), self.phi_ion.max())
-            )
-            self.printlog(
-                " min, mean, max density : %.5e  %.5e  %.5e [1/cm3]"
-                % (self.ndens.min(), self.ndens.mean(), self.ndens.max())
+            logger.info(
+                """
+--- Reionization History ----
+ min, mean, max xHII : %.5e  %.5e  %.5e
+ min, mean, max Irate : %.5e  %.5e  %.5e [1/s]
+ min, mean, max density : %.5e  %.5e  %.5e [1/cm3]""",
+                self.xh.min(),
+                self.xh.mean(),
+                self.xh.max(),
+                self.phi_ion.min(),
+                self.phi_ion.mean(),
+                self.phi_ion.max(),
+                self.ndens.min(),
+                self.ndens.mean(),
+                self.ndens.max(),
             )
 
             # write summary output file
@@ -483,7 +475,6 @@ class C2Ray:
             self.dlogtau,
             self.R_max_LLS,
             self.sig,
-            self.logfile,
         )
         self.phi_ion = gamma
         return gamma
@@ -535,15 +526,15 @@ class C2Ray:
 
         # Scale quantities to the initial redshift
         if self.cosmological:
-            self.printlog(
-                f"Cosmology is on, scaling comoving quantities to the initial redshift, which is z0 = {self.zred_0:.3f}..."
+            logger.info(
+                f"""Cosmology is on, scaling comoving quantities to the initial redshift, which is z0 = {self.zred_0:.3f}...
+Cosmological parameters used:
+h   = {h:.4f}, Tcmb0 = {Tcmb0:.3e}
+Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}"""
             )
-            self.printlog("Cosmological parameters used:")
-            self.printlog(f"h   = {h:.4f}, Tcmb0 = {Tcmb0:.3e}")
-            self.printlog(f"Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}")
             self.dr = self.cosmology.scale_factor(self.zred_0) * self.dr_c
         else:
-            self.printlog("Cosmology is off.")
+            logger.info("Cosmology is off.")
 
     def _radiation_init(self):
         """Set up radiation tables for ionization/heating rates"""
@@ -556,10 +547,11 @@ class C2Ray:
         self.compute_heating_rates = self._ld["Photo"]["compute_heating_rates"]
 
         if self.grey:
-            self.printlog("Warning: Using grey opacity")
+            logger.info("Warning: Using grey opacity")
         else:
-            self.printlog(
-                f"Using power-law opacity with {self.NumTau:n} table points between tau=10^({self.minlogtau:n}) and tau=10^({self.maxlogtau:n})"
+            logger.info(
+                f"Using power-law opacity with {self.NumTau:n} table points between tau=10^({self.minlogtau:n}) "
+                f"and tau=10^({self.maxlogtau:n})"
             )
 
         # The actual table has NumTau + 1 points: the 0-th position is tau=0 and the remaining NumTau points are log-spaced from minlogtau to maxlogtau (same as in C2Ray)
@@ -582,16 +574,9 @@ class C2Ray:
                 self.bb_Teff, self.grey, ion_freq_HI, self.cs_pl_idx_h
             )
 
-            # Print info
-            self.printlog(
-                f"Using Black-Body sources with effective temperature T = {radsource.temp:.1e} K and Radius {(radsource.R_star / cst.R_sun.to('cm')).value: .3e} rsun"
-            )
-            self.printlog(
-                f"Spectrum Frequency Range: {freq_min:.3e} to {freq_max:.3e} Hz"
-            )
-            self.printlog(
-                f"This is Energy:           {freq_min / ev2fr:.3e} to {freq_max / ev2fr:.3e} eV"
-            )
+            logger.info(f"""Using Black-Body sources with effective temperature T = {radsource.temp:.1e} K and Radius {(radsource.R_star / cst.R_sun.to("cm")).value: .3e} rsun
+Spectrum Frequency Range: {freq_min:.3e} to {freq_max:.3e} Hz
+This is Energy:           {freq_min / ev2fr:.3e} to {freq_max / ev2fr:.3e} eV""")
         elif self.SourceType == "powerlaw":
             # TODO: power law spectra is already implemented in radiation folder
             pass
@@ -609,23 +594,16 @@ class C2Ray:
                 S_star_ref=1e48,
             )
 
-            # Print info
-            self.printlog(
-                "Using Yggdrasil Models for SED, Zackrisson et al (2011), "
-                "for PopIII or PopII sources"
-            )
-            self.printlog(
-                f"Spectrum Frequency Range: {freq_min:.3e} to {freq_max:.3e} Hz"
-            )
-            self.printlog(
-                f"This is Energy:           {freq_min / ev2fr:.3e} "
-                f"to {freq_max / ev2fr:.3e} eV"
+            logger.info(
+                """Using Yggdrasil Models for SED, Zackrisson et al (2011), for PopIII or PopII sources
+Spectrum Frequency Range: {freq_min:.3e} to {freq_max:.3e} Hz
+This is Energy:           {freq_min / ev2fr:.3e} to {freq_max / ev2fr:.3e} eV"""
             )
         else:
             raise NameError("Unknown source type : ", self.SourceType)
 
         # Integrate table
-        self.printlog("Integrating photoionization rates tables...")
+        logger.info("Integrating photoionization rate tables...")
         self.photo_thin_table, self.photo_thick_table = radsource.make_photo_table(
             self.tau, freq_min, freq_max, 1e48
         )
@@ -636,19 +614,19 @@ class C2Ray:
         # 1. Add heating rate computation to ASORA (GPU raytracing)
         # 2. Add heating (thermal) to chemistry module
         if self.compute_heating_rates:
-            self.printlog("Integrating photoheating rates tables...")
+            logger.info("Integrating photoheating rate tables...")
             self.heat_thin_table, self.heat_thick_table = radsource.make_heat_table(
                 self.tau, freq_min, freq_max, 1e48
             )  # nb integration bounds are given in log10(freq/freq_HI)
         else:
-            self.printlog("INFO: No heating rates")
+            logger.warning("No heating rates")
             self.heat_thin_table = np.zeros(self.NumTau + 1)
             self.heat_thick_table = np.zeros(self.NumTau + 1)
 
         # Copy radiation table to GPU
         if self.gpu:
             photo_table_to_device(self.photo_thin_table, self.photo_thick_table)
-            self.printlog("Successfully copied radiation tables to GPU memory.")
+            logger.info("Successfully copied radiation tables to GPU memory.")
 
     def _grid_init(self):
         """Set up grid properties"""
@@ -657,8 +635,10 @@ class C2Ray:
         self.boxsize_c = self.boxsize * Mpc
         self.dr_c = self.boxsize_c / self.N
 
-        self.printlog(f"Welcome! Mesh size is N = {self.N:n}.")
-        self.printlog(f"Simulation Box size (comoving Mpc): {self.boxsize:.3e}")
+        logger.info(
+            f"""Welcome! Mesh size is N = {self.N:n}.
+Simulation Box size (comoving Mpc): {self.boxsize:.3e}"""
+        )
 
         # Initialize cell size to comoving size (if cosmological run, it will be scaled in cosmology_init)
         self.dr = self.dr_c
@@ -701,6 +681,7 @@ class C2Ray:
                     # Clear file and write header line
                     f.write(title + "\nLog file for pyC2Ray.\n\n")
 
+        configure_logger(self.logfile)
         # all processor wait for rank=0 to be done. This is to avoid that some ranks go ahead.
         if self.mpi:
             self.comm.Barrier()
@@ -723,32 +704,29 @@ class C2Ray:
                 z=self._ld["Cosmology"]["zred_0"], ndens=self.ndens
             )
 
-        self.printlog(
-            "\n---- Calculated Clumping Factor (%s model):" % self.sinks.clumping_model
+        logger.info(
+            """
+---- Calculated Clumping Factor (%s model):
+ min, mean and max clumping : %.3e  %.3e  %.3e""",
+            self.sinks.clumping_model,
+            self.clumping_factor.min(),
+            self.clumping_factor.mean(),
+            self.clumping_factor.max(),
         )
-        self.printlog(
-            " min, mean and max clumping : %.3e  %.3e  %.3e"
-            % (
-                self.clumping_factor.min(),
-                self.clumping_factor.mean(),
-                self.clumping_factor.max(),
-            )
-        )
-
         # for mean-free-path
         if self.sinks.mfp_model == "constant":
             # Set R_max (LLS 3) in cell units
             self.R_max_LLS = self.sinks.R_mfp_cell_unit
-            self.printlog(
-                "\n---- Calculated Mean-Free Path (%s model):" % self.sinks.mfp_model
-            )
-            self.printlog(
-                "Maximum comoving distance for photons from source mfp = %.2f cMpc (%s model).\n This corresponds to %.3f grid cells.\n"
-                % (
-                    self.R_max_LLS * self.boxsize / self.N,
-                    self.sinks.mfp_model,
-                    self.R_max_LLS,
-                )
+            logger.info(
+                """
+---- Calculated Mean-Free Path (%s model):
+Maximum comoving distance for photons from source mfp = %.2f cMpc (%s model).
+This corresponds to %.3f grid cells.
+""",
+                self.sinks.mfp_model,
+                self.R_max_LLS * self.boxsize / self.N,
+                self.sinks.mfp_model,
+                self.R_max_LLS,
             )
         elif self.sinks.mfp_model == "Worseck2014":
             # set mean-free-path to the initial redshift
@@ -756,18 +734,18 @@ class C2Ray:
                 z=self._ld["Cosmology"]["zred_0"]
             )  # in cMpc
             self.R_max_LLS *= self.N / self.boxsize
-            self.printlog(
-                "\n---- Calculated Mean-Free Path (%s model):" % self.sinks.mfp_model
-            )
-            self.printlog(
-                "Maximum comoving distance for photons from source mfp = %.2f cMpc (%s model) : A = %.2f Mpc, eta = %.2f.\n This corresponds to %.3f grid cells.\n"
-                % (
-                    self.R_max_LLS * self.boxsize / self.N,
-                    self.sinks.mfp_model,
-                    self.sinks.A_mfp,
-                    self.sinks.etha_mfp,
-                    self.R_max_LLS,
-                )
+            logger.info(
+                """
+---- Calculated Mean-Free Path (%s model):
+Maximum comoving distance for photons from source mfp = %.2f cMpc (%s model) : A = %.2f Mpc, eta = %.2f.
+This corresponds to %.3f grid cells.
+""",
+                self.sinks.mfp_model,
+                self.R_max_LLS * self.boxsize / self.N,
+                self.sinks.mfp_model,
+                self.sinks.A_mfp,
+                self.sinks.etha_mfp,
+                self.R_max_LLS,
             )
 
     # The following initialization methods are simulation kind-dependent and need to be overridden in the subclasses

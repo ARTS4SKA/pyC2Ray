@@ -1,3 +1,5 @@
+import logging
+
 import h5py
 import numpy as np
 import tools21cm as t2c
@@ -15,6 +17,7 @@ from .utils.other_utils import (
 # from .source_model import StellarToHaloRelation, BurstySFR, EscapeFraction, Halo2Grid
 
 __all__ = ["C2Ray_Thesan"]
+logger = logging.getLogger(__name__)
 
 # m_p = 1.672661e-24
 
@@ -40,7 +43,7 @@ class C2Ray_Thesan(C2Ray):
 
         """
         super().__init__(paramfile)
-        self.printlog('Running: "C2Ray for %d Mpc/h volume"' % self.boxsize)
+        logger.info('Running: "C2Ray for %d Mpc/h volume"', self.boxsize)
 
         # path to tables
         path_data = pc2r.__path__[0] + "/tables/dotN_thesan/"
@@ -149,22 +152,24 @@ class C2Ray_Thesan(C2Ray):
         # calculate total number of ionizing photons
         self.tot_phots = np.sum(normflux * dt * S_star_ref)
 
-        self.printlog(
-            "\n---- Reading source file with total of %d ionizing source:\n%s"
-            % (normflux.size, file)
-        )
-        self.printlog(" Total Flux : %e [1/s]" % np.sum(normflux * S_star_ref))
-        self.printlog(" Total number of ionizaing photons : %e" % self.tot_phots)
-        self.printlog(" Source lifetime : %f Myr" % (dt / (1e6 * YEAR)))
-        self.printlog(
-            " min, max halo (grid) mass : %.3e  %.3e [Msun] and min, mean, max number of ionising sources : %.3e  %.3e  %.3e [1/s]"
-            % (
-                srcmass_msun.min(),
-                srcmass_msun.max(),
-                normflux.min() * S_star_ref,
-                normflux.mean() * S_star_ref,
-                normflux.max() * S_star_ref,
-            )
+        logger.info(
+            """
+---- Reading source file with total of %d ionizing source:
+%s
+ Total Flux : %e [1/s]
+ Total number of ionizing photons : %e
+ Source lifetime : %f Myr
+ min, max halo (grid) mass : %.3e  %.3e [Msun] and min, mean, max number of ionising sources : %.3e  %.3e  %.3e [1/s]""",
+            normflux.size,
+            file,
+            np.sum(normflux * S_star_ref),
+            self.tot_phots,
+            dt / (1e6 * YEAR),
+            srcmass_msun.min(),
+            srcmass_msun.max(),
+            normflux.min() * S_star_ref,
+            normflux.mean() * S_star_ref,
+            normflux.max() * S_star_ref,
         )
 
         return srcpos, normflux
@@ -232,10 +237,15 @@ class C2Ray_Thesan(C2Ray):
             / (self.mean_molecular * m_p)
             * (1 + z) ** 3
         )
-        self.printlog("\n---- Reading density file:\n  %s" % file)
-        self.printlog(
-            " min, mean and max density : %.3e  %.3e  %.3e [1/cm3]"
-            % (self.ndens.min(), self.ndens.mean(), self.ndens.max())
+        logger.info(
+            """
+---- Reading density file:
+  %s
+ min, mean and max density : %.3e  %.3e  %.3e [1/cm3]""",
+            file,
+            self.ndens.min(),
+            self.ndens.mean(),
+            self.ndens.max(),
         )
 
     # =====================================================================================================
@@ -289,10 +299,15 @@ class C2Ray_Thesan(C2Ray):
                     % (self.results_basename, self.zred)
                 )
 
-            self.printlog("\n---- Reading ionized fraction field:\n %s" % fname)
-            self.printlog(
-                " min, mean and max density : %.5e  %.5e  %.5e"
-                % (self.xh.min(), self.xh.mean(), self.xh.max())
+            logger.info(
+                """
+---- Reading ionized fraction field:
+ %s
+ min, mean and max density : %.5e  %.5e  %.5e""",
+                fname,
+                self.xh.min(),
+                self.xh.mean(),
+                self.xh.max(),
             )
 
             # TODO: implement heating
@@ -310,9 +325,9 @@ class C2Ray_Thesan(C2Ray):
 
     def _sources_init(self):
         """Initialize settings to read source files"""
-        self.printlog(" --- You are using the Thesan source model so:")
-        self.printlog(" NO stallar-to-halo relaction model.")
-        self.printlog(" NO stellar accretion model.")
-        self.printlog(" NO bustiness model for the star formation history.")
-        self.printlog(" NO escaping fraction model.")
-        self.printlog(" Instead reading fit tables created from Thesan simulations.")
+        logger.info(""" --- You are using the Thesan source model so:
+ NO stellar-to-halo relation model.
+ NO stellar accretion model.
+ NO burstiness model for the star formation history.
+ NO escaping fraction model.
+ Instead reading fit tables created from Thesan simulations.""")
