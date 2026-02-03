@@ -1,7 +1,6 @@
 import atexit
 import os
 import re
-import subprocess
 
 import numpy as np
 import tools21cm as t2c
@@ -129,18 +128,11 @@ class C2Ray:
             # gpu_ids = os.getenv("CUDA_VISIBLE_DEVICES", default="No GPU Assigned.")
             # tot_gpus = os.getenv('SLURM_JOB_GPUS', default="No GPU on node.")
             # Number of GPUs
-            try:
-                nr_gpus = int(
-                    os.getenv("SLURM_GPUS_ON_NODE", default="No GPU on node.")
-                )
-            except Exception:
-                nr_gpus = int(
-                    subprocess.check_output("nvidia-smi  -L | wc -l", shell=True)
-                )
+            # nr_gpus = int(os.getenv("SLURM_GPUS_ON_NODE", default="No GPU on node."))
+            # nr_gpus = int(subprocess.check_output("nvidia-smi  -L | wc -l", shell=True))
 
             # Allocate GPU memory
-            src_batch_size = self._ld["Raytracing"]["source_batch_size"]
-            device_init(self.N, src_batch_size, self.rank, nr_gpus)
+            device_init(self.rank)
 
             # Register deallocation function (automatically calls this on program termination)
             atexit.register(self._gpu_close)
@@ -256,6 +248,7 @@ class C2Ray:
             dr=self.dr,
             src_flux=src_flux,
             src_pos=src_pos,
+            src_batch_size=self._ld["Raytracing"]["source_batch_size"],
             use_gpu=self.gpu,
             max_subbox=self.max_subbox,
             subboxsize=self.subboxsize,
@@ -709,7 +702,8 @@ class C2Ray:
                     f.write(title + "\nLog file for pyC2Ray.\n\n")
 
         # all processor wait for rank=0 to be done. This is to avoid that some ranks go ahead.
-        self.comm.Barrier()
+        if self.mpi:
+            self.comm.Barrier()
 
     def _sinks_init(self):
         """Initialize sinks physics class for the mean-free path and clumping factor"""

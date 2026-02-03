@@ -21,21 +21,17 @@ def cuda_is_init():
     return cuda_init
 
 
-def device_init(N, source_batch_size, rank, nr_gpus):
+def device_init(rank: int) -> None:
     """Initialize GPU and allocate memory for grid data
 
     Parameters
     ----------
-    N : int
-        Mesh size in grid coordinates
-    source_batch_size : int
-        Number of sources the GPU handles in parallel. Increasing this parameter
-        will speed up raytracing for large numbers of sources, but also increase
-        memory usage
+    rank : int
+        MPI rank of this process
     """
     global cuda_init
     if libasora is not None:
-        libasora.device_init(N, source_batch_size, rank, nr_gpus)
+        libasora.device_init(rank)
         cuda_init = True
     else:
         raise RuntimeError("Could not initialize GPU: ASORA library not loaded")

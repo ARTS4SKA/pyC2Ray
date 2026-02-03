@@ -45,6 +45,7 @@ def evolve3D(
     dr: float,
     src_flux: npt.NDArray,
     src_pos: npt.NDArray,
+    src_batch_size: int,
     use_gpu: bool,
     max_subbox: int,
     subboxsize: int,
@@ -257,6 +258,7 @@ def evolve3D(
                 minlogtau,
                 dlogtau,
                 NumTau,
+                src_batch_size,
             )
         else:
             # Set rates to 0. When using ASORA, this is done internally by the library (directly on the GPU)
