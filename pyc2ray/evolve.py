@@ -50,7 +50,6 @@ def evolve3D(
     subboxsize: int,
     loss_fraction: float,
     use_mpi: bool,
-    comm: MPI.Intracomm,
     rank: int,
     nprocs: int,
     temp: FloatArray,
@@ -206,14 +205,15 @@ def evolve3D(
     # Start Evolve step, Iterate until convergence in <x> and <y>
     # -----------------------------------------------------------
     if rank == 0:
-        logger.info(f"""Calling evolve3D...
+        n_count = 0
+
+    logger.info(f"""Calling evolve3D...
 dr [Mpc]: {dr / 3.086e24:.3e}
 dt [years]: {dt / 3.15576e07:.3e}
 Running on {NumSrc:n} source(s), total normalized ionizing flux: {src_flux.sum():.2e}
 Mean density (cgs): {ndens.mean():.3e}, Mean ionized fraction: {xh.mean():.3e}
 Convergence Criterion (Number of points): {conv_criterion: n}
 """)
-        n_count = 0
 
     while not converged:
         niter += 1
@@ -292,10 +292,12 @@ Convergence Criterion (Number of points): {conv_criterion: n}
         if use_mpi:
             # collect results from the different MPI processors
             if rank == 0:
-                comm.Reduce(MPI.IN_PLACE, [phi_ion, MPI.DOUBLE], op=MPI.SUM, root=0)
+                MPI.COMM_WORLD.Reduce(
+                    MPI.IN_PLACE, [phi_ion, MPI.DOUBLE], op=MPI.SUM, root=0
+                )
             else:
-                comm.Reduce([phi_ion, MPI.DOUBLE], None, op=MPI.SUM, root=0)
-            comm.Bcast([phi_ion, MPI.DOUBLE], root=0)
+                MPI.COMM_WORLD.Reduce([phi_ion, MPI.DOUBLE], None, op=MPI.SUM, root=0)
+            MPI.COMM_WORLD.Bcast([phi_ion, MPI.DOUBLE], root=0)
 
         if rank == 0:
             # ---------------------
@@ -321,8 +323,12 @@ Convergence Criterion (Number of points): {conv_criterion: n}
                 abu_c,
             )
 
-            # TODO: the line blow is the same function but completely in python (much slower then the fortran version, due to a lot of loops)
-            # xh_intermed, xh_av, conv_flag = global_pass(dt, ndens, temp, xh, xh_av, xh_intermed, phi_ion, clump, bh00, albpow, colh0, temph0, abu_c)
+            # TODO: the line below is the same function but completely in python
+            # (much slower then the fortran version, due to a lot of loops)
+            # xh_intermed, xh_av, conv_flag = global_pass(
+            #     dt, ndens, temp, xh, xh_av, xh_intermed, phi_ion,
+            #     clump, bh00, albpow, colh0, temph0, abu_c,
+            # )
 
             logger.info(f"  took {(time.time() - tch0): .1f} s.")
 
@@ -366,20 +372,18 @@ Convergence Criterion (Number of points): {conv_criterion: n}
 
         if use_mpi:
             # broadcast ionised fraction field
-            comm.Bcast([xh_av_flat, MPI.DOUBLE], root=0)
-            comm.Bcast([xh_intermed, MPI.DOUBLE], root=0)
+            MPI.COMM_WORLD.Bcast([xh_av_flat, MPI.DOUBLE], root=0)
+            MPI.COMM_WORLD.Bcast([xh_intermed, MPI.DOUBLE], root=0)
 
             # convert the bool variable to bit
             # converged_array = array.array("i", [converged])
             converged_array = array.array("i", [int(converged)])
 
             # braodcast convergence to the other ranks
-            comm.Bcast(converged_array, root=0)
+            MPI.COMM_WORLD.Bcast(converged_array, root=0)
             if rank != 0:
                 converged = bool(converged_array[0])
 
-        else:
-            pass
     if rank == 0:
         # When converged, return the updated ionization fractions at the end of the timestep
         logger.info(
@@ -389,6 +393,6 @@ Convergence Criterion (Number of points): {conv_criterion: n}
 
     if use_mpi:
         # braodcast final result
-        comm.Bcast([xh_new, MPI.DOUBLE], root=0)
+        MPI.COMM_WORLD.Bcast([xh_new, MPI.DOUBLE], root=0)
 
     return xh_new, phi_ion

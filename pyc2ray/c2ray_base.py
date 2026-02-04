@@ -1,6 +1,5 @@
 import atexit
 import logging
-import os
 from pathlib import Path
 
 import numpy as np
@@ -101,6 +100,15 @@ logger = logging.getLogger(__name__)
 
 
 class C2Ray:
+    banner = r"""
+                 _________   ____
+    ____  __  __/ ____/__ \ / __ \____ ___  __
+   / __ \/ / / / /    __/ // /_/ / __ `/ / / /
+  / /_/ / /_/ / /___ / __// _, _/ /_/ / /_/ /
+ / .___/\__, /\____//____/_/ |_|\__,_/\__, /
+/_/    /____/                        /____/
+"""
+
     def __init__(self, paramfile: PathType) -> None:
         """Basis class for a C2Ray Simulation
 
@@ -111,16 +119,40 @@ class C2Ray:
         # Read YAML parameter file and set main properties
         self._read_paramfile(paramfile)
 
+        # Help type checkers by defining some type annotations
+        self.time: float
+        self.zred: float
+        self.dr: float
+        self.temp: FloatArray
+        self.xh: FloatArray
+        self.clumping_factor: FloatArray
+
+        # Initialize output and logger. Waits for all ranks to reach this point.
+        self._output_init()
+
+        # Initialize Simulation
+        self._grid_init()
+        self._cosmology_init()
+        self._redshift_init()
+        self._material_init()
+        self._sources_init()
+        self._radiation_init()
+        self._sinks_init()
+
+        if self.mpi and MPI.COMM_WORLD.Get_size() <= 1:
+            logger.warning(
+                "Requested to enable MPI but there is only one process available. "
+                "Try to run this application with a higher number of processes. Disabling MPI."
+            )
+            self.grid_params.mpi = False
+
         # MPI setup
         if self.mpi:
-            comm = MPI.COMM_WORLD
-            self.rank = comm.Get_rank()
-            self.nprocs = comm.Get_size()
+            self.rank = MPI.COMM_WORLD.Get_rank()
+            self.nprocs = MPI.COMM_WORLD.Get_size()
         else:
             self.rank = 0
             self.nprocs = 1
-
-        self.shape = (self.N, self.N, self.N)
 
         # Set Raytracing mode
         if self.gpu:
@@ -133,34 +165,14 @@ class C2Ray:
             # nr_gpus = int(os.getenv("SLURM_GPUS_ON_NODE", default="No GPU on node."))
             # nr_gpus = int(subprocess.check_output("nvidia-smi  -L | wc -l", shell=True))
 
-            # Allocate GPU memory
-            device_init(self.rank)
+            # Initialize the correct GPU device
+            shared_comm = MPI.COMM_WORLD.Split_type(MPI.COMM_TYPE_SHARED)
+            local_rank = shared_comm.Get_rank()
+            device_init(local_rank)
 
             # Register deallocation function (automatically calls this on program termination)
-            atexit.register(self._gpu_close)
-        else:
-            # is going to run the raytracing algorithm on CPU
-            pass
+            atexit.register(device_close)
 
-        # Help type checkers by defining some type annotations
-        self.time: float
-        self.zred: float
-        self.dr: float
-        self.temp: FloatArray
-        self.xh: FloatArray
-        self.clumping_factor: FloatArray
-
-        # Initialize Simulation
-        self._output_init()
-        self._grid_init()
-        self._cosmology_init()
-        self._redshift_init()
-        self._material_init()
-        self._sources_init()
-        self._radiation_init()
-        self._sinks_init()
-
-        if self.gpu:
             # logger.info(
             #     "\tNode name: %s\n\ttask_id: %d\n\tlocal task id: %d\n\tgpu_ids: %s\n"
             #     "\ttot gpu job: %s\n\ttot gpu on node: %d",
@@ -174,7 +186,9 @@ class C2Ray:
             logger.info(
                 f"Using CPU Raytracing (subboxsize = {self.subboxsize}, max_subbox = {self.max_subbox})"
             )
+
         if self.mpi:
+            MPI.COMM_WORLD.Barrier()
             logger.info(f"Using {self.nprocs} MPI Ranks")
         else:
             logger.info("Running in non-MPI (single-GPU/CPU) mode")
@@ -261,7 +275,6 @@ class C2Ray:
             subboxsize=self.subboxsize,
             loss_fraction=self.loss_fraction,
             use_mpi=use_mpi,
-            comm=MPI.COMM_WORLD,
             rank=self.rank if use_mpi else 0,
             nprocs=self.nprocs if use_mpi else 1,
             temp=self.temp,
@@ -351,30 +364,31 @@ This corresponds to %.3f grid cells.""",
         z : Redshift (used to name the file)
         ext : extension of the output file. If '.dat' save a binary file (with tools21cm), otherwise '.npy'.
         """
-        if self.rank == 0:
-            suffix = f"_z{z:.3f}" + ext
-            if suffix.endswith(".dat"):
-                t2c.save_cbin(
-                    filename=self.results_basename / f"xfrac{suffix}",
-                    data=self.xh,
-                    bits=64,
-                    order="F",
-                )
-                t2c.save_cbin(
-                    filename=self.results_basename / f"IonRates{suffix}",
-                    data=self.phi_ion,
-                    bits=32,
-                    order="F",
-                )
-                # t2c.save_cbin(filename=self.results_basename / f"coldens{suffix}", data=self.coldens, bits=64, order='F')
-            elif suffix.endswith(".npy"):
-                np.save(file=self.results_basename / f"xfrac{suffix}", arr=self.xh)
-                np.save(
-                    file=self.results_basename / f"IonRates{suffix}", arr=self.phi_ion
-                )
-                # np.save(file=self.results_basename / f"coldens{suffix}", arr=self.coldens)
+        if self.rank != 0:
+            return
 
-            # print min, max and average quantities
+        suffix = f"_z{z:.3f}" + ext
+        if suffix.endswith(".dat"):
+            t2c.save_cbin(
+                filename=self.results_basename / f"xfrac{suffix}",
+                data=self.xh,
+                bits=64,
+                order="F",
+            )
+            t2c.save_cbin(
+                filename=self.results_basename / f"IonRates{suffix}",
+                data=self.phi_ion,
+                bits=32,
+                order="F",
+            )
+            # t2c.save_cbin(filename=self.results_basename / "coldens{suffix}", data=self.coldens, bits=64, order='F')
+        elif suffix.endswith(".npy"):
+            np.save(file=self.results_basename / f"xfrac{suffix}", arr=self.xh)
+            np.save(file=self.results_basename / f"IonRates{suffix}", arr=self.phi_ion)
+            # np.save(file=self.results_basename / f"coldens{suffix}", arr=self.coldens)
+
+        # Prevent expensive computation of stats if logger is not enabled.
+        if logger.isEnabledFor(logging.INFO):
             logger.info(
                 """
 --- Reionization History ----
@@ -392,38 +406,33 @@ This corresponds to %.3f grid cells.""",
                 self.ndens.max(),
             )
 
-            # write summary output file
-            summary_exist = os.path.exists(self.results_basename / "PhotonCounts2.txt")
-
-            with open(self.results_basename / "PhotonCounts2.txt", "a") as f:
-                if not (summary_exist):
-                    header = (
-                        "# z\ttot HI atoms\ttot phots\t mean ndens [1/cm3]\t mean Irate [1/s]\t"
-                        "R_mfp [cMpc]\tmean ionization fraction (by volume and mass)\n"
-                    )
-                    f.write(header)
-
-                # mass-average neutral faction
-                massavrg_ion_frac = np.sum(self.xh * self.ndens) / np.sum(self.ndens)
-
-                # calculate total number of neutral hydrogen atoms
-                tot_nHI = np.sum(self.ndens * (1 - self.xh) * self.dr**3)
-
-                # FIXME: tot_phots is defined only in fstar and thesan.
-                text = "%.3f\t%.3e\t%.3e\t%.3e\t%.3e\t%.3e\t%.3e\t%.3e\n" % (
-                    z,
-                    tot_nHI,
-                    self.tot_phots,  # type: ignore
-                    np.mean(self.ndens),
-                    np.mean(self.phi_ion),
-                    self.R_max_LLS / self.N * self.boxsize,
-                    np.mean(self.xh),
-                    massavrg_ion_frac,
+        # write summary output file
+        with open(self.results_basename / "PhotonCounts2.txt", "a") as f:
+            # file is empty, write header
+            if f.tell() == 0:
+                header = (
+                    "# z\ttot HI atoms\ttot phots\t mean ndens [1/cm3]\t mean Irate [1/s]\t"
+                    "R_mfp [cMpc]\tmean ionization fraction (by volume and mass)\n"
                 )
-                f.write(text)
-        else:
-            # this is for the other ranks
-            pass
+                f.write(header)
+
+            # mass-average neutral faction
+            massavrg_ion_frac = np.sum(self.xh * self.ndens) / np.sum(self.ndens)
+
+            # calculate total number of neutral hydrogen atoms
+            tot_nHI = np.sum(self.ndens * (1 - self.xh) * self.dr**3)
+
+            text = "%.3f\t%.3e\t%.3e\t%.3e\t%.3e\t%.3e\t%.3e\t%.3e\n" % (
+                z,
+                tot_nHI,
+                self.tot_phots,  # type: ignore
+                np.mean(self.ndens),
+                np.mean(self.phi_ion),
+                self.R_max_LLS / self.N * self.boxsize,
+                np.mean(self.xh),
+                massavrg_ion_frac,
+            )
+            f.write(text)
 
     # =====================================================================================================
     # UTILITY METHODS
@@ -486,6 +495,10 @@ This corresponds to %.3f grid cells.""",
     @property
     def N(self) -> int:
         return self.grid_params.meshsize
+
+    @property
+    def shape(self) -> tuple[int, int, int]:
+        return self.N, self.N, self.N
 
     @property
     def boxsize(self) -> float:
@@ -635,10 +648,7 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}""")
 
     @property
     def results_basename(self) -> Path:
-        res_dir = Path(self.output_params.results_basename)
-        if not res_dir.is_dir() and self.rank == 0:
-            res_dir.mkdir()
-        return res_dir
+        return Path(self.output_params.results_basename)
 
     @property
     def inputs_basename(self) -> str:
@@ -762,34 +772,25 @@ Simulation Box size (comoving Mpc): {self.boxsize:.3e}"""
 
     def _output_init(self) -> None:
         """Set up output & log file"""
-        title = r"""
-                 _________   ____            
-    ____  __  __/ ____/__ \ / __ \____ ___  __
-   / __ \/ / / / /    __/ // /_/ / __ `/ / / /
-  / /_/ / /_/ / /___ / __// _, _/ /_/ / /_/ /
- / .___/\__, /\____//____/_/ |_|\__,_/\__, /
-/_/    /____/                        /____/
-"""
-
+        # Create result folder
         if self.rank == 0:
-            if self.resume:
-                title = "\n\nResuming" + title[8:] + "\n\n"
-                print(title)
-                with open(self.logfile, "r") as f:
-                    log = f.readlines()
-                with open(self.logfile, "w") as f:
-                    log.append(title)
-                    f.write("".join(log))
-            else:
-                print(title)
-                with open(self.logfile, "w") as f:
-                    # Clear file and write header line
-                    f.write(title + "\nLog file for pyC2Ray.\n\n")
+            self.results_basename.mkdir(parents=True, exist_ok=True)
+            # If it's a new job, delete the old logfile
+            if not self.resume:
+                self.logfile.unlink(missing_ok=True)
 
         configure_logger(self.logfile)
-        # all processor wait for rank=0 to be done. This is to avoid that some ranks go ahead.
+
+        # Wait here.
         if self.mpi:
             MPI.COMM_WORLD.Barrier()
+
+        if self.resume:
+            title = f"\n\nResuming{C2Ray.banner[8:]}\n\n"
+        else:
+            title = f"{C2Ray.banner}\nLog file for pyC2Ray.\n\n"
+
+        logger.info(title)
 
     def _sinks_init(self) -> None:
         """Initialize sinks physics class for the mean-free path and clumping factor"""

@@ -48,6 +48,11 @@ def configure_logger(
     # Grab this module's logger and set level
     module_logger = logging.getLogger(__name__.partition(".")[0])
 
+    # Logging is only enabled on one MPI process
+    if MPI.COMM_WORLD.Get_rank() != 0:
+        module_logger.disabled = True
+        return
+
     # Logger was already configured
     if module_logger.handlers:
         if not allow_reconfigure:
@@ -60,6 +65,7 @@ def configure_logger(
             hand.close()
         module_logger.handlers.clear()
 
+    # Grab this module's logger and set level
     lev0 = logging.INFO if not verbose else logging.DEBUG
     module_logger.setLevel(lev0)
 
@@ -82,7 +88,3 @@ def configure_logger(
             logging.Formatter("%(asctime)s %(name)-12s %(levelname)-4s: %(message)s")
         )
         module_logger.addHandler(fout)
-
-    # Logging is only enabled on one MPI process
-    if MPI.COMM_WORLD.Get_rank() != 0:
-        module_logger.disabled = True
