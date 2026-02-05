@@ -5,25 +5,23 @@ import astropy.units as u
 import numpy as np
 import pytest
 
-from pyc2ray.load_extensions import load_asora
+from pyc2ray.load_extensions import libasora
 from pyc2ray.radiation.blackbody import BlackBodySource
 from pyc2ray.radiation.common import make_tau_table
 
-asora = load_asora()
-
-if asora is None:
+if libasora is None:
     pytest.skip("libasora.so missing, skipping tests", allow_module_level=True)
 
 
 @pytest.fixture
 def init_device():
-    asora.device_init()
+    libasora.device_init()
     yield
-    asora.device_close()
+    libasora.device_close()
 
 
 def test_device_init(init_device):
-    asora.is_device_init()
+    libasora.is_device_init()
 
 
 @contextmanager
@@ -50,7 +48,7 @@ def setup_do_all_sources(
     )
 
     # Allocate tables to GPU device
-    asora.photo_table_to_device(photo_thin_table, photo_thick_table)
+    libasora.photo_table_to_device(photo_thin_table, photo_thick_table)
 
     size = mesh_size**3
     phi_ion = np.empty(size, dtype=np.float64)
@@ -58,7 +56,7 @@ def setup_do_all_sources(
     xHII = np.full(size, 1e-4, dtype=np.float64)
 
     # Copy density field to GPU device
-    asora.density_to_device(ndens)
+    libasora.density_to_device(ndens)
 
     # Efficiency factor (converting mass to photons)
     f_gamma = 100.0
@@ -70,7 +68,7 @@ def setup_do_all_sources(
     norm_flux *= f_gamma / 1e48
 
     # Copy source list to GPU device
-    asora.source_data_to_device(src_pos, norm_flux)
+    libasora.source_data_to_device(src_pos, norm_flux)
 
     # Size of a cell
     box = 50.0 * u.pc
@@ -94,7 +92,7 @@ def setup_do_all_sources(
 
 def test_do_all_sources(data_dir, init_device):
     with setup_do_all_sources() as args:
-        asora.do_all_sources(*args)
+        libasora.do_all_sources(*args)
 
         expected_phi_ion = np.load(data_dir / "photo_ionization_rate.npy")
 
@@ -112,4 +110,4 @@ def test_benchmark_do_all_sources(
     benchmark, init_device, mesh_size, batch_size, block_size
 ):
     with setup_do_all_sources(10000, mesh_size, batch_size, block_size) as args:
-        benchmark(asora.do_all_sources, *args)
+        benchmark(libasora.do_all_sources, *args)

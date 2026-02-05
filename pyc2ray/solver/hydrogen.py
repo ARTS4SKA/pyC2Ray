@@ -2,7 +2,7 @@ import astropy.constants as cst
 import astropy.units as u
 import numpy as np
 
-from ..load_extensions import load_c2ray
+from ..load_extensions import libc2ray
 
 # TODO: Add chemistry wrapper function
 
@@ -98,7 +98,6 @@ def hydrogenODE(
         phi_ion = np.asfortranarray(phi_ion)
 
     xh_intermed = xh
-    libc2ray = load_c2ray()
 
     temph0 = (13.598 * u.eV / cst.k_B).cgs.value
 

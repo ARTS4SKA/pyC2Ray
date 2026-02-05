@@ -6,15 +6,11 @@ import numpy as np
 import numpy.typing as npt
 from mpi4py import MPI
 
-from .asora_core import cuda_is_init
-from .load_extensions import load_asora, load_c2ray
+from .asora_core import is_device_init
+from .load_extensions import libasora, libc2ray
 from .utils import display_time
 from .utils.logutils import disable_newline
 from .utils.sourceutils import format_sources
-
-# Load extension modules
-libc2ray = load_c2ray()
-libasora = load_asora()
 
 __all__ = ["evolve3D"]
 
@@ -141,7 +137,7 @@ def evolve3D(
     # Allow a call with GPU only if
     # 1. the asora library is present and
     # 2. the GPU memory has been allocated using device_init()
-    if use_gpu and not cuda_is_init():
+    if use_gpu and not is_device_init():
         raise RuntimeError(
             "GPU not initialized. Please initialize it by calling device_init(N)"
         )
@@ -192,6 +188,7 @@ def evolve3D(
             srcpos_flat, normflux_flat = format_sources(src_pos, src_flux)
 
         # Copy positions & fluxes of sources to the GPU in advance
+        assert libasora is not None
         libasora.source_data_to_device(srcpos_flat, normflux_flat)
 
         # Initialize Flat Column density & ionization rate arrays.
@@ -199,6 +196,7 @@ def evolve3D(
         phi_ion_flat = np.ravel(np.zeros((N, N, N), dtype="float64"))
 
         # Copy density field to GPU once at the beginning of timestep (!! do_all_sources assumes this !!)
+        assert libasora is not None
         libasora.density_to_device(ndens_flat)
         if use_mpi:
             logger.info("Copied source data to device.")
@@ -234,6 +232,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
         # Do the raytracing part for each source. This computes the cumulative ionization rate for each cell.
         if use_gpu:
             # Use GPU raytracing
+            assert libasora is not None
             libasora.do_all_sources(
                 R_max_LLS,
                 sig,
