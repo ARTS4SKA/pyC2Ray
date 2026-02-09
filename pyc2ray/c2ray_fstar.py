@@ -1,4 +1,6 @@
 import logging
+from pathlib import Path
+from typing import cast
 
 import h5py
 import numpy as np
@@ -14,6 +16,7 @@ from .utils.other_utils import (
     get_extension_in_folder,
     get_redshifts_from_output,
 )
+from .utils.sourceutils import FloatArray, IntArray, PathType
 
 __all__ = ["C2Ray_fstar"]
 logger = logging.getLogger(__name__)
@@ -25,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 class C2Ray_fstar(C2Ray):
-    def __init__(self, paramfile):
+    def __init__(self, paramfile: PathType) -> None:
         """Basis class for a C2Ray Simulation
 
         Parameters
@@ -45,36 +48,40 @@ class C2Ray_fstar(C2Ray):
     # USER DEFINED METHODS
     # =====================================================================================================
 
-    def ionizing_flux(self, file, z, dt=None, save_Mstar=False):  # >:( trgeoip
+    def ionizing_flux(
+        self,
+        file: PathType,
+        z: float,
+        dt: float | None = None,
+        save_Mstar: bool = False,
+    ) -> tuple[IntArray, FloatArray]:
         """Read sources from a C2Ray-formatted file
         Parameters
         ----------
-        file : str
-            Filename to read.
-        ts : float
-            time-step in Myrs.
-        kind: str
-            The kind of source model to use.
+        file : Filename to read.
+        z : redshift
+        dt : time-step in Myrs.
+        save_Mstar : whether to save the stellar mass of the sources (not used)
 
-        Returns<
+
+        Returns
         -------
-        srcpos : array
-            Grid positions of the sources formatted in a suitable way for the chosen raytracing algorithm
-        normflux : array
-            Normalization of the flux of each source (relative to S_star)
+        srcpos : Grid positions of the sources formatted in a suitable way for the chosen raytracing algorithm
+        normflux : Normalization of the flux of each source (relative to S_star)
         """
         S_star_ref = 1e48
 
         # read halo list
         srcpos_mpc, srcmass_msun = self.read_haloes(
-            self.sources_basename + file, self.boxsize
+            f"{self.sources_basename}{file}", self.boxsize
         )
 
         # source life-time in cgs
         if self.acc_kind == "EXP":
             # ts = 1. / (self.alph_h * (1+z) * self.cosmology.H(z=z).cgs.value)
-            ts = self.fstar_model.source_liftime(z=z)
+            ts = self.fstar_model.source_lifetime(z=z)
         elif self.acc_kind == "constant":
+            assert dt is not None
             ts = dt
 
         # get stellar-to-halo ratio
@@ -112,10 +119,11 @@ class C2Ray_fstar(C2Ray):
             fesc = self.fesc_model.get(Mhalo=srcmass_msun, z=z)
 
         # get for star formation history
+        nr_switchon: int
         if self.bursty_sfr == "instant" or self.bursty_sfr == "integrate":
             burst_mask = self.bursty_model.get_bursty(mass=srcmass_msun, z=z)
 
-            nr_switchon = np.count_nonzero(burst_mask)
+            nr_switchon = cast(int, np.count_nonzero(burst_mask))
             self.perc_switchon = 100 * nr_switchon / burst_mask.size
 
             logger.info(
@@ -152,6 +160,7 @@ class C2Ray_fstar(C2Ray):
                 )
 
                 # normalize flux
+                assert self.sources_params.Nion is not None
                 normflux = (
                     c.msun2g * self.sources_params.Nion * sfr / (c.m_p * S_star_ref)
                 )
@@ -168,6 +177,7 @@ class C2Ray_fstar(C2Ray):
                 )
 
                 # normalize flux
+                assert self.sources_params.Nion is not None
                 normflux = (
                     c.msun2g
                     * self.sources_params.Nion
@@ -225,38 +235,40 @@ class C2Ray_fstar(C2Ray):
             )
 
             self.tot_phots = 0
-            return 0, 0
+            return np.array((3, 0), dtype=np.int32), np.array((0,), dtype=np.float64)
 
-    def read_haloes(self, halo_file, box_len):  # >:( trgeoip
+    def read_haloes(
+        self, halo_file: PathType, box_len: float
+    ) -> tuple[IntArray, FloatArray]:
         """Read haloes from a file.
 
         Parameters
         ----------
-        halo_file : str
-            Filename to read
+        halo_file : Filename to read
+        box_len: Length of the box in Mpc/h
 
         Returns
         -------
-        srcpos_mpc : array
-            Positions of the haloes in Mpc.
-        srcmass_msun : array
-            Masses of the haloes in Msun.
+        srcpos_mpc : Positions of the haloes in Mpc.
+        srcmass_msun : Masses of the haloes in Msun.
         """
 
-        if halo_file.endswith(".hdf5"):
+        suffix = Path(halo_file).suffix
+        if suffix == ".hdf5":
             # Read haloes from a CUBEP3M file format converted in hdf5.
             f = h5py.File(halo_file)
             h = f.attrs["h"]
             srcmass_msun = f["mass"][:] / h  # Msun
             srcpos_mpc = f["pos"][:] / h  # Mpc
             f.close()
-        elif halo_file.endswith(".dat"):
+        elif suffix == ".dat":
             # Read haloes from a CUBEP3M file format.
             hl = t2c.HaloCubeP3MFull(filename=halo_file, box_len=box_len)
-            h = self.h
+            # FIXME: unknown attribute
+            h = self.h  # type: ignore
             srcmass_msun = hl.get(var="m") / h  # Msun
             srcpos_mpc = hl.get(var="pos") / h  # Mpc
-        elif halo_file.endswith(".txt"):
+        elif suffix == ".txt":
             # Read haloes from a PKDGrav converted in txt.
             hl = np.loadtxt(halo_file)
             srcmass_msun = hl[:, 0] / self.cosmology.h  # Msun

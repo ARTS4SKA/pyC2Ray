@@ -3,11 +3,11 @@ import os
 import sys
 import warnings
 from contextlib import contextmanager
-from typing import Iterator, Union
+from typing import Iterator
 
 from mpi4py import MPI
 
-PathType = Union[str, os.PathLike]
+PathType = str | os.PathLike
 
 
 @contextmanager

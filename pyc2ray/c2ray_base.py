@@ -11,10 +11,9 @@ from astropy.cosmology import FlatLambdaCDM, z_at_value
 from mpi4py import MPI
 
 import pyc2ray.constants as c
-
-from .asora_core import device_close, device_init, photo_table_to_device
-from .evolve import evolve3D
-from .parameters import (
+from pyc2ray.asora_core import device_close, device_init, photo_table_to_device
+from pyc2ray.evolve import evolve3D
+from pyc2ray.parameters import (
     AbundancesParameters,
     BlackBodyParameters,
     CGSParameters,
@@ -28,10 +27,16 @@ from .parameters import (
     SourcesParameters,
     YmlParameters,
 )
-from .radiation import BlackBodySource, YggdrasilModel, make_tau_table
-from .raytracing import do_raytracing
-from .sinks_model import SinksPhysics
-from .utils.logutils import configure_logger
+from pyc2ray.radiation import (
+    BlackBodyBase,
+    BlackBodySource,
+    YggdrasilModel,
+    make_tau_table,
+)
+from pyc2ray.raytracing import do_raytracing
+from pyc2ray.sinks_model import SinksPhysics
+from pyc2ray.utils.logutils import PathType, configure_logger
+from pyc2ray.utils.sourceutils import FloatArray, IntArray
 
 logger = logging.getLogger(__name__)
 
@@ -96,27 +101,21 @@ logger = logging.getLogger(__name__)
 
 
 class C2Ray:
-    def __init__(self, paramfile):
+    def __init__(self, paramfile: PathType) -> None:
         """Basis class for a C2Ray Simulation
 
         Parameters
         ----------
-        paramfile : str
-            Name of a YAML file containing parameters for the C2Ray simulation
-        Nmesh : int
-            Mesh size (number of cells in each dimension)
-        use_gpu : bool
-            Whether to use the GPU-accelerated ASORA library for raytracing
-
+        paramfile : Name of a YAML file containing parameters for the C2Ray simulation
         """
         # Read YAML parameter file and set main properties
         self._read_paramfile(paramfile)
 
         # MPI setup
         if self.mpi:
-            self.comm = MPI.COMM_WORLD
-            self.rank = self.comm.Get_rank()
-            self.nprocs = self.comm.Get_size()
+            comm = MPI.COMM_WORLD
+            self.rank = comm.Get_rank()
+            self.nprocs = comm.Get_size()
         else:
             self.rank = 0
             self.nprocs = 1
@@ -142,6 +141,14 @@ class C2Ray:
         else:
             # is going to run the raytracing algorithm on CPU
             pass
+
+        # Help type checkers by defining some type annotations
+        self.time: float
+        self.zred: float
+        self.dr: float
+        self.temp: FloatArray
+        self.xh: FloatArray
+        self.clumping_factor: FloatArray
 
         # Initialize Simulation
         self._output_init()
@@ -176,29 +183,25 @@ class C2Ray:
     # =====================================================================================================
     # TIME-EVOLUTION METHODS
     # =====================================================================================================
-    def set_timestep(self, z1, z2, num_timesteps):
+    def set_timestep(self, z1: float, z2: float, num_timesteps: int) -> float:
         """Compute timestep to use between redshift slices
 
         Parameters
         ----------
-        z1 : float
-            Initial redshift
-        z2 : float
-            Next redshift
-        num_timesteps : int
-            Number of timesteps between the two slices
+        z1 : Initial redshift
+        z2 : Next redshift
+        num_timesteps : Number of timesteps between the two slices
 
         Returns
         -------
-        dt : float
-            Timestep to use in seconds
+        dt : Timestep to use in seconds
         """
         t2 = self.zred2time(z2)
         t1 = self.zred2time(z1)
         dt = (t2 - t1) / num_timesteps
         return dt
 
-    def cosmo_evolve_to_now(self):
+    def cosmo_evolve_to_now(self) -> None:
         """Evolve cosmology over a timestep"""
         # Time step
         t_now = self.time
@@ -220,7 +223,7 @@ class C2Ray:
         # Set new time and redshift (after timestep)
         self.zred = z_now
 
-    def evolve3D(self, dt, src_flux, src_pos):
+    def evolve3D(self, dt: float, src_flux: FloatArray, src_pos: IntArray) -> None:
         """Evolve the grid over one timestep
 
         Raytrace all sources, compute cumulative photoionization rate of each cell and
@@ -228,23 +231,20 @@ class C2Ray:
 
         Parameters
         ----------
-        dt : float
-            Timestep in seconds (typically generated using set_timestep method)
-        src_flux : 1D-array of shape (numsrc)
-            Array containing the total ionizing flux of each source, normalized by S_star (1e48 by default)
-        src_pos : 2D-array of shape (3,numsrc)
-            Array containing the 3D grid position of each source, in Fortran indexing (from 1)
+        dt : Timestep in seconds (typically generated using set_timestep method)
+        src_flux : 1D array of shape (numsrc, ) containing the total ionizing flux of each source,
+                   normalized by S_star (1e48 by default)
+        src_pos : 2D array of shape (3, numsrc) containing the 3D grid position of each source,
+                  in Fortran indexing (from 1)
         """
-        if src_pos.shape[0] != 3 and src_pos.shape[1] == 3:
+        if src_pos.shape[0] != 3:
             src_pos = src_pos.T
-        elif src_pos.shape[0] == 3:
-            pass
-        else:
+        if len(src_flux) != src_pos.shape[1]:
             ValueError(
-                "ASORA requires the shape of the src_pos array to be (3, N_src). Here, it does not appear that you are providing an array with this shape."
+                "ASORA requires the shape of src_pos to be (3, num_src) and the shape of src_num to be (num_src, )."
             )
 
-        NumSrc = src_flux.shape[0]
+        NumSrc = len(src_flux)
         # If the number of sources exceed the number of MPI processors
         # then call the evolve designed for the MPI source splitting.
         # Otherwise all ranks are calling (independently) the evolve
@@ -261,7 +261,7 @@ class C2Ray:
             subboxsize=self.subboxsize,
             loss_fraction=self.loss_fraction,
             use_mpi=use_mpi,
-            comm=self.comm if use_mpi else None,
+            comm=MPI.COMM_WORLD,
             rank=self.rank if use_mpi else 0,
             nprocs=self.nprocs if use_mpi else 1,
             temp=self.temp,
@@ -282,7 +282,7 @@ class C2Ray:
             abu_c=self.abu_c,
         )
 
-    def cosmo_evolve(self, dt):
+    def cosmo_evolve(self, dt: float) -> None:
         """Evolve cosmology over a timestep
 
         Note that if cosmological is set to false in the parameter file, this
@@ -331,6 +331,7 @@ class C2Ray:
         self.time = t_after
 
         # Set new mean-free-path if it is redshift dependent
+        self.R_max_LLS: float
         if self.sinks.mfp_model == "Worseck2014":
             self.R_max_LLS = self.sinks.mfp_Worseck2014(z=self.zred)  # in cMpc
             self.R_max_LLS *= self.N / self.boxsize  # in number of grids
@@ -342,38 +343,36 @@ This corresponds to %.3f grid cells.""",
                 self.R_max_LLS,
             )
 
-    def write_output(self, z, ext=".dat"):
+    def write_output(self, z: float, ext: str = ".dat") -> None:
         """Write ionization fraction & ionization rates as C2Ray binary files
 
         Parameters
         ----------
-        z : float
-            Redshift (used to name the file)
-        ext : string
-            extension of the output file. If '.dat' save a binary file (with tools21cm), otherwise '.npy'.
+        z : Redshift (used to name the file)
+        ext : extension of the output file. If '.dat' save a binary file (with tools21cm), otherwise '.npy'.
         """
         if self.rank == 0:
             suffix = f"_z{z:.3f}" + ext
             if suffix.endswith(".dat"):
                 t2c.save_cbin(
-                    filename=self.results_basename + "xfrac" + suffix,
+                    filename=self.results_basename / f"xfrac{suffix}",
                     data=self.xh,
                     bits=64,
                     order="F",
                 )
                 t2c.save_cbin(
-                    filename=self.results_basename + "IonRates" + suffix,
+                    filename=self.results_basename / f"IonRates{suffix}",
                     data=self.phi_ion,
                     bits=32,
                     order="F",
                 )
-                # t2c.save_cbin(filename=self.results_basename + "coldens" + suffix, data=self.coldens, bits=64, order='F')
+                # t2c.save_cbin(filename=self.results_basename / f"coldens{suffix}", data=self.coldens, bits=64, order='F')
             elif suffix.endswith(".npy"):
-                np.save(file=self.results_basename + "xfrac" + suffix, arr=self.xh)
+                np.save(file=self.results_basename / f"xfrac{suffix}", arr=self.xh)
                 np.save(
-                    file=self.results_basename + "IonRates" + suffix, arr=self.phi_ion
+                    file=self.results_basename / f"IonRates{suffix}", arr=self.phi_ion
                 )
-                # np.save(file=self.results_basename + "coldens" + suffix, arr=self.coldens)
+                # np.save(file=self.results_basename / f"coldens{suffix}", arr=self.coldens)
 
             # print min, max and average quantities
             logger.info(
@@ -394,11 +393,14 @@ This corresponds to %.3f grid cells.""",
             )
 
             # write summary output file
-            summary_exist = os.path.exists(self.results_basename + "PhotonCounts2.txt")
+            summary_exist = os.path.exists(self.results_basename / "PhotonCounts2.txt")
 
-            with open(self.results_basename + "PhotonCounts2.txt", "a") as f:
+            with open(self.results_basename / "PhotonCounts2.txt", "a") as f:
                 if not (summary_exist):
-                    header = "# z\ttot HI atoms\ttot phots\t mean ndens [1/cm3]\t mean Irate [1/s]\tR_mfp [cMpc]\tmean ionization fraction (by volume and mass)\n"
+                    header = (
+                        "# z\ttot HI atoms\ttot phots\t mean ndens [1/cm3]\t mean Irate [1/s]\t"
+                        "R_mfp [cMpc]\tmean ionization fraction (by volume and mass)\n"
+                    )
                     f.write(header)
 
                 # mass-average neutral faction
@@ -407,10 +409,11 @@ This corresponds to %.3f grid cells.""",
                 # calculate total number of neutral hydrogen atoms
                 tot_nHI = np.sum(self.ndens * (1 - self.xh) * self.dr**3)
 
+                # FIXME: tot_phots is defined only in fstar and thesan.
                 text = "%.3f\t%.3e\t%.3e\t%.3e\t%.3e\t%.3e\t%.3e\t%.3e\n" % (
                     z,
                     tot_nHI,
-                    self.tot_phots,
+                    self.tot_phots,  # type: ignore
                     np.mean(self.ndens),
                     np.mean(self.phi_ion),
                     self.R_max_LLS / self.N * self.boxsize,
@@ -425,26 +428,21 @@ This corresponds to %.3f grid cells.""",
     # =====================================================================================================
     # UTILITY METHODS
     # =====================================================================================================
-    def time2zred(self, t):
+    def time2zred(self, t: float) -> float:
         """Calculate the redshift corresponding to an age t in seconds"""
-        try:
-            return z_at_value(self.cosmology.age, t * u.s).value
-        except Exception:
-            return z_at_value(self.cosmology.age, t * u.s)
+        return z_at_value(self.cosmology.age, t * u.s).value
 
-    def zred2time(self, z, unit="s"):
+    def zred2time(self, z: float, unit: str = "s") -> float:
         """Calculate the age corresponding to a redshift z
 
         Parameters
         ----------
-        z : float
-            Redshift at which to get age
-        unit : str (optional)
-            Unit to get age in astropy naming. Default: seconds
+        z : Redshift at which to get age
+        unit : Unit to get age in astropy naming. Default: seconds
         """
         return self.cosmology.age(z).to(unit).value
 
-    def do_raytracing(self, src_flux, src_pos):
+    def do_raytracing(self, src_flux: FloatArray, src_pos: IntArray) -> FloatArray:
         """Standalone raytracing method
 
         Function to only calculate Gamma (photoionization rates) based on current
@@ -581,11 +579,7 @@ This corresponds to %.3f grid cells.""",
     def cosmological(self) -> bool:
         return self.cosmology_params.cosmological
 
-    @property
-    def zred_0(self) -> float:
-        return self.cosmology_params.zred_0
-
-    def _cosmology_init(self):
+    def _cosmology_init(self) -> None:
         """Set up cosmology from parameters (H0, Omega,..)"""
         h = self.cosmology_params.h
         Om0 = self.cosmology_params.Omega0
@@ -593,6 +587,7 @@ This corresponds to %.3f grid cells.""",
         Tcmb0 = self.cosmology_params.cmbtemp
         H0 = 100 * h
         self.cosmology = FlatLambdaCDM(H0, Om0, Tcmb0, Ob0=Ob0)
+        self.zred_0 = self.cosmology_params.zred_0
 
         self.age_0 = self.zred2time(self.zred_0)
 
@@ -664,7 +659,7 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}""")
     def logfile(self) -> Path:
         return self.results_basename / self.output_params.logfile
 
-    def _radiation_init(self):
+    def _radiation_init(self) -> None:
         """Set up radiation tables for ionization/heating rates"""
         # Create optical depth table (log-spaced)
 
@@ -676,7 +671,8 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}""")
                 f"and tau=10^({self.maxlogtau:n})"
             )
 
-        # The actual table has NumTau + 1 points: the 0-th position is tau=0 and the remaining NumTau points are log-spaced from minlogtau to maxlogtau (same as in C2Ray)
+        # The actual table has NumTau + 1 points: the 0-th position is tau=0 and
+        # the remaining NumTau points are log-spaced from minlogtau to maxlogtau (same as in C2Ray)
         self.tau, self.dlogtau = make_tau_table(
             self.minlogtau, self.maxlogtau, self.NumTau
         )
@@ -684,6 +680,7 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}""")
         ion_freq_HI = c.ev2fr * self.eth0
         ion_freq_HeII = c.ev2fr * self.ethe1
 
+        radsource: BlackBodyBase
         # Black-Body source type
         if self.SourceType == "blackbody":
             freq_min = ion_freq_HI
@@ -747,7 +744,7 @@ This is Energy:           {freq_min / c.ev2fr:.3e} to {freq_max / c.ev2fr:.3e} e
             photo_table_to_device(self.photo_thin_table, self.photo_thick_table)
             logger.info("Successfully copied radiation tables to GPU memory.")
 
-    def _grid_init(self):
+    def _grid_init(self) -> None:
         """Set up grid properties"""
         # Comoving quantities
         self.boxsize_c = self.boxsize * c.Mpc
@@ -763,7 +760,7 @@ Simulation Box size (comoving Mpc): {self.boxsize:.3e}"""
 
         # TODO: need to give the index of start for the redshift loop in the main
 
-    def _output_init(self):
+    def _output_init(self) -> None:
         """Set up output & log file"""
         title = r"""
                  _________   ____            
@@ -792,9 +789,9 @@ Simulation Box size (comoving Mpc): {self.boxsize:.3e}"""
         configure_logger(self.logfile)
         # all processor wait for rank=0 to be done. This is to avoid that some ranks go ahead.
         if self.mpi:
-            self.comm.Barrier()
+            MPI.COMM_WORLD.Barrier()
 
-    def _sinks_init(self):
+    def _sinks_init(self) -> None:
         """Initialize sinks physics class for the mean-free path and clumping factor"""
 
         # init sink physics class for MFP and clumping
@@ -853,20 +850,19 @@ This corresponds to %.3f grid cells.
             )
 
     # The following initialization methods are simulation kind-dependent and need to be overridden in the subclasses
-    def _redshift_init(self):
+    def _redshift_init(self) -> None:
         """Initialize time and redshift counter"""
         self.zred = self.zred_0
         self.time = self.zred2time(self.zred)
-        pass
 
-    def _material_init(self):
+    def _material_init(self) -> None:
         """Initialize material properties of the grid"""
         self.ndens = np.empty(self.shape, order="F")
         self.xh = np.full(self.shape, self.material_params.xh0, order="F")
         self.temp = np.full(self.shape, self.material_params.temp0, order="F")
         self.phi_ion = np.zeros(self.shape, order="F")
 
-    def _sources_init(self):
+    def _sources_init(self) -> None:
         """Initialize settings to read source files"""
         pass
 
@@ -874,7 +870,7 @@ This corresponds to %.3f grid cells.
     # OTHER PRIVATE METHODS
     # =====================================================================================================
 
-    def _read_paramfile(self, paramfile):
+    def _read_paramfile(self, paramfile: PathType) -> None:
         """Read in YAML parameter file"""
         ld = YmlParameters.load_yaml(paramfile)
         self.output_params = OutputParameters.from_dict(ld["Output"])
@@ -889,6 +885,6 @@ This corresponds to %.3f grid cells.
         self.blackbody_params = BlackBodyParameters.from_dict(ld["BlackBodySource"])
         self.sources_params = SourcesParameters.from_dict(ld["Sources"])
 
-    def _gpu_close(self):
+    def _gpu_close(self) -> None:
         """Deallocate GPU memory"""
         device_close()

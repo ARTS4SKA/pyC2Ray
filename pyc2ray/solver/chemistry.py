@@ -178,9 +178,9 @@ def friedrich(
 
     Inputs:
         - n_gas (float):        gas number density
-        - xHI_old (float):      hydrogen ionized fraction of the cell
-        - xHeI_old (float):     helium first ionized fraction of the cell
-        - xHeII_old (float):    helium second ionized fraction of the cell
+        - xHII_old (float):      hydrogen ionized fraction of the cell
+        - xHeII_old (float):     helium first ionized fraction of the cell
+        - xHeIII_old (float):    helium second ionized fraction of the cell
         - dt (float):           time step in cgs units
         - dr (float):           cell size in cgs units
         - n_e (float):          electron number density of the cell
@@ -248,7 +248,7 @@ def friedrich(
     # column density of half a cell
     NHI = n_gas * (1.0 - xHII_old) / (dr / 2)
     # FIXME: xHeI_old is undefined, this is a bug
-    NHeI = n_gas * xHeI_old / (dr / 2)  # noqa: F821
+    NHeI = n_gas * xHeII_old / (dr / 2)  # noqa: F821
     NHeII = n_gas * xHII_old / (dr / 2)
 
     # opt depth of HI at HeI ion threshold

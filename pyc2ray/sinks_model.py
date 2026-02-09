@@ -2,13 +2,19 @@ from pathlib import Path
 from typing import Callable
 
 import numpy as np
+import numpy.typing as npt
 
 from .parameters import SinksParameters
 from .utils.other_utils import find_bins
 
+FloatNDArray = npt.NDArray[np.float64]
+IntNDArray = npt.NDArray[np.int32]
+
 
 class SinksPhysics:
-    def __init__(self, sinks_params: SinksParameters, meshsize: int, boxsize: float):
+    def __init__(
+        self, sinks_params: SinksParameters, meshsize: int, boxsize: float
+    ) -> None:
         self.clumping_model = sinks_params.clumping_model
         self.mfp_model = sinks_params.mfp_model
         self.N = meshsize
@@ -28,12 +34,12 @@ class SinksPhysics:
         else:
             raise ValueError(" MFP model not implemented : %s" % self.mfp_model)
 
+        self.clumping_factor: FloatNDArray
         # Clumping factor parameters
         if self.clumping_model == "constant":
             assert sinks_params.clumping is not None
-            self.clumping_factor = (
-                np.ones((self.N, self.N, self.N), dtype=np.float64)
-                * sinks_params.clumping
+            self.clumping_factor = np.full(
+                (self.N, self.N, self.N), sinks_params.clumping, dtype=np.float64
             )
         else:
             clump_dir = Path(__file__).parent / "tables" / "clumping"
@@ -61,16 +67,20 @@ class SinksPhysics:
                     " Cluming factor model not implemented : %s" % self.clumping_model
                 )
 
-    def mfp_Worseck2014(self, z):
+    def mfp_Worseck2014(self, z: float) -> float:
+        assert self.A_mfp is not None
+        assert self.etha_mfp is not None
+        assert self.eta1_mfp is not None
+        assert self.z1_mfp is not None
         R_mfp = self.A_mfp * ((1 + z) / 5.0) ** self.etha_mfp
         R_mfp = R_mfp * (1 + ((1 + z) / (1 + self.z1_mfp)) ** self.eta1_mfp)
         return R_mfp
 
-    def biashomogeneous_clumping(self, z):
+    def biashomogeneous_clumping(self, z: float) -> FloatNDArray:
         clump_fact = self.C0 * np.exp(self.c1 * z + self.c2 * z**2) + 1.0
-        return clump_fact * np.ones((self.N, self.N, self.N))
+        return np.full((self.N, self.N, self.N), clump_fact, dtype=np.float64)
 
-    def inhomogeneous_clumping(self, z, ndens):
+    def inhomogeneous_clumping(self, z: float, ndens: FloatNDArray) -> FloatNDArray:
         redshift = self.clumping_params[:, 0]
 
         # find nearest redshift bin

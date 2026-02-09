@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, fields
-from typing import Any, Optional, Type, TypeVar, Union
+from typing import Any, Type, TypeVar
 
 import yaml
 
@@ -24,9 +24,9 @@ yaml.SafeLoader.add_implicit_resolver(
     "tag:yaml.org,2002:float", YML_REGEX, list("-+0123456789.")
 )
 
-PathType = Union[str, os.PathLike]
-OptFloat = Optional[float]
-OptStr = Optional[str]
+PathType = str | os.PathLike
+OptFloat = float | None
+OptStr = str | None
 ParametersType = TypeVar("ParametersType", bound="YmlParameters")
 
 
@@ -45,7 +45,7 @@ class YmlParameters:
 
     @classmethod
     def from_file(
-        cls: Type[ParametersType], file: PathType, block: Optional[str] = None
+        cls: Type[ParametersType], file: PathType, block: OptStr = None
     ) -> ParametersType:
         """Read in YAML parameter file"""
         ld = cls.load_yaml(file)
@@ -203,7 +203,7 @@ class SinksParameters(YmlParameters):
 
     # Clumping model, values are "constant", "redshift", "density" or "stochastic"
     clumping_model: str
-    # Mean-free-path model "constant", "Choudhury09"
+    # Mean-free-path model "constant", "Choudhury09", "Worseck2014"
     mfp_model: str
     # Clumping factor for the constant model
     clumping: OptFloat = None
@@ -214,9 +214,9 @@ class SinksParameters(YmlParameters):
     # Spectral index of the Choudhury09 mean-free-path model redshift evolution
     eta_mfp: OptFloat = None
     # TODO: add a description
-    z1_mfp: OptFloat = None
-    # TODO: add a description
     eta1_mfp: OptFloat = None
+    # TODO: add a description
+    z1_mfp: OptFloat = None
 
     def __post_init__(self) -> None:
         if self.clumping_model not in ("constant", "redshift", "density", "stochastic"):
@@ -224,11 +224,22 @@ class SinksParameters(YmlParameters):
                 f"Clumping model {self.clumping_model} not implemented. "
                 "Choose from 'constant', 'redshift', 'density' or 'stochastic'."
             )
-        if self.mfp_model not in ("constant", "Choudhury09"):
+        if self.mfp_model not in ("constant", "Choudhury09", "Worseck2014"):
             raise ValueError(
                 f"Mean-free-path model {self.mfp_model} not implemented. "
                 "Choose from 'constant' or 'Choudhury09'."
             )
+
+        if self.mfp_model == "Worseck2014":
+            if (
+                self.A_mfp is None
+                or self.eta_mfp is None
+                or self.eta1_mfp is None
+                or self.z1_mfp is None
+            ):
+                raise ValueError(
+                    "A_mfp, eta_mfp, eta1_mfp and z1_mpd must be provided for the Worseck2014 MFP model."
+                )
 
 
 @dataclass

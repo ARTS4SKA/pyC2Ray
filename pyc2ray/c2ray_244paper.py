@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 
 import h5py
 import numpy as np
@@ -9,6 +10,7 @@ import pyc2ray.constants as c
 from .c2ray_base import C2Ray
 from .utils import get_source_redshifts
 from .utils.other_utils import find_bins, get_redshifts_from_output
+from .utils.sourceutils import FloatArray, IntArray, PathType
 
 __all__ = ["C2Ray_244Test"]
 
@@ -21,48 +23,46 @@ logger = logging.getLogger(__name__)
 
 
 class C2Ray_244Test(C2Ray):
-    def __init__(self, paramfile, Nmesh, use_gpu, use_mpi):
+    def __init__(
+        self, paramfile: PathType, Nmesh: int, use_gpu: bool, use_mpi: bool
+    ) -> None:
         """Basis class for a C2Ray Simulation
 
         Parameters
         ----------
-        paramfile : str
-            Name of a YAML file containing parameters for the C2Ray simulation
-        Nmesh : int
-            Mesh size (number of cells in each dimension)
-        use_gpu : bool
-            Whether to use the GPU-accelerated ASORA library for raytracing
+        paramfile : Name of a YAML file containing parameters for the C2Ray simulation
+        Nmesh : Mesh size (number of cells in each dimension)
+        use_gpu : Whether to use the GPU-accelerated ASORA library for raytracing
 
         """
-        super().__init__(paramfile, Nmesh, use_gpu, use_mpi)
+        super().__init__(paramfile)
         logger.info('Running: "C2Ray for 244 Mpc/h test"')
+
+        self.prev_zdens: float
+        self.prev_zsourc: float
 
     # =====================================================================================================
     # TIME-EVOLUTION METHODS
     # =====================================================================================================
-    def set_timestep(self, z1, z2, num_timesteps):
+    def set_timestep(self, z1: float, z2: float, num_timesteps: int) -> float:
         """Compute timestep to use between redshift slices
 
         Parameters
         ----------
-        z1 : float
-            Initial redshift
-        z2 : float
-            Next redshift
-        num_timesteps : int
-            Number of timesteps between the two slices
+        z1 : Initial redshift
+        z2 : Next redshift
+        num_timesteps : Number of timesteps between the two slices
 
         Returns
         -------
-        dt : float
-            Timestep to use in seconds
+        dt : Timestep to use in seconds
         """
         t2 = self.zred2time(z2)
         t1 = self.zred2time(z1)
         dt = (t2 - t1) / num_timesteps
         return dt
 
-    def cosmo_evolve(self, dt):
+    def cosmo_evolve(self, dt: float) -> None:
         """Evolve cosmology over a timestep
 
         Note that if cosmological is set to false in the parameter file, this
@@ -96,7 +96,7 @@ class C2Ray_244Test(C2Ray):
         self.time = t_after
 
     # TODO: factorize with above method
-    def cosmo_evolve_to_now(self):
+    def cosmo_evolve_to_now(self) -> None:
         """Evolve cosmology over a timestep"""
         # Time step
         t_now = self.time
@@ -121,22 +121,20 @@ class C2Ray_244Test(C2Ray):
     # =====================================================================================================
     # UTILITY METHODS
     # =====================================================================================================
-    def time2zred(self, t):
+    def time2zred(self, t: float) -> float:
         """Calculate the redshift corresponding to an age t in seconds"""
         # TODO: it should be then z_at_value(self.cosmology.age, t*u.s).value
         # in C2Ray is defined: time2zred = -1+(1.+zred_t0)*(t0/(t0+time))**(2./3.)
         # return -1+(1.+self.zred_0)*(self.age_0/(self.age_0+t))**(2./3.)
         return -1 + (1.0 + self.zred_0) * (self.age_0 / (t)) ** (2.0 / 3.0)
 
-    def zred2time(self, z, unit="s"):
+    def zred2time(self, z: float, unit: str = "s") -> float:
         """Calculate the age corresponding to a redshift z
 
         Parameters
         ----------
-        z : float
-            Redshift at which to get age
-        unit : str (optional)
-            Unit to get age in astropy naming. Default: seconds
+        z : Redshift at which to get age
+        unit : Unit to get age in astropy naming. Default: seconds
         """
         # TODO : it should be then self.cosmology.age(z).to(unit).value
         # In C2Ray is defined: zred2time = t0*( ((1.0+zred_t0)/(1.0+zred1))**1.5 - 1.0 )
@@ -150,7 +148,7 @@ class C2Ray_244Test(C2Ray):
     # INITIALIZATION METHODS (PRIVATE)
     # =====================================================================================================
 
-    def _cosmology_init(self):
+    def _cosmology_init(self) -> None:
         """Set up cosmology from parameters (H0, Omega,..)"""
         super()._cosmology_init()
 
@@ -174,25 +172,22 @@ class C2Ray_244Test(C2Ray):
     # USER DEFINED METHODS
     # =====================================================================================================
 
-    def read_sources(self, file, mass, ts):  # >:( trgeoip
+    def read_sources(
+        self, file: PathType, mass: float, ts: float
+    ) -> tuple[IntArray, FloatArray]:
         """Read sources from a C2Ray-formatted file
 
         Parameters
         ----------
-        file : str
-            Filename to read
-        n : int
-            Number of sources to read from the file
+        file : Filename to read
+        mass: Mass of the sources in Msun (used to compute the flux normalization)
+        ts: Lifetime of the sources in Myr (used to compute the flux normalization)
 
         Returns
         -------
-        srcpos : array
-            Grid positions of the sources formatted in a suitable way for the chosen
+        srcpos : Grid positions of the sources formatted in a suitable way for the chosen
             raytracing algorithm
-        normflux : array
-            Normalization of the flux of each source (relative to S_star)
-        numsrc : int
-            Number of sources read from the file
+        normflux : Normalization of the flux of each source (relative to S_star)
         """
         S_star_ref = 1e48
 
@@ -213,7 +208,7 @@ class C2Ray_244Test(C2Ray):
             / (c.m_p * ts * self.cosmology.Om0)
         )
 
-        if file.endswith(".hdf5"):
+        if Path(file).suffix == ".hdf5":
             f = h5py.File(file, "r")
             srcpos = f["sources_positions"][:].T
             assert srcpos.shape[0] == 3
@@ -244,7 +239,7 @@ class C2Ray_244Test(C2Ray):
         )
         return srcpos, normflux
 
-    def read_density(self, z):
+    def read_density(self, z: float) -> None:
         """Read coarser density field from C2Ray-formatted file
 
         This method is meant for reading density field run with either
@@ -301,23 +296,22 @@ class C2Ray_244Test(C2Ray):
             # for the density (can be extended to sources too)
             pass
 
-    def write_output(self, z):
+    def write_output(self, z: float, ext: str = ".dat") -> None:
         """Write ionization fraction & ionization rates as C2Ray binary files
 
         Parameters
         ----------
-        z : float
-            Redshift (used to name the file)
+        z : Redshift (used to name the file)
         """
         suffix = f"_{z:.3f}.dat"
         t2c.save_cbin(
-            filename=self.results_basename + "xfrac" + suffix,
+            filename=self.results_basename / f"xfrac{suffix}",
             data=self.xh,
             bits=64,
             order="F",
         )
         t2c.save_cbin(
-            filename=self.results_basename + "IonRates" + suffix,
+            filename=self.results_basename / f"IonRates{suffix}",
             data=self.phi_ion,
             bits=32,
             order="F",
@@ -344,7 +338,7 @@ class C2Ray_244Test(C2Ray):
     # Below are the overridden initialization routines specific to the CubeP3M case
     # =============================================================================
 
-    def _redshift_init(self):
+    def _redshift_init(self) -> None:
         """Initialize time and redshift counter"""
         self.zred_density = t2c.get_dens_redshifts(
             self.inputs_basename + "coarser_densities/"
@@ -370,7 +364,7 @@ class C2Ray_244Test(C2Ray):
         self.time = self.zred2time(self.zred)
         # self.time = self.age_0
 
-    def _material_init(self):
+    def _material_init(self) -> None:
         """Initialize material properties of the grid"""
         if self.resume:
             # get fields at the resuming redshift
@@ -399,24 +393,27 @@ class C2Ray_244Test(C2Ray):
 
     @property
     def fgamma_hm(self) -> float:
+        assert self.sources_params.fgamma_hm is not None
         return self.sources_params.fgamma_hm
 
     @property
     def fgamma_lm(self) -> float:
+        assert self.sources_params.fgamma_lm is not None
         return self.sources_params.fgamma_lm
 
     @property
     def ts(self) -> float:
+        assert self.sources_params.ts is not None
         return self.sources_params.ts * c.year2s * 1e6
 
-    def _sources_init(self):
+    def _sources_init(self) -> None:
         """Initialize settings to read source files"""
         logger.info(
             f"Using UV model with fgamma_lm = {self.fgamma_lm:.1f} "
             f"and fgamma_hm = {self.fgamma_hm:.1f}"
         )
 
-    def _grid_init(self):
+    def _grid_init(self) -> None:
         """Set up grid properties"""
         # Comoving quantities
         self.boxsize_c = self.boxsize * c.Mpc / self.cosmology_params.h
@@ -430,6 +427,7 @@ class C2Ray_244Test(C2Ray):
         self.dr = self.dr_c
 
         # Set R_max (LLS 3) in cell units
+        assert self.sinks_params.R_max_cMpc is not None
         self.R_max_LLS = (
             self.sinks_params.R_max_cMpc
             * self.N

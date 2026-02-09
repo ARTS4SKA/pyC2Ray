@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 
 import h5py
 import numpy as np
@@ -9,6 +10,7 @@ import pyc2ray.constants as c
 
 from .c2ray_base import C2Ray
 from .utils.other_utils import find_bins, get_redshifts_from_output
+from .utils.sourceutils import FloatArray, IntArray, PathType
 
 __all__ = ["C2Ray_CubeP3M"]
 
@@ -21,22 +23,23 @@ logger = logging.getLogger(__name__)
 
 
 class C2Ray_CubeP3M(C2Ray):
-    def __init__(self, paramfile, Nmesh, use_gpu):
+    def __init__(self, paramfile: PathType, Nmesh: int, use_gpu: bool) -> None:
         """A C2Ray CubeP3M simulation
 
         Parameters
         ----------
-        paramfile : str
-            Name of a YAML file containing parameters for the C2Ray simulation
-        Nmesh : int
-            Mesh size (number of cells in each dimension)
-        use_gpu : bool
-            Whether to use the GPU-accelerated ASORA library for raytracing
+        paramfile : Name of a YAML file containing parameters for the C2Ray simulation
+        Nmesh : Mesh size (number of cells in each dimension)
+        use_gpu : Whether to use the GPU-accelerated ASORA library for raytracing
         """
-        super().__init__(paramfile, Nmesh, use_gpu)
+        super().__init__(paramfile)
         logger.info('Running: "C2Ray CubeP3M"')
 
-    def read_sources(self, file, mass="hm"):
+        self.prev_zdens: float
+
+    def read_sources(
+        self, file: PathType, mass: str = "hm"
+    ) -> tuple[IntArray, FloatArray]:
         """Read sources from a C2Ray-formatted file
 
         The way sources are dealt with is still open and will change significantly
@@ -57,10 +60,8 @@ class C2Ray_CubeP3M(C2Ray):
 
         Parameters
         ----------
-        file : str
-            Filename to read
-        n : int
-            Number of sources to read from the file
+        file : Filename to read
+        mass : ???
 
         Returns
         -------
@@ -81,7 +82,7 @@ class C2Ray_CubeP3M(C2Ray):
             / (self.mean_molecular * c.m_p * self.ts * self.cosmology.Om0)
         )
 
-        if file.endswith(".hdf5"):
+        if Path(file).suffix == ".hdf5":
             f = h5py.File(file, "r")
             srcpos = f["sources_positions"][:].T
             assert srcpos.shape[0] == 3
@@ -108,15 +109,14 @@ class C2Ray_CubeP3M(C2Ray):
         )
         return srcpos, normflux
 
-    def read_density(self, z):
+    def read_density(self, z: float) -> None:
         """Read coarser density field from C2Ray-formatted file
 
         This method is meant for reading density field run with either N-body or hydro-dynamical simulations. The field is then smoothed on a coarse mesh grid.
 
         Parameters
         ----------
-        n : int
-            Number of sources to read from the file
+        z : Redshift
 
         Returns
         -------
@@ -163,23 +163,22 @@ class C2Ray_CubeP3M(C2Ray):
             # TODO: in the future use this values for a 3D interpolation for the density (can be extended to sources too)
             pass
 
-    def write_output(self, z):
+    def write_output(self, z: float, ext: str = ".dat") -> None:
         """Write ionization fraction & ionization rates as C2Ray binary files
 
         Parameters
         ----------
-        z : float
-            Redshift (used to name the file)
+        z : Redshift (used to name the file)
         """
         suffix = f"_{z:.3f}.dat"
         t2c.save_cbin(
-            filename=self.results_basename + "xfrac" + suffix,
+            filename=self.results_basename / f"xfrac{suffix}",
             data=self.xh,
             bits=64,
             order="F",
         )
         t2c.save_cbin(
-            filename=self.results_basename + "IonRates" + suffix,
+            filename=self.results_basename / f"IonRates{suffix}",
             data=self.phi_ion,
             bits=32,
             order="F",
@@ -206,7 +205,7 @@ class C2Ray_CubeP3M(C2Ray):
     # Below are the overridden initialization routines specific to the CubeP3M case
     # =====================================================================================================
 
-    def _redshift_init(self):
+    def _redshift_init(self) -> None:
         """Initialize time and redshift counter"""
         self.zred_density = t2c.get_dens_redshifts(
             self.inputs_basename + "coarser_densities/"
@@ -229,7 +228,7 @@ class C2Ray_CubeP3M(C2Ray):
         self.time = self.age_0
         self.zred = self.zred_0
 
-    def _material_init(self):
+    def _material_init(self) -> None:
         """Initialize material properties of the grid"""
         if self.resume:
             # get fields at the resuming redshift
@@ -259,10 +258,12 @@ class C2Ray_CubeP3M(C2Ray):
 
     @property
     def fgamma_hm(self) -> float:
+        assert self.sources_params.fgamma_hm is not None
         return self.sources_params.fgamma_hm
 
     @property
     def fgamma_lm(self) -> float:
+        assert self.sources_params.fgamma_lm is not None
         return self.sources_params.fgamma_lm
 
     @property

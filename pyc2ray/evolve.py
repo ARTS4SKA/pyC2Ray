@@ -3,14 +3,13 @@ import logging
 import time
 
 import numpy as np
-import numpy.typing as npt
 from mpi4py import MPI
 
 from .asora_core import is_device_init
 from .load_extensions import libasora, libc2ray
 from .utils import display_time
 from .utils.logutils import disable_newline
-from .utils.sourceutils import format_sources
+from .utils.sourceutils import FloatArray, IntArray, format_sources
 
 __all__ = ["evolve3D"]
 
@@ -43,8 +42,8 @@ logger = logging.getLogger(__name__)
 def evolve3D(
     dt: float,
     dr: float,
-    src_flux: npt.NDArray,
-    src_pos: npt.NDArray,
+    src_flux: FloatArray,
+    src_pos: IntArray,
     src_batch_size: int,
     use_gpu: bool,
     max_subbox: int,
@@ -54,12 +53,12 @@ def evolve3D(
     comm: MPI.Intracomm,
     rank: int,
     nprocs: int,
-    temp: npt.NDArray,
-    ndens: npt.NDArray,
-    xh: npt.NDArray,
-    clump: float,
-    photo_thin_table: npt.NDArray,
-    photo_thick_table: npt.NDArray,
+    temp: FloatArray,
+    ndens: FloatArray,
+    xh: FloatArray,
+    clump: FloatArray,
+    photo_thin_table: FloatArray,
+    photo_thick_table: FloatArray,
     minlogtau: float,
     dlogtau: float,
     R_max_LLS: float,
@@ -70,7 +69,7 @@ def evolve3D(
     colh0: float,
     temph0: float,
     abu_c: float,
-) -> tuple[npt.NDArray, npt.NDArray]:
+) -> tuple[FloatArray, FloatArray]:
     """Evolves the ionization fraction over one timestep for the whole grid
 
     Warning: Calling this function with use_gpu = True assumes that the radiation

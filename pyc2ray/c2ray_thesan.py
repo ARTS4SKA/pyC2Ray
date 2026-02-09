@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 
 import h5py
 import numpy as np
@@ -6,6 +7,7 @@ import tools21cm as t2c
 
 import pyc2ray as pc2r
 import pyc2ray.constants as c
+from pyc2ray.utils.sourceutils import FloatArray, IntArray, PathType
 
 from .c2ray_base import C2Ray
 from .utils import bin_sources
@@ -32,13 +34,12 @@ def func(x, a, b):
 
 
 class C2Ray_Thesan(C2Ray):
-    def __init__(self, paramfile):
+    def __init__(self, paramfile: PathType) -> None:
         """Basis class for a C2Ray Simulation
 
         Parameters
         ----------
-        paramfile : str
-            Name of a YAML file containing parameters for the C2Ray simulation
+        paramfile : Name of a YAML file containing parameters for the C2Ray simulation
 
         """
         super().__init__(paramfile)
@@ -58,29 +59,33 @@ class C2Ray_Thesan(C2Ray):
     # USER DEFINED METHODS
     # =====================================================================================================
 
-    def ionizing_flux(self, file, z, dt, rad_feedback=False, save_Mstar=False):
+    def ionizing_flux(
+        self,
+        file: PathType,
+        z: float,
+        dt: float,
+        rad_feedback: bool = False,
+        save_Mstar: bool = False,
+    ) -> tuple[IntArray, FloatArray]:
         """Read sources from a C2Ray-formatted file
         Parameters
         ----------
-        file : str
-            Filename to read.
-        ts : float
-            time-step in Myrs.
-        kind: str
-            The kind of source model to use.
+        file : Filename to read.
+        z : redshift
+        dt : time-step in Myrs.
+        rad_feedback : ?
+        save_Mstar : ?
 
-        Returns<
+        Returns
         -------
-        srcpos : array
-            Grid positions of the sources formatted in a suitable way for the chosen raytracing algorithm
-        normflux : array
-            Normalization of the flux of each source (relative to S_star)
+        srcpos : Grid positions of the sources formatted in a suitable way for the chosen raytracing algorithm
+        normflux : Normalization of the flux of each source (relative to S_star)
         """
         S_star_ref = 1e48
 
         # read halo list
         srcpos_mpc, srcmass_msun = self.read_haloes(
-            self.sources_basename + file, self.boxsize
+            f"{self.sources_basename}{file}", self.boxsize
         )
 
         # select table based on the closest redshift
@@ -173,36 +178,38 @@ class C2Ray_Thesan(C2Ray):
 
         return srcpos, normflux
 
-    def read_haloes(self, halo_file, box_len):
+    def read_haloes(
+        self, halo_file: PathType, box_len: float
+    ) -> tuple[IntArray, FloatArray]:
         """Read haloes from a file.
 
         Parameters
         ----------
-        halo_file : str
-            Filename to read
+        halo_file : Filename to read
+        box_len : Box length in Mpc/h
 
         Returns
         -------
-        srcpos_mpc : array
-            Positions of the haloes in Mpc.
-        srcmass_msun : array
-            Masses of the haloes in Msun.
+        srcpos_mpc : Positions of the haloes in Mpc.
+        srcmass_msun : Masses of the haloes in Msun.
         """
 
-        if halo_file.endswith(".hdf5"):
+        suffix = Path(halo_file).suffix
+        if suffix == ".hdf5":
             # Read haloes from a CUBEP3M file format converted in hdf5.
             f = h5py.File(halo_file)
             h = f.attrs["h"]
             srcmass_msun = f["mass"][:] / h  # Msun
             srcpos_mpc = f["pos"][:] / h  # Mpc
             f.close()
-        elif halo_file.endswith(".dat"):
+        elif suffix == ".dat":
             # Read haloes from a CUBEP3M file format.
             hl = t2c.HaloCubeP3MFull(filename=halo_file, box_len=box_len)
-            h = self.h
+            # FIXME: unknown attribute
+            h = self.h  # type: ignore
             srcmass_msun = hl.get(var="m") / h  # Msun
             srcpos_mpc = hl.get(var="pos") / h  # Mpc
-        elif halo_file.endswith(".txt"):
+        elif suffix == ".txt":
             # Read haloes from a PKDGrav converted in txt.
             hl = np.loadtxt(halo_file)
             srcmass_msun = hl[:, 0] / self.cosmology.h  # Msun
@@ -216,15 +223,15 @@ class C2Ray_Thesan(C2Ray):
             srcpos_mpc /= self.cosmology.h  # Mpc
         return srcpos_mpc, srcmass_msun
 
-    def read_density(self, fbase, z=None):
+    def read_density(self, fbase: str, z: float) -> None:
         """Read coarser density field from C2Ray-formatted file
 
         This method is meant for reading density field run with either N-body or hydro-dynamical simulations. The field is then smoothed on a coarse mesh grid.
 
         Parameters
         ----------
-        fbase : string
-            the file name (cwithout the path) of the file to open
+        fbase : the file name (cwithout the path) of the file to open
+        z : redshift
 
         """
         file = self.density_basename + fbase
@@ -251,7 +258,7 @@ class C2Ray_Thesan(C2Ray):
     # Below are the overridden initialization routines specific to the f_star case
     # =====================================================================================================
 
-    def _redshift_init(self):
+    def _redshift_init(self) -> None:
         """Initialize time and redshift counter"""
         self.zred_density = np.loadtxt(self.density_basename + "redshift_density.txt")
         self.zred_sources = np.loadtxt(self.sources_basename + "redshift_sources.txt")
@@ -267,11 +274,11 @@ class C2Ray_Thesan(C2Ray):
 
         self.time = self.zred2time(self.zred)
 
-    def _material_init(self):
+    def _material_init(self) -> None:
         """Initialize material properties of the grid"""
         if self.resume:
             # get fields at the resuming redshift
-            self.ndens = self.read_density(
+            self.read_density(
                 fbase="CDM_200Mpc_2048.%05d.den.256.0" % self.resume, z=self.prev_zdens
             )
 
@@ -314,7 +321,7 @@ class C2Ray_Thesan(C2Ray):
         else:
             super()._material_init()
 
-    def _sources_init(self):
+    def _sources_init(self) -> None:
         """Initialize settings to read source files"""
         logger.info(""" --- You are using the Thesan source model so:
  NO stellar-to-halo relation model.
