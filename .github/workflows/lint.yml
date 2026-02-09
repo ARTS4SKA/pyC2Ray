@@ -34,11 +34,14 @@ jobs:
       run: |
         pip install .[lint]
 
-    - name: Check code format
+    - name: Check Python code format
       run: ruff format --check pyc2ray/ tests/
 
-    - name: Check code style
+    - name: Check Python code style
       run: ruff check --extend-select I --output-format=concise pyc2ray/ tests/
 
-    - name: Check code style
+    - name: Check Python code type annotations
+      run: mypy pyc2ray/ tests/
+
+    - name: Check C++ and CUDA code style
       run: find src/ -regex '.*\.\(cu\|cuh\|cpp\|h\)' -exec clang-format -n -Werror {} \;

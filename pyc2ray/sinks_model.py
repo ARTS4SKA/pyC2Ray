@@ -1,7 +1,7 @@
-import numpy as np
+from pathlib import Path
+from typing import Callable
 
-# FIXME: use other way to get to __path__, risk of circular import!
-import pyc2ray as pc2r
+import numpy as np
 
 from .parameters import SinksParameters
 from .utils.other_utils import find_bins
@@ -18,6 +18,7 @@ class SinksPhysics:
         # MFP parameters
         if self.mfp_model == "constant":
             # Set R_max (LLS 3) in cell units
+            assert sinks_params.R_max_cMpc is not None
             self.R_mfp_cell_unit = sinks_params.R_max_cMpc / res
         elif self.mfp_model == "Worseck2014":
             self.A_mfp = sinks_params.A_mfp
@@ -29,14 +30,14 @@ class SinksPhysics:
 
         # Clumping factor parameters
         if self.clumping_model == "constant":
-            self.calculate_clumping = (
+            assert sinks_params.clumping is not None
+            self.clumping_factor = (
                 np.ones((self.N, self.N, self.N), dtype=np.float64)
                 * sinks_params.clumping
             )
         else:
-            self.model_res = np.loadtxt(
-                pc2r.__path__[0] + "/tables/clumping/resolutions.txt"
-            )
+            clump_dir = Path(__file__).parent / "tables" / "clumping"
+            self.model_res = np.loadtxt(clump_dir / "resolutions.txt")
 
             # use parameters from tables with similare spatial resolution
             tab_res = self.model_res[
@@ -45,9 +46,9 @@ class SinksPhysics:
 
             # get parameter files
             self.clumping_params = np.loadtxt(
-                pc2r.__path__[0]
-                + "/tables/clumping/par_%s_%.3fMpc.txt" % (self.clumping_model, tab_res)
+                clump_dir / f"par_{self.clumping_model}_{tab_res:.3f}Mpc.txt"
             )
+            self.calculate_clumping: Callable[..., np.ndarray]
             if self.clumping_model == "redshift":
                 self.c2, self.c1, self.C0 = self.clumping_params[:3]
                 self.calculate_clumping = self.biashomogeneous_clumping

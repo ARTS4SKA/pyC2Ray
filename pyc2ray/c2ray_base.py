@@ -802,7 +802,7 @@ Simulation Box size (comoving Mpc): {self.boxsize:.3e}"""
 
         # for clumping factor
         if self.sinks.clumping_model == "constant":
-            self.clumping_factor = self.sinks.calculate_clumping
+            self.clumping_factor = self.sinks.clumping_factor
         elif self.sinks.clumping_model == "redshift":
             self.clumping_factor = self.sinks.calculate_clumping(z=self.zred_0)
         else:

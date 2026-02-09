@@ -3,16 +3,11 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, fields
-from typing import Any, Optional, Union
+from typing import Any, Optional, Type, TypeVar, Union
 
 import yaml
 
 import pyc2ray.constants as c
-
-try:
-    from yaml import CSafeLoader as SafeLoader
-except ImportError:
-    from yaml import SafeLoader
 
 # Configure YML to read scientific notation as floats rather than strings
 YML_REGEX = re.compile(
@@ -25,30 +20,33 @@ YML_REGEX = re.compile(
 |\\.(?:nan|NaN|NAN))$""",
     re.X,
 )
-SafeLoader.add_implicit_resolver(
+yaml.SafeLoader.add_implicit_resolver(
     "tag:yaml.org,2002:float", YML_REGEX, list("-+0123456789.")
 )
 
 PathType = Union[str, os.PathLike]
 OptFloat = Optional[float]
 OptStr = Optional[str]
+ParametersType = TypeVar("ParametersType", bound="YmlParameters")
 
 
 @dataclass
 class YmlParameters:
     @classmethod
-    def load_yaml(cls, file: PathType) -> dict[str, Any]:
+    def load_yaml(cls: Type[ParametersType], file: PathType) -> dict[str, Any]:
         """Read in YAML parameter file"""
         with open(file, "r") as f:
-            return yaml.load(f, SafeLoader)
+            return yaml.load(f, yaml.SafeLoader)
 
     @classmethod
-    def from_dict(cls, yml: dict[str, Any]) -> YmlParameters:
+    def from_dict(cls: Type[ParametersType], yml: dict[str, Any]) -> ParametersType:
         keys = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in yml.items() if k in keys})
 
     @classmethod
-    def from_file(cls, file: PathType, block: Optional[str] = None) -> YmlParameters:
+    def from_file(
+        cls: Type[ParametersType], file: PathType, block: Optional[str] = None
+    ) -> ParametersType:
         """Read in YAML parameter file"""
         ld = cls.load_yaml(file)
         if block is not None:

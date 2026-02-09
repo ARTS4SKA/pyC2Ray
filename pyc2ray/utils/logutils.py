@@ -3,7 +3,7 @@ import os
 import sys
 import warnings
 from contextlib import contextmanager
-from typing import Union
+from typing import Iterator, Union
 
 from mpi4py import MPI
 
@@ -11,7 +11,7 @@ PathType = Union[str, os.PathLike]
 
 
 @contextmanager
-def disable_newline() -> None:
+def disable_newline() -> Iterator[None]:
     """Context manager to temporarily disable terminating character in ALL StreamHandlers."""
     end = logging.StreamHandler.terminator
     logging.StreamHandler.terminator = ""

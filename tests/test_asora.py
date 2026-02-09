@@ -48,6 +48,7 @@ def setup_do_all_sources(
     )
 
     # Allocate tables to GPU device
+    assert libasora is not None
     libasora.photo_table_to_device(photo_thin_table, photo_thick_table)
 
     size = mesh_size**3

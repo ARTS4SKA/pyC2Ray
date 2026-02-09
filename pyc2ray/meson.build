@@ -28,7 +28,6 @@ pyc2ray_sources = [
     'utils/check_source_formalism.py',
     'utils/logutils.py',
     'utils/other_utils.py',
-    'utils/paramutils.py',
     'utils/source_converter.py',
     'utils/sourceutils.py',
     'visualization/__init__.py',

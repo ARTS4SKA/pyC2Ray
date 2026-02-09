@@ -23,6 +23,7 @@ def check_libasora(func):
 
 @check_libasora
 def is_device_init() -> bool:
+    assert libasora is not None
     return libasora.is_device_init()
 
 
@@ -35,12 +36,14 @@ def device_init(rank: int) -> None:
     rank : int
         MPI rank of this process
     """
+    assert libasora is not None
     libasora.device_init(rank)
 
 
 @check_libasora
 def device_close() -> None:
     """Deallocate GPU memory"""
+    assert libasora is not None
     if libasora.is_device_init():
         libasora.device_close()
 
@@ -48,6 +51,7 @@ def device_close() -> None:
 @check_libasora
 def photo_table_to_device(thin_table, thick_table):
     """Copy radiation tables to GPU (optically thin & thick tables)"""
+    assert libasora is not None
     if not libasora.is_device_init():
         raise RuntimeError(
             "GPU not initialized. Please initialize it by calling device_init"

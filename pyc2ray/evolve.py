@@ -293,12 +293,10 @@ Convergence Criterion (Number of points): {conv_criterion: n}
         if use_mpi:
             # collect results from the different MPI processors
             if rank == 0:
-                comm.Reduce(
-                    use_mpi.IN_PLACE, [phi_ion, use_mpi.DOUBLE], op=use_mpi.SUM, root=0
-                )
+                comm.Reduce(MPI.IN_PLACE, [phi_ion, MPI.DOUBLE], op=MPI.SUM, root=0)
             else:
-                comm.Reduce([phi_ion, use_mpi.DOUBLE], None, op=use_mpi.SUM, root=0)
-            comm.Bcast([phi_ion, use_mpi.DOUBLE], root=0)
+                comm.Reduce([phi_ion, MPI.DOUBLE], None, op=MPI.SUM, root=0)
+            comm.Bcast([phi_ion, MPI.DOUBLE], root=0)
 
         if rank == 0:
             # ---------------------
@@ -369,8 +367,8 @@ Convergence Criterion (Number of points): {conv_criterion: n}
 
         if use_mpi:
             # broadcast ionised fraction field
-            comm.Bcast([xh_av_flat, use_mpi.DOUBLE], root=0)
-            comm.Bcast([xh_intermed, use_mpi.DOUBLE], root=0)
+            comm.Bcast([xh_av_flat, MPI.DOUBLE], root=0)
+            comm.Bcast([xh_intermed, MPI.DOUBLE], root=0)
 
             # convert the bool variable to bit
             # converged_array = array.array("i", [converged])
@@ -392,6 +390,6 @@ Convergence Criterion (Number of points): {conv_criterion: n}
 
     if use_mpi:
         # braodcast final result
-        comm.Bcast([xh_new, use_mpi.DOUBLE], root=0)
+        comm.Bcast([xh_new, MPI.DOUBLE], root=0)
 
     return xh_new, phi_ion

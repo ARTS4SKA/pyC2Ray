@@ -180,4 +180,5 @@ axs[1].loglog(freq_min, cross_section_HeII, label="HeII", marker="x", color="lim
 axs[1].set_xlabel(r"$\nu$ [Hz]"), axs[1].set_ylabel(r"$\sigma_\nu$ $[cm^2]$")
 
 plt.savefig("plot_crossect.png", bbox_inches="tight")
-plt.show(), plt.clf()
+plt.show()
+plt.clf()
