@@ -131,7 +131,7 @@ class C2Ray_Test(C2Ray):
             redshift = z
         else:
             redshift = self.zred_0
-        self.ndens = ndens * np.ones(self.shape, order="F") * (1 + redshift) ** 3
+        self.ndens = np.full(self.shape, ndens * (1 + redshift) ** 3, order="F")
 
     def generate_redshift_array(self, num_zred: int, delta_t: float) -> FloatArray:
         """Helper function to generate a list of equally-time-spaced redshifts

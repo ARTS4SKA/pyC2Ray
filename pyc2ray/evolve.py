@@ -152,8 +152,8 @@ def evolve3D(
     conv_criterion = min(int(convergence_fraction * NumCells), (NumSrc - 1) / 3)
 
     # Initialize convergence metrics
-    prev_sum_xh1_int = 2 * NumCells
-    prev_sum_xh0_int = 2 * NumCells
+    prev_sum_xh1_int: float = 2 * NumCells
+    prev_sum_xh0_int: float = 2 * NumCells
     converged = False
     if rank != 0:
         xh_new = np.empty_like(xh)
