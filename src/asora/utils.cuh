@@ -28,6 +28,16 @@ namespace asora {
 
     }  // namespace c
 
+    // Fortran-type modulo function (C modulo is signed)
+    __host__ __device__ int modulo(int a, int b);
+
+    // Flat-array index from 3D (i,j,k) indices
+    __device__ int mem_offset(int i, int j, int k, int N);
+
+#if !defined(PERIODIC)
+    __device__ bool in_box(const int &i, const int &j, const int &k, const int &N);
+#endif
+
     // Mapping from octahedral shells (q, s) to 3D cartesian coordinates (i, j, k) and
     // back.
     __host__ __device__ cuda::std::array<int, 3> linthrd2cart(int q, int s);
@@ -38,5 +48,39 @@ namespace asora {
 
     // Return the cumulative number of cells up to the shell.
     __host__ __device__ size_t cells_to_shell(int q);
+
+    // Path inside the cell
+    __host__ __device__ double path_in_cell(int di, int dj, int dk);
+
+    // Compute the geometric factors of the 4 adjacent cells; dk is the largest delta
+    __host__ __device__ cuda::std::array<double, 4> geometric_factors(
+        int di, int dj, int dk
+    );
+
+    // Short-characteristics interpolator
+    class cell_interpolator {
+       public:
+        __device__ cell_interpolator(int di, int dj, int dk);
+
+        // Interpolate the column density values from the previous cells.
+        __device__ double interpolate(
+            const cuda::std::array<const double *__restrict__, 3> &coldens, double sigma
+        );
+
+       private:
+        int _di, _dj, _dk;
+        int _q0;
+        double _mul;
+        cuda::std::array<int, 12> _offsets;
+        cuda::std::array<double, 4> _factors;
+
+        // Get the corresponding q-level of the provided offset.
+        inline __device__ cuda::std::array<int, 2> get_qlevel(
+            int i_off, int j_off, int k_off
+        );
+
+        // True if interpolator is pointing at the origin.
+        inline __device__ bool is_origin();
+    };
 
 }  // namespace asora

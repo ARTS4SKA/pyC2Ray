@@ -15,6 +15,51 @@
 // is passed directly to the C++ functions without additional type checking.
 // ===========================================================================
 
+namespace {
+
+    template <typename T>
+    NPY_TYPES getNpyType();
+
+    template <>
+    NPY_TYPES getNpyType<double>() {
+        return NPY_DOUBLE;
+    }
+
+    template <>
+    NPY_TYPES getNpyType<int>() {
+        return NPY_INT;
+    }
+
+    template <typename T>
+    bool numpy_check(const PyArrayObject *array) {
+        if (!PyArray_Check(array) || PyArray_TYPE(array) != getNpyType<T>()) {
+            using namespace std::string_literals;
+            std::string msg =
+                "array must be a numpy NDArray of type "s + typeid(T).name();
+            PyErr_SetString(PyExc_TypeError, msg.c_str());
+            return false;
+        }
+        return true;
+    }
+
+    template <typename T>
+    bool load_array_to_device(const PyArrayObject *array, asora::buffer_tag tag) {
+        if (!numpy_check<T>(array)) return false;
+
+        auto data = static_cast<T *>(PyArray_DATA(array));
+        auto size = static_cast<size_t>(PyArray_SIZE(array));
+
+        try {
+            asora::device::transfer<T>(tag, data, size);
+        } catch (const std::exception &e) {
+            PyErr_SetString(PyExc_TypeError, e.what());
+            return false;
+        }
+        return true;
+    }
+
+}  // namespace
+
 // ========================================================================
 // Raytrace all sources and compute photoionization rates
 // ========================================================================
@@ -39,14 +84,7 @@ PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) 
         return nullptr;
 
     // Error checking
-    if (!PyArray_Check(xh_av) || PyArray_TYPE(xh_av) != NPY_DOUBLE) {
-        PyErr_SetString(PyExc_TypeError, "xh_av must be Array of type double");
-        return nullptr;
-    }
-    if (!PyArray_Check(phi_ion) || PyArray_TYPE(phi_ion) != NPY_DOUBLE) {
-        PyErr_SetString(PyExc_TypeError, "phi_ion must be Array of type double");
-        return nullptr;
-    }
+    if (!numpy_check<double>(xh_av) || !numpy_check<double>(phi_ion)) return nullptr;
 
     // Get Array data
     auto xh_av_data = static_cast<double *>(PyArray_DATA(xh_av));
@@ -100,45 +138,6 @@ PyObject *asora_is_device_init([[maybe_unused]] PyObject *self, PyObject *args) 
     return asora::device::is_initialized() ? Py_True : Py_False;
 }
 
-namespace {
-
-    template <typename T>
-    NPY_TYPES getNpyType();
-
-    template <>
-    NPY_TYPES getNpyType<double>() {
-        return NPY_DOUBLE;
-    }
-
-    template <>
-    NPY_TYPES getNpyType<int>() {
-        return NPY_INT;
-    }
-
-    template <typename T>
-    bool load_array_to_device(const PyArrayObject *array, asora::buffer_tag tag) {
-        if (!PyArray_Check(array) || PyArray_TYPE(array) != getNpyType<T>()) {
-            using namespace std::string_literals;
-            std::string msg =
-                "array must be a numpy NDArray of type "s + typeid(T).name();
-            PyErr_SetString(PyExc_TypeError, msg.c_str());
-            return false;
-        }
-
-        auto data = static_cast<T *>(PyArray_DATA(array));
-        auto size = static_cast<size_t>(PyArray_SIZE(array));
-
-        try {
-            asora::device::transfer<T>(tag, data, size);
-        } catch (const std::exception &e) {
-            PyErr_SetString(PyExc_TypeError, e.what());
-            return false;
-        }
-        return true;
-    }
-
-}  // namespace
-
 // Copy density grid to GPU
 PyObject *asora_density_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
     PyArrayObject *ndens;
@@ -155,10 +154,10 @@ PyObject *asora_photo_table_to_device([[maybe_unused]] PyObject *self, PyObject 
     PyArrayObject *thin_table, *thick_table;
     return PyArg_ParseTuple(args, "OO", &thin_table, &thick_table) &&
                    load_array_to_device<double>(
-                       thin_table, asora::buffer_tag::photo_thin_table
+                       thin_table, asora::buffer_tag::photo_ion_thin_table
                    ) &&
                    load_array_to_device<double>(
-                       thick_table, asora::buffer_tag::photo_thick_table
+                       thick_table, asora::buffer_tag::photo_ion_thick_table
                    )
                ? Py_None
                : nullptr;
@@ -195,9 +194,9 @@ static PyMethodDef asoraMethods[] = {
     {"density_to_device", asora_density_to_device, METH_VARARGS,
      "Copy density field to GPU"},
     {"photo_table_to_device", asora_photo_table_to_device, METH_VARARGS,
-     "Copy radiation table to GPU"},
+     "Copy radiation tables to GPU"},
     {"source_data_to_device", asora_source_data_to_device, METH_VARARGS,
-     "Copy radiation table to GPU"},
+     "Copy source data to GPU"},
     {NULL, NULL, 0, NULL} /* Sentinel */
 };
 

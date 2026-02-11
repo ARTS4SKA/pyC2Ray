@@ -7,7 +7,9 @@
 #include <Python.h>
 #include <numpy/arrayobject.h>
 
-PyObject *asora_test_cinterp([[maybe_unused]] PyObject *self, PyObject *args) {
+PyObject *asora_test_cell_interpolator(
+    [[maybe_unused]] PyObject *self, PyObject *args
+) {
     PyArrayObject *dens;
 
     // Error checking
@@ -30,13 +32,47 @@ PyObject *asora_test_cinterp([[maybe_unused]] PyObject *self, PyObject *args) {
     try {
         std::array<size_t, 3> cpp_shape;
         std::copy(shape, shape + 3, cpp_shape.begin());
-        asoratest::cinterp_gpu(coldens_data, dens_data, cpp_shape);
+        asoratest::cell_interpolator(coldens_data, dens_data, cpp_shape);
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_MemoryError, e.what());
         return nullptr;
     }
 
     return PyArray_Return(reinterpret_cast<PyArrayObject *>(coldens));
+}
+
+PyObject *asora_test_geometric_factors(
+    [[maybe_unused]] PyObject *self, PyObject *args
+) {
+    PyObject *shape_arg;
+    std::array<size_t, 3> cpp_shape;
+
+    // Error checking
+    if (!PyArg_ParseTuple(args, "O", &shape_arg)) return nullptr;
+    if (!PyArg_ParseTuple(
+            shape_arg, "kkk", &cpp_shape[0], &cpp_shape[1], &cpp_shape[2]
+        )) {
+        PyErr_SetString(PyExc_TypeError, "only shape of dimension 3 is allowed");
+        return nullptr;
+    }
+
+    std::array<npy_intp, 4> np_shape;
+    std::copy(cpp_shape.begin(), cpp_shape.end(), np_shape.begin());
+    np_shape[3] = 4;
+    auto fact = reinterpret_cast<PyArrayObject *>(
+        PyArray_SimpleNew(4, np_shape.data(), NPY_DOUBLE)
+    );
+    auto fact_data = static_cast<double *>(PyArray_DATA(fact));
+
+    // Run test kernel
+    try {
+        asoratest::geometric_factors(fact_data, cpp_shape);
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_MemoryError, e.what());
+        return nullptr;
+    }
+
+    return PyArray_Return(reinterpret_cast<PyArrayObject *>(fact));
 }
 
 PyObject *asora_test_path_in_cell([[maybe_unused]] PyObject *self, PyObject *args) {
@@ -120,9 +156,12 @@ extern "C" {
 // Define module functions and initialization function
 // ========================================================================
 static PyMethodDef asoraMethods[] = {
-    {"cinterp", asora_test_cinterp, METH_VARARGS, "Test cell interpolation algorithm"},
+    {"cell_interpolator", asora_test_cell_interpolator, METH_VARARGS,
+     "Test cell interpolation algorithm"},
+    {"geometric_factors", asora_test_geometric_factors, METH_VARARGS,
+     "Test geometric factors calculations"},
     {"path_in_cell", asora_test_path_in_cell, METH_VARARGS,
-     " Test path-in-cell calculations"},
+     "Test path-in-cell calculations"},
     {"linthrd2cart", asora_test_linthrd2cart, METH_VARARGS,
      "Shell indexing to cartesian coordinates"},
     {"cart2linthrd", asora_test_cart2linthrd, METH_VARARGS,
