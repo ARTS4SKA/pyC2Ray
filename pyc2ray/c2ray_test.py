@@ -1,15 +1,16 @@
-from .c2ray_base import C2Ray, YEAR, Mpc
-from .utils.sourceutils import read_test_sources
-import numpy as np, os
-import pickle as pkl
+import numpy as np
 
-__all__ = ['C2Ray_Test']
+from .c2ray_base import YEAR, C2Ray
+from .utils.sourceutils import read_test_sources
+
+__all__ = ["C2Ray_Test"]
 
 # ======================================================================
 # This file contains the C2Ray_Test subclass of C2Ray, which is a
 # version used for test simulations, i.e. which don't read N-body input
-# and use simple source files
+# and use simple source files
 # ======================================================================
+
 
 class C2Ray_Test(C2Ray):
     def __init__(self, paramfile):
@@ -25,10 +26,11 @@ class C2Ray_Test(C2Ray):
             Whether to use the GPU-accelerated ASORA library for raytracing
         """
         super().__init__(paramfile)
-        if(self.rank == 0): self.printlog('Running: "C2Ray Test"')
+        if self.rank == 0:
+            self.printlog('Running: "C2Ray Test"')
 
-    def read_sources(self,file,numsrc,S_star_ref = 1e48):
-        """ Read in a source file formatted for Test-C2Ray
+    def read_sources(self, file, numsrc, S_star_ref=1e48):
+        """Read in a source file formatted for Test-C2Ray
 
         Read in a file that gives source positions and total ionizing flux
         in s^-1, formatted like for the original C2Ray code, e.g.
@@ -49,7 +51,7 @@ class C2Ray_Test(C2Ray):
             Flux of the reference source. Default: 1e48
             There is no real reason to change this, but if it is changed, the value in src/c2ray/photorates.f90
             has to be changed accordingly and the library recompiled.
-            
+
         Returns
         -------
         src_pos : 2D-array of shape (3,numsrc)
@@ -57,10 +59,9 @@ class C2Ray_Test(C2Ray):
         src_flux : 1D-array of shape (numsrc)
             Normalization of the strength of each source, i.e. total ionizing flux / reference flux
         """
-        return read_test_sources(file,numsrc,S_star_ref)
-        
+        return read_test_sources(file, numsrc, S_star_ref)
 
-    def density_init(self,z):
+    def density_init(self, z):
         """Set density at redshift z
 
         Sets the density to a constant value, specified in the parameter file,
@@ -70,11 +71,11 @@ class C2Ray_Test(C2Ray):
         ----------
         z : float
             Redshift slice
-        
         """
-        self.set_constant_average_density(self.avg_dens,z)
 
-    def set_constant_average_density(self,ndens,z):
+        self.set_constant_average_density(self.avg_dens, z)
+
+    def set_constant_average_density(self, ndens, z):
         """Helper function to set the density grid to a constant value
 
         Parameters
@@ -88,14 +89,14 @@ class C2Ray_Test(C2Ray):
             this parameter has no effect and the initial redshift specified
             in the parameter file is used at each call.
         """
-        # This is the same as in C2Ray
+        # This is the same as in C2Ray
         if self.cosmological:
             redshift = z
         else:
             redshift = self.zred_0
-        self.ndens = ndens * np.ones(self.shape,order='F') * (1+redshift)**3
+        self.ndens = ndens * np.ones(self.shape, order="F") * (1 + redshift) ** 3
 
-    def generate_redshift_array(self,num_zred,delta_t):
+    def generate_redshift_array(self, num_zred, delta_t):
         """Helper function to generate a list of equally-time-spaced redshifts
 
         Generate num_zred redshifts that correspond to cosmic ages
@@ -117,5 +118,5 @@ class C2Ray_Test(C2Ray):
         step = delta_t * YEAR
         zred_array = np.empty(num_zred)
         for i in range(num_zred):
-            zred_array[i] = self.time2zred(self.age_0 + i*step)
+            zred_array[i] = self.time2zred(self.age_0 + i * step)
         return zred_array

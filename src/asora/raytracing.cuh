@@ -1,81 +1,32 @@
 #pragma once
-#include <cuda_runtime.h>
 
-// ========================================================================
-// Header file for OCTA raytracing library.
-// Functions defined and documented in raytracing_gpu.cu
-// ========================================================================
+#include <cuda/std/utility>
 
-// Modulo function with Fortran convention
-inline int modulo(const int & a,const int & b);
-inline __device__ int modulo_gpu(const int & a,const int & b);
+namespace asora {
 
-// Device sign function
-inline __device__ int sign_gpu(const double & x);
+    // Raytrace all sources and compute photoionization rates
+    void do_all_sources_gpu(
+        double R, double sig, double dr, const double *xh_av, double *phi_ion,
+        size_t num_src, size_t m1, double minlogtau, double dlogtau, size_t num_tau,
+        size_t grid_size, size_t block_size = 256
+    );
 
-// Flat array index from i,j,k coordinates
-inline __device__ int mem_offst_gpu(const int & i,const int & j,const int & k,const int & N);
+    // Raytracing kernel, called by do_all_sources
+    __global__ void evolve0D_gpu(
+        double R_max, int q, size_t ns_start, size_t num_src, int *src_pos,
+        double *src_flux, double *coldensh_out, double sig, double dr,
+        const double *ndens, const double *xh_av, double *phi_ion, size_t m1,
+        const double *photo_thin_table, const double *photo_thick_table,
+        double minlogtau, double dlogtau, size_t num_tau
+    );
 
-// Mapping from linear thread space to the cartesian coords of a q-shell in asora
-__device__ void linthrd2cart(const int &,const int &,int&,int&);
+    // Path inside the cell; dk is the largest delta.
+    __device__ double path_in_cell(int di, int dj, int dk);
 
-// Raytrace all sources and compute photoionization rates
-void do_all_sources_gpu(
-    const double & R,
-    double* coldensh_out,
-    const double & sig,
-    const double & dr,
-    double* ndens,
-    double* xh_av,
-    double* phi_ion,
-    const int & NumSrc,
-    const int & m1,
-    const double & minlogtau,
-    const double & dlogtau,
-    const int & NumTau);
+    // Short-characteristics interpolation function
+    __device__ double cinterp_gpu(
+        int di, int dj, int dk, const cuda::std::array<const double *, 3> &shared_cdens,
+        double sigma
+    );
 
-// Raytracing kernel, called by do_all_sources
-__global__ void evolve0D_gpu(
-    const double Rmax_LLS,
-    const int q,
-    const int ns_start,
-    const int num_src_par,
-    const int NumSrc,
-    int* src_pos,
-    double* src_flux,
-    double* coldensh_out,
-    const double sig,
-    const double dr,
-    const double* ndens,
-    const double* xh_av,
-    double* phi_ion,
-    const int m1,
-    const double* photo_thin_table,
-    const double* photo_thick_table,
-    const double minlogtau,
-    const double dlogtau,
-    const int NumTau,
-    const int last_l,
-    const int last_r
-);
-
-// Short-characteristics interpolation function from C2Ray
-__device__ void cinterp_gpu(
-    const int i,
-    const int j,
-    const int k,
-    const int i0,
-    const int j0,
-    const int k0,
-    double & cdensi,
-    double & path,
-    double* coldensh_out,
-    const double sigma_HI_at_ion_freq,
-    const int & m1);
-
-
-// Check if point is in domain (deprecated)
-inline __device__ bool in_box_gpu(const int & i,const int & j,const int & k,const int & N)
-{
-    return (i >= 0 && i < N) && (j >= 0 && j < N) && (k >= 0 && k < N);
-}
+}  // namespace asora
