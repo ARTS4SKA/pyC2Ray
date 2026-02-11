@@ -8,6 +8,9 @@ namespace asora {
     device_buffer::device_buffer(size_t nbytes) : _nbytes(nbytes) {
         std::byte *ptr;
         safe_cuda(cudaMalloc(&ptr, _nbytes));
+
+        // Custom deleter ensures cudaFree is called on destruction
+        // The shared_ptr deleter can't throw, so we ignore any exceptions
         _ptr.reset(ptr, [](std::byte *ptr) {
             try {
                 safe_cuda(cudaFree(ptr));
@@ -46,8 +49,10 @@ namespace asora {
         auto &self = instance();
         if (is_initialized()) return self;
 
-        safe_cuda(cudaGetDeviceCount(&self._gpu_id));
-        self._gpu_id = rank % self._gpu_id;
+        // Map MPI rank to available GPUs using modulo and select the device
+        int device_count;
+        safe_cuda(cudaGetDeviceCount(&device_count));
+        self._gpu_id = rank % device_count;
         safe_cuda(cudaSetDevice(self._gpu_id));
         return self;
     }
@@ -67,6 +72,7 @@ namespace asora {
         return is_initialized() && instance()._memory_pool.contains(tag);
     }
 
+    // Thread-safe singleton by C++11 standard
     device &device::instance() noexcept {
         static device self;
         return self;
@@ -75,7 +81,7 @@ namespace asora {
     void device::check_initialized(const std::source_location &loc) {
         if (!is_initialized()) {
             auto msg = std::format(
-                "device not initialized at At {} in {}:{}; call "
+                "device not initialized at {} in {}:{}; call "
                 "asora::device::initialize(...) before",
                 loc.function_name(), loc.file_name(), loc.line()
             );
@@ -87,6 +93,8 @@ namespace asora {
         check_initialized();
 
         auto &&[it, success] = _memory_pool.try_emplace(tag, nbytes);
+
+        // Throw if tag exists but no copy requested, otherwise copy data
         if (!success && !src) throw std::runtime_error("tag already in use");
         if (src) it->second.copyFromHost(src, nbytes);
     }
