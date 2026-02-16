@@ -9,7 +9,12 @@ from pyc2ray.load_extensions import libasora
 from pyc2ray.radiation.blackbody import BlackBodySource
 from pyc2ray.radiation.common import make_tau_table
 
-if libasora is None:
+from pyc2ray.radiation.blackbody import BlackBodySource
+from pyc2ray.radiation.common import make_tau_table
+
+try:
+    from pyc2ray.lib import libasora as asora
+except ImportError:
     pytest.skip("libasora.so missing, skipping tests", allow_module_level=True)
 
 
@@ -20,8 +25,10 @@ def init_device():
     libasora.device_close()
 
 
-def test_device_init(init_device):
-    libasora.is_device_init()
+def test_device_init():
+    asora.device_init(0)
+    with pytest.raises(Exception):
+        asora.device_init(123)
 
 
 @contextmanager
@@ -47,8 +54,7 @@ def setup_do_all_sources(
         tau, freq_min, freq_max, 1e48
     )
 
-    # Allocate tables to GPU device
-    assert libasora is not None
+    # Allocate tables to default GPU device (= 0)
     libasora.photo_table_to_device(photo_thin_table, photo_thick_table)
 
     size = mesh_size**3
@@ -56,7 +62,7 @@ def setup_do_all_sources(
     ndens = np.full(size, 1e-3, dtype=np.float64)
     xHII = np.full(size, 1e-4, dtype=np.float64)
 
-    # Copy density field to GPU device
+    # Copy density field to default GPU device (= 0)
     libasora.density_to_device(ndens)
 
     # Efficiency factor (converting mass to photons)
@@ -68,7 +74,7 @@ def setup_do_all_sources(
     norm_flux = rng.uniform(1e10, 1e14, size=num_sources).astype(np.float64)
     norm_flux *= f_gamma / 1e48
 
-    # Copy source list to GPU device
+    # Copy source list to default GPU device (= 0)
     libasora.source_data_to_device(src_pos, norm_flux)
 
     # Size of a cell
@@ -91,7 +97,13 @@ def setup_do_all_sources(
     )
 
 
-def test_do_all_sources(data_dir, init_device):
+def test_do_all_sources_wrong_device(data_dir):
+    with setup_do_all_sources() as args:
+        with pytest.raises(Exception):
+            asora.do_all_sources(*args, 123)
+
+
+def test_do_all_sources(data_dir):
     with setup_do_all_sources() as args:
         libasora.do_all_sources(*args)
 

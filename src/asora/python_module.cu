@@ -6,6 +6,8 @@
 #include <Python.h>
 #include <numpy/arrayobject.h>
 
+#include <iostream>
+
 /* @file python_module.cu
  * @brief ASORA Python C-extension module
  *
@@ -45,14 +47,16 @@ namespace {
 
     /// Load numpy array data to device buffer with error handling
     template <typename T>
-    bool load_array_to_device(const PyArrayObject *array, asora::buffer_tag tag) {
+    bool load_array_to_device(
+        const PyArrayObject *array, asora::buffer_tag tag, unsigned int gpu_id = 0
+    ) {
         if (!numpy_check<T>(array)) return false;
 
         auto data = static_cast<T *>(PyArray_DATA(array));
         auto size = static_cast<size_t>(PyArray_SIZE(array));
 
         try {
-            asora::device::transfer<T>(tag, data, size);
+            asora::get_device_pool(gpu_id).transfer<T>(tag, data, size);
         } catch (const std::exception &e) {
             PyErr_SetString(PyExc_TypeError, e.what());
             return false;
@@ -76,10 +80,11 @@ PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) 
     size_t num_tau;
     size_t grid_size;
     size_t block_size = 256;
+    unsigned int gpu_id = 0;
 
     if (!PyArg_ParseTuple(
-            args, "dddOOkkddkk|k", &R, &sig, &dr, &xh_av, &phi_ion, &num_src, &m1,
-            &minlogtau, &dlogtau, &num_tau, &grid_size, &block_size
+            args, "dddOOkkddkk|kI", &R, &sig, &dr, &xh_av, &phi_ion, &num_src, &m1,
+            &minlogtau, &dlogtau, &num_tau, &grid_size, &block_size, &gpu_id
         ))
         return nullptr;
 
@@ -93,7 +98,7 @@ PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) 
     try {
         asora::do_all_sources_gpu(
             R, sig, dr, xh_av_data, phi_ion_data, num_src, m1, minlogtau, dlogtau,
-            num_tau, grid_size, block_size
+            num_tau, grid_size, block_size, gpu_id
         );
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
@@ -103,14 +108,14 @@ PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) 
     return Py_None;
 }
 
-/// Expose asora::device::initialize
+/// Create a memory pool instance for the specified GPU.
 PyObject *asora_device_init([[maybe_unused]] PyObject *self, PyObject *args) {
-    unsigned int mpi_rank = 0;
-    if (!PyArg_ParseTuple(args, "|I", &mpi_rank)) return nullptr;
+    unsigned int gpu_id = 0;
+    if (!PyArg_ParseTuple(args, "|I", &gpu_id)) return nullptr;
 
     try {
         // Initialize the device
-        asora::device::initialize(mpi_rank);
+        asora::get_device_pool(gpu_id);
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_MemoryError, e.what());
         return nullptr;
@@ -119,63 +124,57 @@ PyObject *asora_device_init([[maybe_unused]] PyObject *self, PyObject *args) {
     return Py_None;
 }
 
-/// Expose asora::device::close
+/// Expose asora::memory_pool::free
 PyObject *asora_device_close([[maybe_unused]] PyObject *self, PyObject *args) {
-    if (!PyArg_ParseTuple(args, "")) return nullptr;
+    unsigned int gpu_id = 0;
+    if (!PyArg_ParseTuple(args, "|I", &gpu_id)) return nullptr;
 
     try {
-        asora::device::close();
+        asora::get_device_pool(gpu_id).free();
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_MemoryError, e.what());
         return nullptr;
     }
     return Py_None;
-}
-
-/// Expose asora::device::is_initialized.
-PyObject *asora_is_device_init([[maybe_unused]] PyObject *self, PyObject *args) {
-    if (!PyArg_ParseTuple(args, "")) return nullptr;
-
-    return asora::device::is_initialized() ? Py_True : Py_False;
 }
 
 /// Allocate and copy density grid to the device.
 PyObject *asora_density_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
     PyArrayObject *ndens;
-    return PyArg_ParseTuple(args, "O", &ndens) &&  //
-                   load_array_to_device<double>(
-                       ndens, asora::buffer_tag::number_density
-                   )
-               ? Py_None
-               : nullptr;
+    unsigned int gpu_id = 0;
+    if (!PyArg_ParseTuple(args, "O|I", &ndens, &gpu_id)) return nullptr;
+    if (!load_array_to_device<double>(ndens, asora::buffer_tag::number_density, gpu_id))
+        return nullptr;
+    return Py_None;
 }
 
 /// Allocate and copy radiation tables to the device.
 PyObject *asora_photo_table_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
     PyArrayObject *thin_table, *thick_table;
-    return PyArg_ParseTuple(args, "OO", &thin_table, &thick_table) &&
-                   load_array_to_device<double>(
-                       thin_table, asora::buffer_tag::photo_ion_thin_table
-                   ) &&
-                   load_array_to_device<double>(
-                       thick_table, asora::buffer_tag::photo_ion_thick_table
-                   )
-               ? Py_None
-               : nullptr;
+    unsigned int gpu_id = 0;
+    if (!PyArg_ParseTuple(args, "OO|I", &thin_table, &thick_table, &gpu_id))
+        return nullptr;
+    if (!load_array_to_device<double>(
+            thin_table, asora::buffer_tag::photo_ion_thin_table, gpu_id
+        ))
+        return nullptr;
+    if (!load_array_to_device<double>(
+            thick_table, asora::buffer_tag::photo_ion_thick_table, gpu_id
+        ))
+        return nullptr;
+    return Py_None;
 }
 
 /// Allocate and copy source properties to the device.
 PyObject *asora_source_data_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
     PyArrayObject *src_pos, *src_flux;
-    return PyArg_ParseTuple(args, "OO", &src_pos, &src_flux) &&
-                   load_array_to_device<int>(
-                       src_pos, asora::buffer_tag::source_position
-                   ) &&
-                   load_array_to_device<double>(
-                       src_flux, asora::buffer_tag::source_flux
-                   )
-               ? Py_None
-               : nullptr;
+    unsigned int gpu_id = 0;
+    if (!PyArg_ParseTuple(args, "OO|I", &src_pos, &src_flux, &gpu_id)) return nullptr;
+    if (!load_array_to_device<int>(src_pos, asora::buffer_tag::source_position, gpu_id))
+        return nullptr;
+    if (!load_array_to_device<double>(src_flux, asora::buffer_tag::source_flux, gpu_id))
+        return nullptr;
+    return Py_None;
 }
 
 PyObject *asora_chemistry_global_pass([[maybe_unused]] PyObject *self, PyObject *args) {
@@ -232,8 +231,6 @@ static PyMethodDef asoraMethods[] = {
     {"device_init", asora_device_init, METH_VARARGS,
      "Initialize device and allocate memory"},
     {"device_close", asora_device_close, METH_VARARGS, "Close device and free memory"},
-    {"is_device_init", asora_is_device_init, METH_VARARGS,
-     "Check if the device is initialized"},
     {"density_to_device", asora_density_to_device, METH_VARARGS,
      "Copy density field to the device"},
     {"photo_table_to_device", asora_photo_table_to_device, METH_VARARGS,

@@ -10,7 +10,7 @@ except ImportError:
     pytest.skip("libasoratest.so missing, skipping tests", allow_module_level=True)
 
 
-def test_path_in_cell() -> None:
+def test_path_in_cell(init_device) -> None:
     def create_path_in_cell_data(N: int) -> NDArray:
         """Return the length of the ray intersecting cell at pos emitted from pos0"""
         N2 = N // 2
@@ -32,7 +32,7 @@ def test_path_in_cell() -> None:
     assert np.allclose(path, expected)
 
 
-def test_geometric_factors() -> None:
+def test_geometric_factors(init_device) -> None:
     def create_geometric_factors_data(N: int) -> NDArray:
         """Return the geometric interpolation factors (weights) for the 4 adjacent cells"""
         N2 = N // 2
@@ -59,7 +59,7 @@ def test_geometric_factors() -> None:
     assert np.allclose(facts, expected)
 
 
-def test_cell_interpolator(data_dir: Path) -> None:
+def test_cell_interpolator(init_device, data_dir: Path) -> None:
     rng = np.random.default_rng(seed=42)
     N = 11
     dens = rng.random((N, N, N), dtype=np.float64)

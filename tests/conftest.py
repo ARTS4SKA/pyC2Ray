@@ -13,3 +13,16 @@ def test_dir() -> Path:
 def data_dir(test_dir: Path) -> Path:
     """Return the path to the data folder for tests"""
     return test_dir / "data"
+
+
+@pytest.fixture
+def init_device():
+    try:
+        from pyc2ray.lib import libasora
+    except ImportError:
+        return
+
+    DEFAULT_GPU = 0
+    libasora.device_init(DEFAULT_GPU)
+    yield
+    libasora.device_close(DEFAULT_GPU)

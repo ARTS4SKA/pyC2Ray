@@ -23,11 +23,12 @@ namespace asora {
      * @param num_tau Number of optical depth bins
      * @param grid_size GPU grid size for kernel launch
      * @param block_size GPU block size for kernel launch (default: 256)
+     * @param gpu_id ID of the GPU to use for computation (default: 0)
      */
     void do_all_sources_gpu(
         double R, double sig, double dr, const double *xh_av, double *phi_ion,
         size_t num_src, size_t m1, double minlogtau, double dlogtau, size_t num_tau,
-        size_t grid_size, size_t block_size = 256
+        size_t grid_size, size_t block_size = 256, unsigned int gpu_id = 0
     );
 
     /* @brief Data structure for chemical element properties used in raytracing
