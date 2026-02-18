@@ -315,10 +315,20 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             )
 
             # TODO: the line below is the same function but completely in python
-            # (much slower then the fortran version, due to a lot of loops)
             # xh_intermed, xh_av, conv_flag = global_pass(
-            #     dt, ndens, temp, xh, xh_av, xh_intermed, phi_ion,
-            #     clump, bh00, albpow, colh0, temph0, abu_c,
+            #     dt,
+            #     ndens,
+            #     temp,
+            #     xh,
+            #     xh_av,
+            #     xh_intermed,
+            #     phi_ion,
+            #     clump,
+            #     bh00,
+            #     albpow,
+            #     colh0,
+            #     temph0,
+            #     abu_c,
             # )
 
             logger.info(f"took {(time.time() - tch0): .1f} s.")
@@ -370,7 +380,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             # converged_array = array.array("i", [converged])
             converged_array = array.array("i", [int(converged)])
 
-            # braodcast convergence to the other ranks
+            # broadcast convergence to the other ranks
             MPI.COMM_WORLD.Bcast(converged_array, root=0)
             if rank != 0:
                 converged = bool(converged_array[0])
@@ -383,7 +393,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
         xh_new = xh_intermed
 
     if use_mpi:
-        # braodcast final result
+        # broadcast final result
         MPI.COMM_WORLD.Bcast([xh_new, MPI.DOUBLE], root=0)
 
     return xh_new, phi_ion
