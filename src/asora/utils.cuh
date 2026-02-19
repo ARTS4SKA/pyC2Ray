@@ -64,7 +64,7 @@ namespace asora {
      * @param[in] N Grid size (assumed cubic)
      * @return Flat index into 1D array
      */
-    __device__ int ravel_index(int i, int j, int k, int N);
+    __device__ size_t ravel_index(int i, int j, int k, int N);
 
     /* @brief Check if grid indices are within bounds.
      *
@@ -74,7 +74,7 @@ namespace asora {
      * @param[in] N Grid size
      * @return True if (i,j,k) is inside [0,N)^3
      */
-    __device__ bool in_box(const int &i, const int &j, const int &k, const int &N);
+    __device__ bool in_box(int i, int j, int k, int N);
 
     /* @brief Convert octahedral (q,s) coordinates to Cartesian (i,j,k).
      *

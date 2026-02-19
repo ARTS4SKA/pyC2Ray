@@ -127,25 +127,6 @@ class C2Ray:
         self.xh: FloatArray
         self.clumping_factor: FloatArray
 
-        # Initialize output and logger. Waits for all ranks to reach this point.
-        self._output_init()
-
-        # Initialize Simulation
-        self._grid_init()
-        self._cosmology_init()
-        self._redshift_init()
-        self._material_init()
-        self._sources_init()
-        self._radiation_init()
-        self._sinks_init()
-
-        if self.mpi and MPI.COMM_WORLD.Get_size() <= 1:
-            logger.warning(
-                "Requested to enable MPI but there is only one process available. "
-                "Try to run this application with a higher number of processes. Disabling MPI."
-            )
-            self.grid_params.mpi = False
-
         # MPI setup
         if self.mpi:
             self.rank = MPI.COMM_WORLD.Get_rank()
@@ -153,6 +134,13 @@ class C2Ray:
         else:
             self.rank = 0
             self.nprocs = 1
+
+        if self.mpi and MPI.COMM_WORLD.Get_size() <= 1:
+            logger.warning(
+                "Requested to enable MPI but there is only one process available. "
+                "Try to run this application with a higher number of processes. Disabling MPI."
+            )
+            self.grid_params.mpi = False
 
         # Set Raytracing mode
         if self.gpu:
@@ -173,11 +161,19 @@ class C2Ray:
             # Register deallocation function (automatically calls this on program termination)
             atexit.register(device_close)
 
-            # logger.info(
-            #     "\tNode name: %s\n\ttask_id: %d\n\tlocal task id: %d\n\tgpu_ids: %s\n"
-            #     "\ttot gpu job: %s\n\ttot gpu on node: %d",
-            #     node_name, task_id, local_task_id, gpu_ids, tot_gpus, nr_gpus,
-            # )
+        # Initialize output and logger. Waits for all ranks to reach this point.
+        self._output_init()
+
+        # Initialize Simulation
+        self._grid_init()
+        self._cosmology_init()
+        self._redshift_init()
+        self._material_init()
+        self._sources_init()
+        self._radiation_init()
+        self._sinks_init()
+
+        if self.gpu:
             # Print maximum shell size for info, based on LLS (qmax is s.t. Rmax fits inside of it)
             q_max = np.ceil(np.sqrt(3) * min(self.R_max_LLS, np.sqrt(3) * self.N / 2))
             logger.info(f"Using ASORA Raytracing (q_max = {q_max})")
@@ -192,6 +188,7 @@ class C2Ray:
             logger.info(f"Using {self.nprocs} MPI Ranks")
         else:
             logger.info("Running in non-MPI (single-GPU/CPU) mode")
+
         logger.info("Starting simulation... \n\n")
 
     # =====================================================================================================

@@ -105,7 +105,7 @@ namespace {
         // Get local ionization fraction & neutral hydrogen density in the cell
         const auto index = ravel_index(i0 + di, j0 + dj, k0 + dk, m1);
         const auto q_off = cells_to_shell(q - 1);
-        double nHI = densities.get(index);
+        auto nHI = densities.get(index);
 
         // Compute photoionization rates from column density.
         update_photo_rates(

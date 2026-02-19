@@ -29,11 +29,11 @@ namespace asora {
 
     __host__ __device__ int modulo(int a, int b) { return (a % b + b) % b; }
 
-    __device__ int ravel_index(int i, int j, int k, int N) {
+    __device__ size_t ravel_index(int i, int j, int k, int N) {
         return N * N * modulo(i, N) + N * modulo(j, N) + modulo(k, N);
     }
 
-    __device__ bool in_box(const int &i, const int &j, const int &k, const int &N) {
+    __device__ bool in_box(int i, int j, int k, int N) {
         return (i >= 0 && i < N) && (j >= 0 && j < N) && (k >= 0 && k < N);
     }
 
