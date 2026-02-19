@@ -1,3 +1,4 @@
+import datetime
 import glob
 import os
 import time
@@ -158,20 +159,6 @@ def bin_sources(srcpos_mpc, mstar_msun, boxsize, meshsize):
     return srcpos, srcmstar
 
 
-def display_time(time_in_seconds):
-    """Return a string that display nicely the lapsed time"""
-    hrs, residual = divmod(time_in_seconds, 3600.0)
-    mins, secs = divmod(residual, 60.0)
-    if hrs == 0:
-        if mins == 0:
-            display = "%.2fs" % (secs)
-        else:
-            display = "%dm %.2fs" % (mins, secs)
-    else:
-        display = "%dh %dm %.2fs" % (hrs, mins, secs)
-    return display
-
-
 class TimerError(Exception):
     """A custom exception used to report errors in use of Timer class"""
 
@@ -258,3 +245,25 @@ class Timer:
 
         # init the start time in case you want to start a new timer in the same run
         self._start_time = None
+
+
+def display_seconds(seconds: float) -> str:
+    """Return a string that nicely displays the elapsed time"""
+    return str(datetime.timedelta(seconds=seconds))
+
+
+def distribute_jobs(jobs: int, procs: int, rank: int) -> slice:
+    """Distribute jobs as equally as possible into a procs number of processes,
+    and return the appropriate slice for a given process rank.
+    For N jobs to be divided into P processes, the first P - (N % P) processes
+    will get (N // P) jobs and the remaining N % P processes will get (N // P + 1) jobs.
+    Example: for 100 jobs and 7 processes, the first 5 processes will get 14 jobs
+    and the last 2 processes will get 15 jobs.
+    """
+    unit, left = divmod(jobs, procs)
+    short = procs - left
+
+    start = rank * unit + max(0, rank - short)
+    stop = start + unit + int(rank >= short)
+
+    return slice(start, stop)
