@@ -9,7 +9,7 @@ EXT_SUFFIX := $(shell python3-config --extension-suffix)
 
 all: libc2ray
 
-libc2ray: chemistry_he.f90
-	$(F2PY) $(F2PYFLAGS) --f90flags=$(FCFLAGS) -c chemistry_he.f90 -m libc2ray_He
+libc2ray: chem_utils.f90 thermalevolution.f90 chemistry_he.f90
+	$(F2PY) $(F2PYFLAGS) --f90flags=$(FCFLAGS) -c chem_utils.f90 thermalevolution.f90 chemistry_he.f90 -m libc2ray_He
 clean:
 	rm *.so *.o *.mod
