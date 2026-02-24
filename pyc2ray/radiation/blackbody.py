@@ -102,8 +102,8 @@ class BlackBodySource:
     def make_heat_table(self, tau, freq_min, freq_max, S_star_ref):
         self.normalize_SED(freq_min, freq_max, S_star_ref)
 
-        integrand_thin = partial(self._photo_thin_integrand_vec, tau=tau)
-        integrand_thick = partial(self._photo_thick_integrand_vec, tau=tau)
+        integrand_thin = partial(self._heat_thin_integrand_vec, tau=tau)
+        integrand_thick = partial(self._heat_thick_integrand_vec, tau=tau)
 
         table_thin = quad_vec(integrand_thin, freq_min, freq_max, epsrel=1e-12)[0]
         table_thick = quad_vec(integrand_thick, freq_min, freq_max, epsrel=1e-12)[0]
@@ -369,8 +369,8 @@ class BlackBodySource_Multifreq:
     def make_heat_table(self, tau, freq_min, freq_max, S_star_ref):
         self.normalize_SED(freq_min, freq_max, S_star_ref)
 
-        integrand_thin = partial(self._photo_thin_integrand_vec, tau=tau)
-        integrand_thick = partial(self._photo_thick_integrand_vec, tau=tau)
+        integrand_thin = partial(self._heat_thin_integrand_vec, tau=tau)
+        integrand_thick = partial(self._heat_thick_integrand_vec, tau=tau)
 
         # limit the frequency integration based on the provided limit
         # assert freq_min >= self.freqs_tab.min(), "Minimum frequency (freq_min = %.3e Hz) is below value in table %.3e Hz" %(freq_min, self.freqs_tab.min())
