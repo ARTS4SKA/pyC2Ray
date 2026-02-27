@@ -44,59 +44,48 @@ namespace asora {
         safe_cuda(cudaMemcpy(dst, data(), nbytes, cudaMemcpyDeviceToHost));
     }
 
-    device &device::initialize(unsigned int rank) {
-        // TODO: add log
-        auto &self = instance();
-        if (is_initialized()) return self;
+    void memory_pool::activate() { safe_cuda(cudaSetDevice(_gpu_id)); }
 
-        // Map MPI rank to available GPUs using modulo and select the device
-        int device_count;
-        safe_cuda(cudaGetDeviceCount(&device_count));
-        self._gpu_id = rank % device_count;
-        safe_cuda(cudaSetDevice(self._gpu_id));
-        return self;
+    void memory_pool::free() { _pool.clear(); }
+
+    bool memory_pool::is_active() const {
+        int cur_id;
+        safe_cuda(cudaGetDevice(&cur_id));
+        return static_cast<id_t>(cur_id) == _gpu_id;
     }
 
-    void device::close() {
-        auto &self = instance();
-        self._gpu_id = -1;
-        self._memory_pool.clear();
-    }
-
-    device_buffer &device::get(buffer_tag tag) {
-        check_initialized();
-        return instance()._memory_pool.at(tag);
-    }
-
-    bool device::contains(buffer_tag tag) {
-        return is_initialized() && instance()._memory_pool.contains(tag);
-    }
-
-    // Thread-safe singleton by C++11 standard
-    device &device::instance() noexcept {
-        static device self;
-        return self;
-    }
-
-    void device::check_initialized(const std::source_location &loc) {
-        if (!is_initialized()) {
-            auto msg = std::format(
-                "device not initialized at {} in {}:{}; call "
-                "asora::device::initialize(...) before",
-                loc.function_name(), loc.file_name(), loc.line()
+    void memory_pool::check_active() const {
+        if (!is_active())
+            throw std::runtime_error(
+                std::format("device {} is not selected as the current device", _gpu_id)
             );
-            throw std::runtime_error(msg);
-        }
     }
 
-    void device::allocate_or_copy(buffer_tag tag, size_t nbytes, const void *src) {
-        check_initialized();
+    device_buffer &memory_pool::operator[](buffer_tag tag) { return _pool.at(tag); }
 
-        auto &&[it, success] = _memory_pool.try_emplace(tag, nbytes);
+    const device_buffer &memory_pool::operator[](buffer_tag tag) const {
+        return _pool.at(tag);
+    }
+
+    bool memory_pool::contains(buffer_tag tag) const { return _pool.contains(tag); }
+
+    void memory_pool::allocate_or_copy(buffer_tag tag, size_t nbytes, const void *src) {
+        activate();
+
+        auto &&[it, success] = _pool.try_emplace(tag, nbytes);
 
         // Throw if tag exists but no copy requested, otherwise copy data
         if (!success && !src) throw std::runtime_error("tag already in use");
         if (src) it->second.copyFromHost(src, nbytes);
+    }
+
+    memory_pool &get_device_pool(memory_pool::id_t id) {
+        static std::unordered_map<memory_pool::id_t, memory_pool> devices;
+
+        auto &&[it, success] = devices.emplace(id, memory_pool{id});
+        it->second.activate();
+
+        return it->second;
     }
 
 }  // namespace asora

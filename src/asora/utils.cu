@@ -17,6 +17,9 @@ namespace asora {
 
     void safe_cuda(cudaError_t err, const std::source_location &loc) {
         if (err != cudaSuccess) {
+            // Clear the error state.
+            cudaGetLastError();
+
             auto msg = std::format(
                 "CUDA Error {}: {}. At {} in {}:{}", cudaGetErrorName(err),
                 cudaGetErrorString(err), loc.function_name(), loc.file_name(),

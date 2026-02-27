@@ -30,8 +30,8 @@ namespace {
     using namespace asora;
 
     template <typename T>
-    T *get_data_view(asora::buffer_tag tag) {
-        return asora::device::get(tag).data<T>();
+    T *get_data_view(asora::buffer_tag tag, memory_pool &pool) {
+        return pool[tag].data<T>();
     }
 
     // Compute the photoionization rate for a given cell based on the incoming column
@@ -121,33 +121,33 @@ namespace asora {
     void do_all_sources_gpu(
         double R, double sigma, double dr, const double *xh_av, double *phi_ion,
         size_t num_src, size_t m1, double minlogtau, double dlogtau, size_t num_tau,
-        size_t grid_size, size_t block_size
+        size_t grid_size, size_t block_size, unsigned int gpu_id
     ) {
-        device::check_initialized();
+        auto &pool = get_device_pool(gpu_id);
 
         // Size of grid data
         auto n_cells = m1 * m1 * m1;
 
         // Allocate (if necessary) and copy the ionized fraction array to the device
-        device::transfer<double>(buffer_tag::fraction_HII, xh_av, n_cells);
+        pool.transfer<double>(buffer_tag::fraction_HII, xh_av, n_cells);
 
         // Number density array is not modified, it is assumed that it is already on the
         // device
-        if (!device::contains(buffer_tag::number_density))
+        if (!pool.contains(buffer_tag::number_density))
             throw std::runtime_error(
                 "Number density array must be allocated on the device before calling "
                 "do_all_sources_gpu"
             );
         density_maps densities{
-            get_data_view<double>(buffer_tag::number_density),
-            get_data_view<double>(buffer_tag::fraction_HII)
+            get_data_view<double>(buffer_tag::number_density, pool),
+            get_data_view<double>(buffer_tag::fraction_HII, pool)
         };
 
         // Allocate (if necessary) and zero the output array for the photoionization
         // rate
-        if (!device::contains(buffer_tag::photo_ionization_HI))
-            device::add<double>(buffer_tag::photo_ionization_HI, n_cells);
-        auto phi_buf = device::get(buffer_tag::photo_ionization_HI);
+        if (!pool.contains(buffer_tag::photo_ionization_HI))
+            pool.add<double>(buffer_tag::photo_ionization_HI, n_cells);
+        auto phi_buf = pool[buffer_tag::photo_ionization_HI];
         auto phi_d = phi_buf.data<double>();
         safe_cuda(cudaMemset(phi_d, 0, phi_buf.size()));
 
@@ -156,30 +156,30 @@ namespace asora {
         // faces of the octahedron. To raytrace the whole volume, the octahedron must
         // be 1.5*N in size. Allocate (if necessary) the column density array.
         int q_max = std::ceil(c::sqrt3<> * std::min(R, c::sqrt3<> * m1 / 2.0));
-        if (!device::contains(buffer_tag::column_density_HI))
-            device::add<double>(
+        if (!pool.contains(buffer_tag::column_density_HI))
+            pool.add<double>(
                 buffer_tag::column_density_HI, grid_size * cells_to_shell(q_max)
             );
 
         // Get source properties, assuming the arrays are already on the device.
-        if (!device::contains(buffer_tag::source_flux) ||
-            !device::contains(buffer_tag::source_position))
+        if (!pool.contains(buffer_tag::source_flux) ||
+            !pool.contains(buffer_tag::source_position))
             throw std::runtime_error(
                 "Source properties must be allocated on the device before calling "
                 "do_all_sources_gpu"
             );
-        auto src_flux_d = get_data_view<double>(buffer_tag::source_flux);
-        auto src_pos_d = get_data_view<int>(buffer_tag::source_position);
+        auto src_flux_d = get_data_view<double>(buffer_tag::source_flux, pool);
+        auto src_pos_d = get_data_view<int>(buffer_tag::source_position, pool);
 
         // Create helper data structures: data_HI, ion_tables, logtau
 
         element_data data_HI{
-            phi_d, get_data_view<double>(buffer_tag::column_density_HI), sigma
+            phi_d, get_data_view<double>(buffer_tag::column_density_HI, pool), sigma
         };
 
         photo_tables ion_tables{
-            get_data_view<double>(buffer_tag::photo_ion_thin_table),
-            get_data_view<double>(buffer_tag::photo_ion_thick_table)
+            get_data_view<double>(buffer_tag::photo_ion_thin_table, pool),
+            get_data_view<double>(buffer_tag::photo_ion_thick_table, pool)
         };
 
         linspace<double> logtau{minlogtau, dlogtau, static_cast<size_t>(num_tau)};

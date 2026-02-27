@@ -1,7 +1,6 @@
 #pragma once
 
 #include <memory>
-#include <source_location>
 #include <span>
 #include <stdexcept>
 #include <unordered_map>
@@ -157,36 +156,38 @@ namespace asora {
         clumping_factor,         ///< Clumping factor array
     };
 
-    /* @brief Singleton managing only one GPU device and its memory pool.
+    /* @brief Class managing memory allocations on a single GPU device.
      *
-     * Provides static interface for device initialization and buffer de/allocation.
-     * The singleton pattern ensures thread-safe initialization of the class and safe
-     * read-only access of its memory pool, but modifications to the pool and its
-     * buffers is not.
+     * Provides interface to access and manage a device's memory pool.
+     * The point of access should be through the device(id) free function which returns
+     * a reference a unique memory_pool instance for the requested ID. This class is not
+     * thread-safe.
+     * @see get_device_pool(unsigned int)
      */
-    // TODO: make device thread safe!
-    class device {
+    class memory_pool {
        public:
-        /// Check if device has been initialized.
-        static bool is_initialized() noexcept { return instance()._gpu_id >= 0; }
+        using id_t = unsigned int;
 
-        /* @brief Throw exception if device is not initialized.
-         * @param[in] loc Source location for error reporting
-         * @throw std::runtime_error if device not initialized
-         */
-        static void check_initialized(
-            const std::source_location &loc = std::source_location::current()
-        );
+        memory_pool(const memory_pool &) = delete;
+        memory_pool &operator=(const memory_pool &) = delete;
+        memory_pool(memory_pool &&) = default;
+        memory_pool &operator=(memory_pool &&) = default;
 
-        /* @brief Initialize the GPU device.
-         * @param[in] rank Device rank/ID to initialize
-         * @return Reference to the device instance
+        /* @brief Set the associated device to be the current one.
          * @throw std::runtime_error if cudaGetDeviceCount and cudaSetDevice fail
          */
-        static device &initialize(unsigned int rank);
+        void activate();
 
-        /// Close device and release all resources.
-        static void close();
+        /* @brief Return true if the device associated is not the current one.
+         * @throw std::runtime_error if cudaGetCount fails
+         */
+        bool is_active() const;
+
+        /// Just as is_active() but throws instead.
+        void check_active() const;
+
+        /// Clear the memory pool.
+        void free();
 
         /* @brief Allocate buffer and copy data from host to device.
          *
@@ -198,10 +199,11 @@ namespace asora {
          * @param[in] tag Buffer identifier
          * @param[in] src Host memory source pointer
          * @param[in] items Number of elements to copy
+         * @see allocate_or_copy
          */
         template <typename T>
-        static void transfer(buffer_tag tag, const T *src, size_t items) {
-            instance().allocate_or_copy(tag, items * sizeof(T), src);
+        void transfer(buffer_tag tag, const T *src, size_t items) {
+            allocate_or_copy(tag, items * sizeof(T), src);
         }
 
         /* @brief Allocate an empty buffer on device and add it to the pool.
@@ -209,49 +211,54 @@ namespace asora {
          * @tparam T Element type
          * @param[in] tag Buffer identifier
          * @param[in] items Number of elements to allocate
-         * @throw std::runtime_error if buffer identifier already in use
+         * @see allocate_or_copy
          */
         template <typename T>
-        static void add(buffer_tag tag, size_t items) {
-            instance().allocate_or_copy(tag, items * sizeof(T));
+        void add(buffer_tag tag, size_t items) {
+            allocate_or_copy(tag, items * sizeof(T));
         }
 
         /* @brief Retrieve a buffer from the device.
          * @param[in] tag Buffer identifier
          * @return Reference to the device buffer
-         * @throw std::runtime_error if device not initialized
          * @throw std::out_of_range if buffer doesn't exist
          */
-        static device_buffer &get(buffer_tag tag);
+        device_buffer &operator[](buffer_tag tag);
+        const device_buffer &operator[](buffer_tag tag) const;
 
-        /// Check if the buffer identifier is in use (= a buffer exists in the pool).
-        static bool contains(buffer_tag tag);
+        /// Check if the buffer identifier exists in the pool.
+        bool contains(buffer_tag tag) const;
 
-        /// Get the CUDA device ID, or -1 if not initialized
-        static int get_device_id() noexcept { return instance()._gpu_id; }
+        /// Get the CUDA device ID.
+        id_t device_id() noexcept { return _gpu_id; }
 
        private:
-        /// Private constructor to enforce singleton pattern
-        device() {}
-        device(const device &) = delete;
-        device &operator=(const device &) = delete;
+        /// The free function get_device_pool(unsigned int) can create memory_pool
+        /// instances and activate the associated device.
+        friend memory_pool &get_device_pool(id_t id);
 
-        /// Get or create the singleton instance
-        static device &instance() noexcept;
+        memory_pool(id_t id) : _gpu_id(id) {}
 
         /* @brief Allocate buffer or copy data to existing buffer.
          * @param[in] tag Buffer identifier
          * @param[in] nbytes Size in bytes
          * @param[in] src Optional host source pointer for copying
+         * @throw std::runtime_error if is_initialited() returns false
          * @throw std::runtime_error if tag exists but no copy requested
          */
         void allocate_or_copy(buffer_tag tag, size_t nbytes, const void *src = nullptr);
 
-        /// Device ID (-1 means uninitialized)
-        int _gpu_id = -1;
+        /// Device ID.
+        id_t _gpu_id;
 
-        /// Memory pool for device buffers
-        std::unordered_map<buffer_tag, device_buffer> _memory_pool;
+        /// Underlying data structure.
+        std::unordered_map<buffer_tag, device_buffer> _pool;
     };
+
+    /* Create and return a unique memory_pool instance associated to the requested
+     * device ID. Also call cudaSetDevice for the given device, meaning that following
+     * CUDA calls or kernel launches will be executed on that device.
+     */
+    memory_pool &get_device_pool(memory_pool::id_t id);
 
 }  // namespace asora
