@@ -204,6 +204,21 @@ namespace asora {
             instance().allocate_or_copy(tag, items * sizeof(T), src);
         }
 
+        /* @brief Allocate buffer and copy data from host to device.
+         *
+         * It behaves like 'transfer', except that a new buffer device of the right size
+         * is allocated if the existing one is smaller than the required size.
+         *
+         * @tparam T Element type
+         * @param[in] tag Buffer identifier
+         * @param[in] src Host memory source pointer
+         * @param[in] items Number of elements to copy
+         */
+        template <typename T>
+        static void ensure_transfer(buffer_tag tag, const T *src, size_t items) {
+            instance().allocate_or_copy(tag, items * sizeof(T), src, true);
+        }
+
         /* @brief Allocate an empty buffer on device and add it to the pool.
          *
          * @tparam T Element type
@@ -214,6 +229,17 @@ namespace asora {
         template <typename T>
         static void add(buffer_tag tag, size_t items) {
             instance().allocate_or_copy(tag, items * sizeof(T));
+        }
+
+        /* @brief Ensure there is a buffer with the given tag and the required size.
+         *
+         * @tparam T Element type
+         * @param[in] tag Buffer identifier
+         * @param[in] items Number of elements to allocate
+         */
+        template <typename T>
+        static void ensure(buffer_tag tag, size_t items) {
+            instance().allocate_or_copy(tag, items * sizeof(T), nullptr, true);
         }
 
         /* @brief Retrieve a buffer from the device.
@@ -243,9 +269,14 @@ namespace asora {
          * @param[in] tag Buffer identifier
          * @param[in] nbytes Size in bytes
          * @param[in] src Optional host source pointer for copying
-         * @throw std::runtime_error if tag exists but no copy requested
+         * @param[in] ensure Overwrite existing buffer if it is't large enough
+         * @throw std::runtime_error if tag exists but no copy requested and ensure is
+         * false
          */
-        void allocate_or_copy(buffer_tag tag, size_t nbytes, const void *src = nullptr);
+        void allocate_or_copy(
+            buffer_tag tag, size_t nbytes, const void *src = nullptr,
+            bool ensure = false
+        );
 
         /// Device ID (-1 means uninitialized)
         int _gpu_id = -1;

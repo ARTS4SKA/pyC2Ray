@@ -33,14 +33,18 @@ namespace asora {
     }
 
     void device_buffer::copyFromHost(const void *src, size_t nbytes) {
-        if (size() != nbytes)
-            throw std::invalid_argument("this device buffer is not large enough");
+        if (size() < nbytes)
+            throw std::invalid_argument(
+                "requested more bytes to copy than the buffer size"
+            );
         safe_cuda(cudaMemcpy(data(), src, nbytes, cudaMemcpyHostToDevice));
     }
 
     void device_buffer::copyToHost(void *dst, size_t nbytes) const {
-        if (size() != nbytes)
-            throw std::invalid_argument("the destination buffer is not large enough");
+        if (size() < nbytes)
+            throw std::invalid_argument(
+                "requested more bytes to copy than the buffer size"
+            );
         safe_cuda(cudaMemcpy(dst, data(), nbytes, cudaMemcpyDeviceToHost));
     }
 
@@ -89,10 +93,18 @@ namespace asora {
         }
     }
 
-    void device::allocate_or_copy(buffer_tag tag, size_t nbytes, const void *src) {
+    void device::allocate_or_copy(
+        buffer_tag tag, size_t nbytes, const void *src, bool ensure
+    ) {
         check_initialized();
 
         auto &&[it, success] = _memory_pool.try_emplace(tag, nbytes);
+
+        // Reallocate if existing buffer is too small
+        if (ensure && it->second.size() < nbytes) {
+            it->second = device_buffer(nbytes);
+            success = true;
+        }
 
         // Throw if tag exists but no copy requested, otherwise copy data
         if (!success && !src) throw std::runtime_error("tag already in use");

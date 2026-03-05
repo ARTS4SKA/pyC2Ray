@@ -24,6 +24,69 @@ def test_device_init(init_device):
     libasora.is_device_init()
 
 
+def test_density_to_device(init_device):
+    # One argument required
+    with pytest.raises(TypeError):
+        libasora.density_to_device()
+
+    # np.float64 array required
+    with pytest.raises(TypeError):
+        libasora.density_to_device(np.ones(10, dtype=np.int32))
+
+    def create_density_data(mesh_size: int) -> np.ndarray:
+        dens = np.full(mesh_size**3, 0.5, dtype=np.float64)
+        return dens
+
+    assert libasora is not None
+    libasora.density_to_device(create_density_data(16))
+    libasora.density_to_device(create_density_data(64))
+    libasora.density_to_device(create_density_data(32))
+
+
+def test_photo_table_to_device(init_device):
+    # Two arguments required
+    with pytest.raises(TypeError):
+        libasora.photo_table_to_device(np.array([]))
+
+    # Both arguments must be np.float64 arrays
+    with pytest.raises(TypeError):
+        libasora.photo_table_to_device(
+            np.ones(10, dtype=np.float32), np.zeros(10, dtype=np.float64)
+        )
+
+    def create_photo_table_data(num_tau: int) -> tuple[np.ndarray, np.ndarray]:
+        thin = np.linspace(-20, 4, num_tau + 1, dtype=np.float64)
+        thick = np.linspace(-20, 4, num_tau + 1, dtype=np.float64)
+        return thin, thick
+
+    assert libasora is not None
+    libasora.photo_table_to_device(*create_photo_table_data(80))
+    libasora.photo_table_to_device(*create_photo_table_data(100))
+    libasora.photo_table_to_device(*create_photo_table_data(90))
+
+
+def test_source_data_to_device(init_device):
+    # Two arguments required
+    with pytest.raises(TypeError):
+        libasora.source_data_to_device(np.array([]))
+
+    # First argument is array np.int32, second argument is array np.float64
+    with pytest.raises(TypeError):
+        libasora.source_data_to_device(
+            np.ones(10, dtype=np.float64), np.ones(10, dtype=np.float64)
+        )
+
+    def create_source_data(num_sources: int) -> tuple[np.ndarray, np.ndarray]:
+        src_pos = np.arange(0, 3 * num_sources, dtype=np.int32)
+        norm_flux = np.ones(num_sources, dtype=np.float64)
+        return src_pos, norm_flux
+
+    assert libasora is not None
+    libasora.source_data_to_device(*create_source_data(50))
+    libasora.source_data_to_device(*create_source_data(100))
+    libasora.source_data_to_device(*create_source_data(80))
+
+
 @contextmanager
 def setup_do_all_sources(
     num_sources: int = 10, mesh_size: int = 50, batch_size: int = 8, block_size=256

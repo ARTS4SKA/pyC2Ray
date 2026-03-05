@@ -123,7 +123,7 @@ namespace asora {
                  std::pair{buffer_tag::temperature, temp},
                  std::pair{buffer_tag::clumping_factor, clump},
              }) {
-            device::transfer<double>(tag, data, n_cells);
+            device::ensure_transfer<double>(tag, data, n_cells);
         }
 
         device_buffer conv_flag(n_cells);

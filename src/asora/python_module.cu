@@ -52,9 +52,9 @@ namespace {
         auto size = static_cast<size_t>(PyArray_SIZE(array));
 
         try {
-            asora::device::transfer<T>(tag, data, size);
+            asora::device::ensure_transfer<T>(tag, data, size);
         } catch (const std::exception &e) {
-            PyErr_SetString(PyExc_TypeError, e.what());
+            PyErr_SetString(PyExc_ValueError, e.what());
             return false;
         }
         return true;

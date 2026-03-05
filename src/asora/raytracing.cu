@@ -129,7 +129,7 @@ namespace asora {
         auto n_cells = m1 * m1 * m1;
 
         // Allocate (if necessary) and copy the ionized fraction array to the device
-        device::transfer<double>(buffer_tag::fraction_HII, xh_av, n_cells);
+        device::ensure_transfer<double>(buffer_tag::fraction_HII, xh_av, n_cells);
 
         // Number density array is not modified, it is assumed that it is already on the
         // device
