@@ -184,6 +184,9 @@ class C2Ray:
                 f"Using CPU Raytracing (subboxsize = {self.subboxsize}, max_subbox = {self.max_subbox})"
             )
 
+        # initialize radiation tables
+        self._radiation_init()
+
         if self.mpi:
             MPI.COMM_WORLD.Barrier()
             logger.info(f"Using {self.nprocs} MPI Ranks")
