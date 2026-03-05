@@ -7,7 +7,7 @@ from scipy import stats
 
 
 def get_extension_in_folder(path):
-    arr = glob.glob(path + "xfrac*")
+    arr = glob.glob(str(path) + "xfrac*")
     f = arr[0]
     if os.path.isfile(f):
         ext = f[f.rfind(".") :]

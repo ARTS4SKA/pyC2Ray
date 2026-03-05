@@ -11,11 +11,7 @@ import pyc2ray.constants as c
 from .c2ray_base import C2Ray
 from .source_model import BurstySFR, EscapeFraction, StellarToHaloRelation
 from .utils import bin_sources
-from .utils.other_utils import (
-    find_bins,
-    get_extension_in_folder,
-    get_redshifts_from_output,
-)
+from .utils.other_utils import find_bins, get_redshifts_from_output
 from .utils.sourceutils import FloatArray, IntArray, PathType
 
 __all__ = ["C2Ray_fstar"]
@@ -264,11 +260,9 @@ class C2Ray_fstar(C2Ray):
         elif suffix == ".dat":
             # Read haloes from a CUBEP3M file format.
             hl = t2c.HaloCubeP3MFull(filename=halo_file, box_len=box_len)
-            # FIXME: unknown attribute
-            h = self.h  # type: ignore
-            srcmass_msun = hl.get(var="m") / h  # Msun
-            srcpos_mpc = hl.get(var="pos") / h  # Mpc
-        elif suffix == ".txt":
+            srcmass_msun = hl.get(var="m") / self.cosmology.h  # Msun
+            srcpos_mpc = hl.get(var="pos") / self.cosmology.h  # Mpc
+        elif (suffix == ".txt") and ("fof" in str(halo_file)):
             # Read haloes from a PKDGrav converted in txt.
             hl = np.loadtxt(halo_file)
             srcmass_msun = hl[:, 0] / self.cosmology.h  # Msun
@@ -279,6 +273,28 @@ class C2Ray_fstar(C2Ray):
                 self.boxsize - srcpos_mpc[srcpos_mpc > self.boxsize]
             )
             srcpos_mpc[srcpos_mpc < 0.0] = self.boxsize + srcpos_mpc[srcpos_mpc < 0.0]
+            srcpos_mpc[srcpos_mpc > self.boxsize] = (
+                srcpos_mpc[srcpos_mpc > self.boxsize] - self.boxsize
+            )
+
+            assert srcpos_mpc.min() >= 0.0
+            assert srcpos_mpc.min() <= self.boxsize
+            srcpos_mpc /= self.cosmology.h  # Mpc
+        elif (suffix == ".txt") and ("halo" in str(halo_file)):
+            # Read haloes from a PKDGrav converted in txt (other converntion).
+            hl = np.loadtxt(halo_file)
+            srcmass_msun = hl[:, 0] / self.cosmology.h  # Msun
+
+            srcpos_mpc = hl[:, 1:]  # Mpc/h
+
+            srcpos_mpc[srcpos_mpc < 0.0] = self.boxsize + srcpos_mpc[srcpos_mpc < 0.0]
+            srcpos_mpc[srcpos_mpc > self.boxsize] = (
+                srcpos_mpc[srcpos_mpc > self.boxsize] - self.boxsize
+            )
+
+            assert srcpos_mpc.min() >= 0.0
+            assert srcpos_mpc.min() <= self.boxsize
+
             srcpos_mpc /= self.cosmology.h  # Mpc
         return srcpos_mpc, srcmass_msun
 
@@ -294,14 +310,23 @@ class C2Ray_fstar(C2Ray):
 
         """
         file = self.density_basename + fbase
-        rdr = t2c.Pkdgrav3data(self.boxsize, self.N, Omega_m=self.cosmology.Om0)
+        if file.endswith("npy"):
+            overd = np.load(file) - 1.0
+        else:
+            rdr = t2c.Pkdgrav3data(self.boxsize, self.N, Omega_m=self.cosmology.Om0)
+            overd = rdr.load_density_field(file)
+
         self.ndens = (
             self.cosmology.critical_density0.cgs.value
             * self.cosmology.Ob0
-            * (1.0 + rdr.load_density_field(file))
+            * (1.0 + overd)
             / (self.mean_molecular * c.m_p)
             * (1 + z) ** 3
         )
+
+        # set floor density to avoid cells with value zero
+        self.ndens = np.maximum(self.ndens, 5e-6)
+
         logger.info(
             """
 ---- Reading density file:
@@ -319,8 +344,14 @@ class C2Ray_fstar(C2Ray):
 
     def _redshift_init(self):
         """Initialize time and redshift counter"""
-        self.zred_density = np.loadtxt(self.density_basename + "redshift_density.txt")
-        self.zred_sources = np.loadtxt(self.sources_basename + "redshift_sources.txt")
+        # self.zred_density = np.loadtxt(self.density_basename + "redshift_density.txt")
+        # self.zred_sources = np.loadtxt(self.sources_basename + "redshift_sources.txt")
+        self.zred_density = np.loadtxt(
+            self.density_basename + "redshift_density.txt", usecols=(1)
+        )
+        self.zred_sources = np.loadtxt(
+            self.sources_basename + "redshift_sources.txt", usecols=(1)
+        )
         if self.resume:
             # get the resuming redshift
             self.zred = np.min(get_redshifts_from_output(self.results_basename))
@@ -336,13 +367,9 @@ class C2Ray_fstar(C2Ray):
     def _material_init(self):
         """Initialize material properties of the grid"""
         if self.resume:
-            # get fields at the resuming redshift
-            self.ndens = self.read_density(
-                fbase="CDM_200Mpc_2048.%05d.den.256.0" % self.resume, z=self.prev_zdens
-            )
-
             # get extension of the output file
-            ext = get_extension_in_folder(path=self.results_basename)
+            # ext = get_extension_in_folder(path=self.results_basename)
+            ext = ".npy"
             if ext == ".dat":
                 fname = "%sxfrac_z%.3f.dat" % (self.results_basename, self.zred)
                 self.xh = t2c.read_cbin(filename=fname, bits=64, order="F")
@@ -353,10 +380,10 @@ class C2Ray_fstar(C2Ray):
                     order="F",
                 )
             elif ext == ".npy":
-                fname = "%sxfrac_z%.3f.npy" % (self.results_basename, self.zred)
+                fname = self.results_basename / ("xfrac_z%.3f.npy" % self.zred)
                 self.xh = np.load(fname)
                 self.phi_ion = np.load(
-                    "%sIonRates_z%.3f.npy" % (self.results_basename, self.zred)
+                    self.results_basename / ("IonRates_z%.3f.npy" % self.zred)
                 )
             else:
                 raise FileNotFoundError(
