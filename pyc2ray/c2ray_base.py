@@ -503,15 +503,15 @@ This corresponds to %.3f grid cells.""",
 
     @property
     def gpu(self) -> bool:
-        return self.grid_params.gpu
+        return bool(self.grid_params.gpu)
 
     @property
     def mpi(self) -> bool:
-        return self.grid_params.mpi
+        return bool(self.grid_params.mpi)
 
     @property
     def resume(self) -> bool:
-        return self.grid_params.resume
+        return bool(self.grid_params.resume)
 
     @property
     def eth0(self) -> float:
@@ -638,19 +638,19 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}""")
         return Path(self.output_params.results_basename)
 
     @property
-    def inputs_basename(self) -> str:
+    def inputs_basename(self) -> Path:
         assert self.output_params.inputs_basename is not None
-        return self.output_params.inputs_basename
+        return Path(self.output_params.inputs_basename)
 
     @property
-    def sources_basename(self) -> str:
+    def sources_basename(self) -> Path:
         assert self.output_params.sources_basename is not None
-        return self.output_params.sources_basename
+        return Path(self.output_params.sources_basename)
 
     @property
-    def density_basename(self) -> str:
+    def density_basename(self) -> Path:
         assert self.output_params.density_basename is not None
-        return self.output_params.density_basename
+        return Path(self.output_params.density_basename)
 
     @property
     def logfile(self) -> Path:
