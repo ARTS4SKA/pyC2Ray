@@ -779,11 +779,11 @@ Simulation Box size (comoving Mpc): {self.boxsize:.3e}"""
             if not self.resume:
                 self.logfile.unlink(missing_ok=True)
 
-        configure_logger(self.logfile)
-
-        # Wait here.
+        # Wait here for result directory to be created
         if self.mpi:
             MPI.COMM_WORLD.Barrier()
+
+        configure_logger(self.logfile)
 
         if self.resume:
             title = f"\n\nResuming{C2Ray.banner[8:]}\n\n"
