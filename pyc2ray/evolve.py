@@ -8,7 +8,7 @@ from mpi4py import MPI
 from .asora_core import is_device_init
 from .load_extensions import libasora, libc2ray
 from .utils import display_time
-from .utils.logutils import disable_newline
+from .utils.logutils import allow_rank_logging
 from .utils.sourceutils import FloatArray, IntArray, format_sources
 
 __all__ = ["evolve3D"]
@@ -131,6 +131,7 @@ def evolve3D(
     phi_ion : 3D-array
         Photoionization rate of each cell due to all sources
     """
+    rank_prefix = f"Rank={rank}: " if use_mpi else ""
 
     # Allow a call with GPU only if
     # 1. the asora library is present and
@@ -156,7 +157,6 @@ def evolve3D(
     converged = False
     if rank != 0:
         xh_new = np.empty_like(xh)
-    niter = 0
 
     # initialize average and intermediate results to values at beginning of timestep
     xh_av = np.copy(xh)
@@ -181,7 +181,8 @@ def evolve3D(
             srcpos_flat, normflux_flat = format_sources(
                 src_pos[:, i_start:i_end], src_flux[i_start:i_end]
             )
-            logger.info(f"...rank={rank:n} has {NumSrc:n} sources.")
+            with allow_rank_logging(rank):
+                logger.info(f"{rank_prefix}{NumSrc} sources.")
         else:
             srcpos_flat, normflux_flat = format_sources(src_pos, src_flux)
 
@@ -196,10 +197,8 @@ def evolve3D(
         # Copy density field to GPU once at the beginning of timestep (!! do_all_sources assumes this !!)
         assert libasora is not None
         libasora.density_to_device(ndens_flat)
-        if use_mpi:
-            logger.info("Copied source data to device.")
-        else:
-            logger.info(f"Rank {rank} copied source data to device.")
+        with allow_rank_logging(rank):
+            logger.info(f"{rank_prefix}Copied source data to device.")
 
     # -----------------------------------------------------------
     # Start Evolve step, Iterate until convergence in <x> and <y>
@@ -216,17 +215,12 @@ Convergence Criterion (Number of points): {conv_criterion: n}
 """)
 
     while not converged:
-        niter += 1
-
         # --------------------
         # (1): Raytracing Step
         # --------------------
         trt0 = time.time()
-        with disable_newline():
-            if use_mpi:
-                logger.info("Doing Raytracing...")
-            else:
-                logger.info(f"Rank={rank} is doing Raytracing...")
+        with allow_rank_logging(rank):
+            logger.info(f"{rank_prefix}Doing Raytracing...")
 
         # Do the raytracing part for each source. This computes the cumulative ionization rate for each cell.
         if use_gpu:
@@ -276,10 +270,8 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             )
 
         trt1 = time.time() - trt0
-        if use_mpi:
-            logger.info(f"  rank={rank} took {display_time(trt1)}.")
-        else:
-            logger.info(f"  took {display_time(trt1)}")
+        with allow_rank_logging(rank):
+            logger.info(f"took {display_time(trt1)}.")
 
         # Since chemistry (ODE solving) is done on the CPU in Fortran, flattened CUDA arrays need to be reshaped
         if use_gpu:
@@ -304,8 +296,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             # (2): ODE Solving Step
             # ---------------------
             tch0 = time.time()
-            with disable_newline():
-                logger.info("Doing Chemistry...")
+            logger.info("Doing Chemistry...")
             # Apply the global rates to compute the updated ionization fraction
             conv_flag = libc2ray.chemistry.global_pass(
                 dt,
@@ -330,7 +321,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             #     clump, bh00, albpow, colh0, temph0, abu_c,
             # )
 
-            logger.info(f"  took {(time.time() - tch0): .1f} s.")
+            logger.info(f"took {(time.time() - tch0): .1f} s.")
 
             # ----------------------------
             # (3): Test Global Convergence
@@ -385,10 +376,10 @@ Convergence Criterion (Number of points): {conv_criterion: n}
                 converged = bool(converged_array[0])
 
     if rank == 0:
-        # When converged, return the updated ionization fractions at the end of the timestep
         logger.info(
             f"Multiple source convergence reached after {n_count} ray-tracing iterations."
         )
+        # When converged, return the updated ionization fractions at the end of the timestep
         xh_new = xh_intermed
 
     if use_mpi:

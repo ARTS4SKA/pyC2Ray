@@ -22,6 +22,18 @@ def disable_newline() -> Iterator[None]:
         logging.StreamHandler.terminator = end
 
 
+@contextmanager
+def allow_rank_logging(rank: int) -> Iterator[None]:
+    """Context manager to temporarily allow logging on the specified MPI rank."""
+    default = MPIRankFilter.RANK
+    MPIRankFilter.RANK = rank
+
+    try:
+        yield
+    finally:
+        MPIRankFilter.RANK = default
+
+
 class MaxLevelFilter:
     """Filter to allow only messages up to a specific level."""
 
@@ -30,6 +42,19 @@ class MaxLevelFilter:
 
     def filter(self, record: logging.LogRecord) -> bool:
         return record.levelno <= self.level
+
+
+class MPIRankFilter:
+    """Filter to allow only messages from the given MPI rank."""
+
+    # Global rank variable that can be set to filter for a different rank.
+    RANK: int = 0
+
+    def __init__(self) -> None:
+        self._this_rank = MPI.COMM_WORLD.Get_rank()
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return self._this_rank == MPIRankFilter.RANK
 
 
 def configure_logger(
@@ -47,11 +72,6 @@ def configure_logger(
     """
     # Grab this module's logger and set level
     module_logger = logging.getLogger(__name__.partition(".")[0])
-
-    # Logging is only enabled on one MPI process
-    if MPI.COMM_WORLD.Get_rank() != 0:
-        module_logger.disabled = True
-        return
 
     # Logger was already configured
     if module_logger.handlers:
@@ -71,13 +91,16 @@ def configure_logger(
 
     # Set up console handlers for info messages to stdout
     cout = logging.StreamHandler(sys.stdout)
+    cout.setLevel(lev0)
     cout.addFilter(MaxLevelFilter(logging.INFO))
+    cout.addFilter(MPIRankFilter())
     module_logger.addHandler(cout)
 
     # Set up console handlers for warning and error messages to stderr
     cerr = logging.StreamHandler(sys.stderr)
     cerr.setLevel(logging.WARNING)
     cerr.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+    cerr.addFilter(MPIRankFilter())
     module_logger.addHandler(cerr)
 
     # Optionally set up a more comprehensive file handler
@@ -87,4 +110,5 @@ def configure_logger(
         fout.setFormatter(
             logging.Formatter("%(asctime)s %(name)-12s %(levelname)-4s: %(message)s")
         )
+        fout.addFilter(MPIRankFilter())
         module_logger.addHandler(fout)

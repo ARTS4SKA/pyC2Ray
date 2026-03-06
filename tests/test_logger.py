@@ -1,8 +1,9 @@
 import logging
 
 import pytest
+from mpi4py import MPI
 
-from pyc2ray.utils.logutils import configure_logger, disable_newline
+from pyc2ray.utils.logutils import allow_rank_logging, configure_logger, disable_newline
 
 
 def logging_function(logger: logging.Logger):
@@ -92,3 +93,19 @@ def test_disable_newline(logger, caplog, capsys):
     assert len(caplog.records) == 3
     out, _ = capsys.readouterr()
     assert out == "First part Second part\nThird part\n"
+
+
+def test_allow_rank_logging(logger, caplog, capsys):
+    configure_logger()
+
+    rank = MPI.COMM_WORLD.Get_rank()
+    with allow_rank_logging(rank):
+        logger.info(f"From rank {rank}")
+    logger.info("From root")
+
+    assert len(caplog.records) == 2
+    out, _ = capsys.readouterr()
+    if rank == 0:
+        assert out == "From rank 0\nFrom root\n"
+    else:
+        assert out == f"From rank {rank}\n"
