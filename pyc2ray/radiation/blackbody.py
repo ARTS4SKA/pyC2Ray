@@ -23,7 +23,12 @@ hplanck = cst.h.cgs.value
 ion_freq_HI = (cst.Ryd * cst.c).cgs.value
 sigma_0 = 6.3e-18
 
-__all__ = ["BlackBodyBase", "BlackBodySource", "YggdrasilModel"]
+__all__ = [
+    "BlackBodyBase",
+    "BlackBodySource",
+    "YggdrasilModel",
+    "BlackBodySource_Multifreq",
+]
 
 BlackBodyType = TypeVar("BlackBodyType", bound="BlackBodyBase")
 

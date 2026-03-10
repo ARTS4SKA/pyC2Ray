@@ -30,7 +30,7 @@ from pyc2ray.parameters import (
 )
 from pyc2ray.radiation import (
     BlackBodyBase,
-    BlackBodySource,
+    BlackBodySource_Multifreq,
     YggdrasilModel,
     make_tau_table,
 )
@@ -268,6 +268,7 @@ class C2Ray:
         # with no source splitting until the condition above is meet.
         use_mpi = NumSrc >= self.nprocs and self.mpi
         self.xh, self.phi_ion = evolve3D(
+            Hz=self.cosmology.H(self.zred).cgs.value,
             dt=dt,
             dr=self.dr,
             src_flux=src_flux,
@@ -686,9 +687,7 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}""")
             freq_max = 10 * ion_freq_HeII
 
             # Initialize spectrum parameters
-            radsource = BlackBodySource(
-                self.bb_Teff, self.grey, ion_freq_HI, self.cs_pl_idx_h
-            )
+            radsource = BlackBodySource_Multifreq(self.bb_Teff, self.grey)
 
             logger.info(f"""Using Black-Body sources with effective temperature T = {radsource.temp:.1e} K and Radius {(radsource.R_star / cst.R_sun.to("cm")).value: .3e} rsun
 Spectrum Frequency Range: {freq_min:.3e} to {freq_max:.3e} Hz
@@ -735,12 +734,17 @@ This is Energy:           {freq_min / c.ev2fr:.3e} to {freq_max / c.ev2fr:.3e} e
             )  # nb integration bounds are given in log10(freq/freq_HI)
         else:
             logger.warning("No heating rates")
-            self.heat_thin_table = np.zeros(self.NumTau + 1)
-            self.heat_thick_table = np.zeros(self.NumTau + 1)
+            self.heat_thin_table = np.zeros_like(self.photo_thin_table)
+            self.heat_thick_table = np.zeros_like(self.photo_thick_table)
 
         # Copy radiation table to GPU
         if self.gpu:
-            photo_tables_to_device(self.photo_thin_table, self.photo_thick_table)
+            photo_tables_to_device(
+                self.photo_thin_table,
+                self.photo_thick_table,
+                self.heat_thin_table,
+                self.heat_thick_table,
+            )
             logger.info("Successfully copied radiation tables to GPU memory.")
 
     def _grid_init(self) -> None:
