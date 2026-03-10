@@ -1,5 +1,6 @@
 import atexit
 import logging
+from functools import cached_property
 from pathlib import Path
 
 import numpy as np
@@ -11,7 +12,7 @@ from mpi4py import MPI
 
 import pyc2ray.constants as c
 from pyc2ray.asora_core import device_close, device_init, photo_table_to_device
-from pyc2ray.evolve import evolve3D
+from pyc2ray.evolve import ChemistryParams, evolve3D
 from pyc2ray.parameters import (
     AbundancesParameters,
     BlackBodyParameters,
@@ -284,12 +285,8 @@ class C2Ray:
             dlogtau=self.dlogtau,
             R_max_LLS=self.R_max_LLS,
             convergence_fraction=self.convergence_fraction,
-            sig=self.sig,
-            bh00=self.bh00,
-            albpow=self.albpow,
-            colh0=self.colh0,
-            temph0=self.temph0,
-            abu_c=self.abu_c,
+            sigma=self.sigma,
+            chems=self.chem_parms,
         )
 
     def cosmo_evolve(self, dt: float) -> None:
@@ -479,7 +476,7 @@ This corresponds to %.3f grid cells.""",
             self.minlogtau,
             self.dlogtau,
             self.R_max_LLS,
-            self.sig,
+            self.sigma,
         )
         self.phi_ion = gamma_ion
         return gamma_ion
@@ -526,28 +523,12 @@ This corresponds to %.3f grid cells.""",
         return self.cgs_params.ethe1
 
     @property
-    def bh00(self) -> float:
-        return self.cgs_params.bh00
-
-    @property
     def fh0(self) -> float:
         return self.cgs_params.fh0
 
     @property
     def xih0(self) -> float:
         return self.cgs_params.xih0
-
-    @property
-    def albpow(self) -> float:
-        return self.cgs_params.albpow
-
-    @property
-    def colh0(self) -> float:
-        return self.cgs_params.colh0
-
-    @property
-    def temph0(self) -> float:
-        return self.cgs_params.temph0
 
     @property
     def abu_h(self) -> float:
@@ -558,15 +539,11 @@ This corresponds to %.3f grid cells.""",
         return self.abundance_params.abu_he
 
     @property
-    def abu_c(self) -> float:
-        return self.abundance_params.abu_c
-
-    @property
     def mean_molecular(self) -> float:
         return self.abundance_params.mean_molecular
 
     @property
-    def sig(self) -> float:
+    def sigma(self) -> float:
         return self.photo_params.sigma_HI_at_ion_freq
 
     @property
@@ -588,6 +565,16 @@ This corresponds to %.3f grid cells.""",
     @property
     def cosmological(self) -> bool:
         return self.cosmology_params.cosmological
+
+    @cached_property
+    def chem_parms(self) -> ChemistryParams:
+        return ChemistryParams(
+            self.cgs_params.bh00,
+            self.cgs_params.albpow,
+            self.cgs_params.colh0,
+            self.cgs_params.temph0,
+            self.abundance_params.abu_c,
+        )
 
     def _cosmology_init(self) -> None:
         """Set up cosmology from parameters (H0, Omega,..)"""
