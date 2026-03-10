@@ -1,13 +1,18 @@
+from contextlib import contextmanager
 from unittest.mock import Mock, patch
 
 import astropy.constants as cst
 import astropy.units as u
 import numpy as np
 import pytest
+from astropy.cosmology import Planck18 as cosmo
+from mpi4py import MPI
 
 from pyc2ray.evolve import ChemistryParams, evolve3D
-from pyc2ray.radiation.blackbody import BlackBodySource
+from pyc2ray.load_extensions import libasora_He as libasora
+from pyc2ray.radiation.blackbody import BlackBodySource, BlackBodySource_Multifreq
 from pyc2ray.radiation.common import make_tau_table
+from pyc2ray.solver.helium import CoolingTables
 
 
 @pytest.fixture
@@ -36,7 +41,16 @@ def mock_asora():
         yield mock
 
 
-def call_evolve3D(use_gpu: bool = False, rank: int = 0):
+@pytest.fixture(scope="module")
+def chem_params() -> ChemistryParams:
+    colh0 = 1.3e-8 * 0.83 * 1.0 / 13.598**2
+    temph0 = 13.598 / (cst.k_B * u.K).to("eV").value
+    return ChemistryParams(2.59e-13, -0.7, colh0, temph0, 7.1e-7)
+
+
+@contextmanager
+def setup_evolve_mock(use_gpu: bool = False, rank: int = 0):
+    Hz = cosmo.H(10.0).cgs.value
     N = 32
 
     rng = np.random.default_rng(918)
@@ -52,6 +66,7 @@ def call_evolve3D(use_gpu: bool = False, rank: int = 0):
 
     minlogtau, maxlogtau, num_tau = -20.0, 4.0, 20000
     tau, dlogtau = make_tau_table(minlogtau, maxlogtau, num_tau)
+    logtau = minlogtau, dlogtau, num_tau
     freq_min, freq_max = (
         (13.598 * u.eV / cst.h).to("Hz").value,
         (54.416 * u.eV / cst.h).to("Hz").value,
@@ -62,10 +77,8 @@ def call_evolve3D(use_gpu: bool = False, rank: int = 0):
         tau, freq_min, freq_max, 1e48
     )
 
-    colh0 = 1.3e-8 * 0.83 * 1.0 / 13.598**2
-    temph0 = 13.598 / (cst.k_B * u.K).to("eV").value
-
-    return evolve3D(
+    yield dict(
+        Hz=Hz,
         dt=1e3,
         dr=(1 * u.Mpc).cgs.value / N,
         src_flux=src_flux,
@@ -84,17 +97,16 @@ def call_evolve3D(use_gpu: bool = False, rank: int = 0):
         clump=clump,
         photo_thin_table=photo_thin_table,
         photo_thick_table=photo_thick_table,
-        minlogtau=minlogtau,
-        dlogtau=dlogtau,
         R_max_LLS=15.0,
         convergence_fraction=1e-4,
         sigma=sigma,
-        chems=ChemistryParams(2.59e-13, -0.7, colh0, temph0, 7.1e-7),
+        logtau=logtau,
     )
 
 
-def test_evolve3D_no_gpu_root_rank(mock_c2ray, mock_asora):
-    call_evolve3D(use_gpu=False, rank=0)
+def test_evolve3D_no_gpu_root_rank(mock_c2ray, mock_asora, chem_params):
+    with setup_evolve_mock(use_gpu=False, rank=0) as kwargs:
+        evolve3D(**kwargs, chems=chem_params)
 
     mock_asora.source_data_to_device.assert_not_called()
     mock_asora.density_to_device.assert_not_called()
@@ -105,8 +117,9 @@ def test_evolve3D_no_gpu_root_rank(mock_c2ray, mock_asora):
     mock_c2ray.raytracing.do_all_sources.assert_called()
 
 
-def test_evolve3D_yes_gpu_root_rank(mock_c2ray, mock_asora):
-    call_evolve3D(use_gpu=True, rank=0)
+def test_evolve3D_yes_gpu_root_rank(mock_c2ray, mock_asora, chem_params):
+    with setup_evolve_mock(use_gpu=True, rank=0) as kwargs:
+        evolve3D(**kwargs, chems=chem_params)
 
     mock_asora.source_data_to_device.assert_called()
     mock_asora.density_to_device.assert_called()
@@ -115,3 +128,103 @@ def test_evolve3D_yes_gpu_root_rank(mock_c2ray, mock_asora):
 
     mock_c2ray.chemistry.global_pass.assert_not_called()
     mock_c2ray.raytracing.do_all_sources.assert_not_called()
+
+
+@contextmanager
+def setup_evolve_asora(
+    mesh_size: int = 50,
+    num_sources: int = 10,
+    radius: float = 15.0,
+):
+    # Calculate the table
+    minlog_tau, maxlog_tau, num_tau = -20.0, 4.0, 20000
+    tau, dlogtau = make_tau_table(minlog_tau, maxlog_tau, num_tau)
+    logtau = minlog_tau, dlogtau, num_tau
+
+    # Min and max frequency of the integral
+    freq_min, freq_max = (
+        (13.598 * u.eV / cst.h).to("Hz").value,
+        (54.416 * u.eV / cst.h).to("Hz").value,
+    )
+
+    # Calculate the table
+    radsource = BlackBodySource_Multifreq(1e5, False)
+    photo_thin_table, photo_thick_table = radsource.make_photo_table(
+        tau, freq_min, freq_max, 1e48
+    )
+    heat_thin_table, heat_thick_table = radsource.make_heat_table(
+        tau, freq_min, freq_max, 1e48
+    )
+
+    cool_tables = CoolingTables.from_dir()
+
+    # Allocate tables to GPU device
+    assert libasora is not None
+
+    libasora.photo_tables_to_device(
+        photo_thin_table.ravel(),
+        photo_thick_table.ravel(),
+        heat_thin_table.ravel(),
+        heat_thick_table.ravel(),
+    )
+
+    libasora.cooling_tables_to_device(
+        cool_tables.HI,
+        cool_tables.HII,
+        cool_tables.HeI,
+        cool_tables.HeII,
+        cool_tables.HeIII,
+    )
+
+    mesh_shape = mesh_size, mesh_size, mesh_size
+
+    # density field [g/cm^3]
+    rng = np.random.default_rng(1111)
+    ndens = rng.uniform(1e-6, 1e-3, size=mesh_shape).astype(np.float64)
+
+    # temperature [K]
+    temp = np.pow(10, rng.normal(4, 0.25, size=mesh_shape), dtype=np.float64)
+    clump = np.ones_like(temp)
+
+    xHI = np.zeros_like(ndens)
+
+    # Define some random sources
+    src_pos = rng.integers(0, mesh_size, size=(3, num_sources), dtype=np.int32)
+    src_flux = rng.uniform(1e10, 1e14, size=num_sources).astype(np.float64)
+    src_flux *= 100.0 / 1e48
+
+    # Size of a cell
+    dr = (1.5 * u.Mpc / mesh_size).cgs.value
+    dt = (5 * u.Myr).cgs.value
+    Hz = cosmo.H(10.0).cgs.value
+
+    comm = MPI.COMM_WORLD
+    yield dict(
+        dr=dr,
+        dt=dt,
+        Hz=Hz,
+        src_flux=src_flux,
+        src_pos=src_pos,
+        src_batch_size=8,
+        temp=temp,
+        ndens=ndens,
+        xh=xHI,
+        clump=clump,
+        R_max_LLS=radius,
+        convergence_fraction=1e-4,
+        use_gpu=True,
+        use_mpi=True,
+        rank=comm.Get_rank(),
+        nprocs=comm.Get_size(),
+        logtau=logtau,
+        logtemp=cool_tables.logtemp,
+    )
+
+
+def test_evolve_asora(init_device, chem_params):
+    with setup_evolve_asora() as kwargs:
+        shape = kwargs["ndens"].shape
+        xh, phi = evolve3D(**kwargs, chems=chem_params)
+
+    assert xh.shape == shape
+    assert phi.shape == shape

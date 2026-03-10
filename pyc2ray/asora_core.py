@@ -3,6 +3,8 @@
 # GPU memory has been allocated when GPU-accelerated functions are called.
 # ===================================================================================================
 
+import numpy as np
+
 from pyc2ray.load_extensions import libasora_He as libasora
 
 __all__ = ["is_device_init", "device_init", "device_close", "photo_tables_to_device"]
@@ -49,11 +51,18 @@ def device_close() -> None:
 
 
 @check_libasora
-def photo_tables_to_device(thin_table, thick_table):
+def photo_tables_to_device(
+    thin_table: np.ndarray,
+    thick_table: np.ndarray,
+    heat_thin_table: np.ndarray,
+    heat_thick_table: np.ndarray,
+) -> None:
     """Copy radiation tables to GPU (optically thin & thick tables)"""
     assert libasora is not None
     if not libasora.is_device_init():
         raise RuntimeError(
             "GPU not initialized. Please initialize it by calling device_init"
         )
-    libasora.photo_tables_to_device(thin_table, thick_table)
+    libasora.photo_tables_to_device(
+        thin_table, thick_table, heat_thin_table, heat_thick_table
+    )
