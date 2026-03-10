@@ -88,8 +88,11 @@ def test_chemistry_python(data_dir):
 
 def test_chemistry_asora(data_dir, init_device):
     with setup_chemistry() as args:
-        xh = args[3]
-        xh_int = args[5]
+        libasora.density_to_device(args[1])
+        args = args[0], *args[2:]
+
+        xh = args[2]
+        xh_int = args[4]
 
         for _ in range(1000):
             conv = libasora.chemistry_global_pass(*args)
@@ -114,4 +117,7 @@ def test_benchmark_chemistry_python(benchmark, data_dir):
 @pytest.mark.parametrize("block_size", [512, 640, 768, 896])
 def test_benchmark_chemistry_asora(benchmark, data_dir, init_device, block_size):
     with setup_chemistry(200) as args:
+        libasora.density_to_device(args[1])
+        args = args[0], *args[2:]
+
         benchmark(libasora.chemistry_global_pass, *args, block_size)

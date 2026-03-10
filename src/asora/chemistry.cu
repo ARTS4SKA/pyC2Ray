@@ -124,9 +124,9 @@ namespace asora {
     // Host function to call global_pass
     size_t global_pass(
         double* xh, double* xh_av, double* xh_int, const double* temp,
-        const double* ndens, const double* phi_ion, const double* clump, double dt,
-        double bh00, double albpow, double colh0, double temph0, double abu_c,
-        size_t n_cells, size_t block_size
+        const double* phi_ion, const double* clump, double dt, double bh00,
+        double albpow, double colh0, double temph0, double abu_c, size_t n_cells,
+        size_t block_size
     ) {
         // Allocate (if necessary) and copy the average ionized fraction array to the
         // device. This array is also used by raytracing.
@@ -141,7 +141,6 @@ namespace asora {
 
         // Initialize and copy const data.
         for (auto&& [tag, data] : {
-                 std::pair{buffer_tag::number_density, ndens},
                  std::pair{buffer_tag::photo_ionization_HI, phi_ion},
                  std::pair{buffer_tag::temperature, temp},
                  std::pair{buffer_tag::clumping_factor, clump},
