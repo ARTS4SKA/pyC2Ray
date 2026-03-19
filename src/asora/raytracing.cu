@@ -86,18 +86,18 @@ namespace {
         // When not in periodic mode, only treat cell if its in the grid
         if (!in_box(i0 + di, j0 + dj, k0 + dk, m1)) return;
 #endif
+        auto dist2 =
+            (dr * di) * (dr * di) + (dr * dj) * (dr * dj) + (dr * dk) * (dr * dk);
+        // Reducing the following calculation changes the numerical precision of
+        // the result, albeit the physical result doesn't.
+        if (dist2 / (dr * dr) > R_max * R_max) return;
+
         cell_interpolator interp{di, dj, dk};
         auto coldens_in =
             interp.interpolate(data_HI.shared_cdens, data_HI.cross_section);
 
         constexpr double max_coldens = 2e30;
         if (coldens_in > max_coldens) return;
-
-        auto dist2 =
-            (dr * di) * (dr * di) + (dr * dj) * (dr * dj) + (dr * dk) * (dr * dk);
-        // Reducing the following calculation changes the numerical precision of
-        // the result, albeit the physical result doesn't.
-        if (dist2 / (dr * dr) > R_max * R_max) return;
 
         auto path = path_in_cell(di, dj, dk) * dr;
         auto vol_ph = 4 * c::pi<> * dist2 * path;
