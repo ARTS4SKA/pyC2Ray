@@ -89,10 +89,12 @@ def test_source_data_to_device(init_device):
 
 @contextmanager
 def setup_do_all_sources(
-    num_sources: int = 10, mesh_size: int = 50, batch_size: int = 8, block_size=256
+    num_sources: int = 10,
+    mesh_size: int = 50,
+    batch_size: int = 8,
+    block_size: int = 256,
+    radius: float = 15.0,
 ):
-    R_max = 15.0
-
     # Calculate the table
     minlog_tau, maxlog_tau, num_tau = -20.0, 4.0, 20000
     tau, dlogtau = make_tau_table(minlog_tau, maxlog_tau, num_tau)
@@ -139,7 +141,7 @@ def setup_do_all_sources(
     dr = (box / mesh_size).cgs.value
 
     yield (
-        R_max,
+        radius,
         sigma_HI_at_ion_freq,
         dr,
         xHII,
