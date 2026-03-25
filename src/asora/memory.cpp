@@ -101,13 +101,13 @@ namespace asora {
         auto &&[it, success] = _memory_pool.try_emplace(tag, nbytes);
 
         // Reallocate if existing buffer is too small
-        if (ensure && it->second.size() < nbytes) {
-            it->second = device_buffer(nbytes);
-            success = true;
-        }
+        if (ensure && it->second.size() < nbytes) it->second = device_buffer(nbytes);
 
         // Throw if tag exists but no copy requested, otherwise copy data
-        if (!success && !src) throw std::runtime_error("tag already in use");
+        if (!success && !ensure && !src)
+            throw std::runtime_error(
+                std::format("tag {} already in use", static_cast<int>(tag))
+            );
         if (src) it->second.copyFromHost(src, nbytes);
     }
 

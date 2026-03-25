@@ -145,8 +145,7 @@ namespace asora {
 
         // Allocate (if necessary) and zero the output array for the photoionization
         // rate
-        if (!device::contains(buffer_tag::photo_ionization_HI))
-            device::add<double>(buffer_tag::photo_ionization_HI, n_cells);
+        device::ensure<double>(buffer_tag::photo_ionization_HI, n_cells);
         auto phi_buf = device::get(buffer_tag::photo_ionization_HI);
         auto phi_d = phi_buf.data<double>();
         safe_cuda(cudaMemset(phi_d, 0, phi_buf.size()));
@@ -156,10 +155,9 @@ namespace asora {
         // faces of the octahedron. To raytrace the whole volume, the octahedron must
         // be 1.5*N in size. Allocate (if necessary) the column density array.
         int q_max = std::ceil(c::sqrt3<> * std::min(R, c::sqrt3<> * m1 / 2.0));
-        if (!device::contains(buffer_tag::column_density_HI))
-            device::add<double>(
-                buffer_tag::column_density_HI, grid_size * cells_to_shell(q_max)
-            );
+        device::ensure<double>(
+            buffer_tag::column_density_HI, grid_size * cells_to_shell(q_max)
+        );
 
         // Get source properties, assuming the arrays are already on the device.
         if (!device::contains(buffer_tag::source_flux) ||
@@ -232,7 +230,7 @@ namespace asora {
 
         // Offset pointer to the outgoing column density array used for
         // interpolation (each block works on its own array).
-        int cd_offset = blockIdx.x * cells_to_shell(q_max);
+        size_t cd_offset = blockIdx.x * cells_to_shell(q_max);
         data_HI.column_density += cd_offset;
 
         // Calculate column density and photoionization rate for the source cell.
