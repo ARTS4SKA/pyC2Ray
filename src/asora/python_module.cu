@@ -1,10 +1,12 @@
-
 #include "chemistry.h"
 #include "memory.h"
 #include "raytracing.cuh"
 
 #include <Python.h>
 #include <numpy/arrayobject.h>
+
+#include <string>
+#include <typeinfo>
 
 /* @file python_module.cu
  * @brief ASORA Python C-extension module
@@ -151,7 +153,9 @@ PyObject *asora_density_to_device([[maybe_unused]] PyObject *self, PyObject *arg
 }
 
 /// Allocate and copy radiation tables to the device.
-PyObject *asora_photo_table_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
+PyObject *asora_photo_tables_to_device(
+    [[maybe_unused]] PyObject *self, PyObject *args
+) {
     PyArrayObject *thin_table, *thick_table;
     return PyArg_ParseTuple(args, "OO", &thin_table, &thick_table) &&
                    load_array_to_device<double>(
@@ -236,7 +240,7 @@ static PyMethodDef asoraMethods[] = {
      "Check if the device is initialized"},
     {"density_to_device", asora_density_to_device, METH_VARARGS,
      "Copy density field to the device"},
-    {"photo_table_to_device", asora_photo_table_to_device, METH_VARARGS,
+    {"photo_tables_to_device", asora_photo_tables_to_device, METH_VARARGS,
      "Copy radiation tables to the device"},
     {"source_data_to_device", asora_source_data_to_device, METH_VARARGS,
      "Copy source data to the device"},

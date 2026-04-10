@@ -3,9 +3,9 @@
 # GPU memory has been allocated when GPU-accelerated functions are called.
 # ===================================================================================================
 
-from .load_extensions import libasora
+from pyc2ray.load_extensions import libasora_He as libasora
 
-__all__ = ["is_device_init", "device_init", "device_close", "photo_table_to_device"]
+__all__ = ["is_device_init", "device_init", "device_close", "photo_tables_to_device"]
 
 # This flag indicates whether GPU memory has been correctly allocated before calling any methods.
 # NOTE: there is no check if the allocated memory has the correct mesh size when calling a function,
@@ -49,11 +49,11 @@ def device_close() -> None:
 
 
 @check_libasora
-def photo_table_to_device(thin_table, thick_table):
+def photo_tables_to_device(thin_table, thick_table):
     """Copy radiation tables to GPU (optically thin & thick tables)"""
     assert libasora is not None
     if not libasora.is_device_init():
         raise RuntimeError(
             "GPU not initialized. Please initialize it by calling device_init"
         )
-    libasora.photo_table_to_device(thin_table, thick_table)
+    libasora.photo_tables_to_device(thin_table, thick_table)

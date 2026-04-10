@@ -10,7 +10,7 @@ from astropy.cosmology import FlatLambdaCDM, z_at_value
 from mpi4py import MPI
 
 import pyc2ray.constants as c
-from pyc2ray.asora_core import device_close, device_init, photo_table_to_device
+from pyc2ray.asora_core import device_close, device_init, photo_tables_to_device
 from pyc2ray.evolve import evolve3D
 from pyc2ray.parameters import (
     AbundancesParameters,
@@ -751,7 +751,7 @@ This is Energy:           {freq_min / c.ev2fr:.3e} to {freq_max / c.ev2fr:.3e} e
 
         # Copy radiation table to GPU
         if self.gpu:
-            photo_table_to_device(self.photo_thin_table, self.photo_thick_table)
+            photo_tables_to_device(self.photo_thin_table, self.photo_thick_table)
             logger.info("Successfully copied radiation tables to GPU memory.")
 
     def _grid_init(self) -> None:

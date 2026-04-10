@@ -4,7 +4,8 @@ import time
 import numpy as np
 
 from .asora_core import is_device_init
-from .load_extensions import libasora, libc2ray
+from .load_extensions import libasora_He as libasora
+from .load_extensions import libc2ray
 from .utils.logutils import disable_newline
 from .utils.sourceutils import format_sources
 

@@ -100,7 +100,7 @@ namespace {
         if (coldens_in > max_coldens) return;
 
         auto path = path_in_cell(di, dj, dk) * dr;
-        auto vol_ph = 4 * c::pi<> * dist2 * path;
+        auto vol = 4 * c::pi<> * dist2 * path;
 
         // Get local ionization fraction & neutral hydrogen density in the cell
         const auto index = ravel_index(i0 + di, j0 + dj, k0 + dk, m1);
@@ -109,8 +109,8 @@ namespace {
 
         // Compute photoionization rates from column density.
         update_photo_rates(
-            data_HI, q_off + s, index, coldens_in, nHI, path, strength, vol_ph,
-            ion_tables, logtau
+            data_HI, q_off + s, index, coldens_in, nHI, path, strength, vol, ion_tables,
+            logtau
         );
     }
 

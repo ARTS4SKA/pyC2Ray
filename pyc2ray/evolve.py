@@ -5,11 +5,12 @@ import time
 import numpy as np
 from mpi4py import MPI
 
-from .asora_core import is_device_init
-from .load_extensions import libasora, libc2ray
-from .utils import display_time
-from .utils.logutils import allow_rank_logging
-from .utils.sourceutils import FloatArray, IntArray, format_sources
+from pyc2ray.asora_core import is_device_init
+from pyc2ray.load_extensions import libasora_He as libasora
+from pyc2ray.load_extensions import libc2ray
+from pyc2ray.utils import display_time
+from pyc2ray.utils.logutils import allow_rank_logging
+from pyc2ray.utils.sourceutils import FloatArray, IntArray, format_sources
 
 __all__ = ["evolve3D"]
 

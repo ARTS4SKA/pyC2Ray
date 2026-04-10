@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from functools import partial
+from pathlib import Path
 from typing import TypeVar
 
 import astropy.constants as cst
@@ -181,7 +182,9 @@ class YggdrasilModel(BlackBodyBase):
 
     def normalize_SED(self, sed: float, freq: FloatArray, S_star_ref: float) -> float:
         S_unscaled = self.integrate_SED(sed, freq)
-        # MB: in C2Ray this was: self.R_star = np.sqrt(S_scaling) * self.R_star. Here we define the SED with the proper units so we do not need to squareroot (as we do not multiply to R_star) and instead multiply directly to the SED.
+        # MB: in C2Ray this was: self.R_star = np.sqrt(S_scaling) * self.R_star.
+        # Here we define the SED with the proper units so we do not need to squareroot
+        # (as we do not multiply to R_star) and instead multiply directly to the SED.
         S_scaling = S_star_ref / S_unscaled
         return sed * S_scaling
 
@@ -190,7 +193,9 @@ class YggdrasilModel(BlackBodyBase):
             return np.ones_like(freq)
         return (freq / self.freq0) ** (-self.pl_index)
 
-    # C2Ray distinguishes between optically thin and thick cells, and calculates the rates differently for those two cases. See radiation_tables.F90, lines 345 -
+    # C2Ray distinguishes between optically thin and thick cells,
+    # and calculates the rates differently for those two cases.
+    # See radiation_tables.F90, lines 345 -
     def _photo_thick_integrand_vec(
         self, sed: float, freq: FloatArray, tau: FloatArray
     ) -> FloatArray:
@@ -286,6 +291,9 @@ class YggdrasilModel(BlackBodyBase):
 class BlackBodySource_Multifreq(BlackBodyBase):
     """A point source emitting a Black-body spectrum"""
 
+    TABLE_DIR = Path(pc2r.__file__).parent / "tables" / "multifreq"
+    TABLE_FILE = TABLE_DIR / "Verner1996_spectidx.txt"
+
     def __init__(self, temp: float, grey: bool) -> None:
         self.temp = temp
         self.grey = grey
@@ -296,12 +304,8 @@ class BlackBodySource_Multifreq(BlackBodyBase):
         self.freq0_HeI = (24.587 * u.eV / cst.h).to("Hz").value
         self.freq0_HeII = (54.416 * u.eV / cst.h).to("Hz").value
 
-        self.freqs_tab, self.pl_index_HI, self.pl_index_HeI, self.pl_index_HeII = (
-            np.loadtxt(
-                pc2r.__path__[0] + "/tables/multifreq/Verner1996_spectidx.txt",
-                unpack=True,
-            )
-        )
+        arrays = np.loadtxt(BlackBodySource_Multifreq.TABLE_FILE, unpack=True)
+        self.freqs_tab, self.pl_index_HI, self.pl_index_HeI, self.pl_index_HeII = arrays
 
     def SED(self, freq: float) -> float:
         if freq * h_over_k / self.temp >= 700.0:
@@ -328,20 +332,22 @@ class BlackBodySource_Multifreq(BlackBodyBase):
         if self.grey:
             return 1.0
 
-        # MB: use the power-low index of the higher frequency bin (private conversation with Garrelt, Ilian and Sambit), i.e.: use the predominat cross section
+        # MB: use the power-low index of the higher frequency bin (private conversation with Garrelt, Ilian and Sambit),
+        # i.e.: use the predominat cross section
         # Not sure if this is correct: see cross-section fit of Verner+ (1996). See Equation 1 and parameters in Table 1.
         if freq < self.freq0_HeI:
             pl_index = np.interp(x=freq, xp=self.freqs_tab, fp=self.pl_index_HI)
             freq0 = self.freq0_HI
-        elif freq < self.freq0_HeII and freq >= self.freq0_HeI:
+        elif freq < self.freq0_HeII:
             pl_index = np.interp(x=freq, xp=self.freqs_tab, fp=self.pl_index_HeI)
             freq0 = self.freq0_HeI
-        elif freq >= self.freq0_HeII:
+        else:  # if freq >= self.freq0_HeII:
             pl_index = np.interp(x=freq, xp=self.freqs_tab, fp=self.pl_index_HeII)
             freq0 = self.freq0_HeII
         return (freq / freq0) ** (-pl_index)
 
-    # C2Ray distinguishes between optically thin and thick cells, and calculates the rates differently for those two cases. See radiation_tables.F90, lines 345 -
+    # C2Ray distinguishes between optically thin and thick cells,
+    # and calculates the rates differently for those two cases. See radiation_tables.F90, lines 345 -
     def _photo_thick_integrand_vec(self, freq: float, tau: FloatArray) -> FloatArray:
         itg = self.SED(freq) * np.exp(-tau * self.cross_section_freq_dependence(freq))
         # To avoid overflow in the exponential, check
@@ -380,7 +386,8 @@ class BlackBodySource_Multifreq(BlackBodyBase):
         # assert freq_max <= self.freqs_tab.max(), "Maximum frequency (freq_max = %.3e Hz) exceed value in table %.3e Hz" %(freq_max, self.freqs_tab.max())
 
         # freqs = self.freqs_tab[(self.freqs_tab >= freq_min) * (self.freqs_tab <= freq_max)]
-        # freqs = np.linspace(self.freqs_tab.min(), self.freqs_tab.max(), 100)    # TODO: need to be carefull as this can lead to error if the sub-bin is not mentioned in the raytracing
+        # freqs = np.linspace(self.freqs_tab.min(), self.freqs_tab.max(), 100)
+        # TODO: need to be carefull as this can lead to error if the sub-bin is not mentioned in the raytracing
         freqs = self.freqs_tab
 
         # empty tables
@@ -409,7 +416,8 @@ class BlackBodySource_Multifreq(BlackBodyBase):
         # assert freq_max <= self.freqs_tab.max(), "Maximum frequency (freq_max = %.3e Hz) exceed value in table %.3e Hz" %(freq_max, self.freqs_tab.max())
 
         # freqs = self.freqs_tab[(self.freqs_tab >= freq_min) * (self.freqs_tab <= freq_max)]
-        # freqs = np.linspace(self.freqs_tab.min(), self.freqs_tab.max(), 100)    # TODO: need to be carefull as this can lead to error if the sub-bin is not mentioned in the raytracing
+        # freqs = np.linspace(self.freqs_tab.min(), self.freqs_tab.max(), 100)
+        # TODO: need to be carefull as this can lead to error if the sub-bin is not mentioned in the raytracing
         freqs = self.freqs_tab
 
         # empty tables

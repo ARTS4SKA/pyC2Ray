@@ -43,14 +43,14 @@ def test_density_to_device(init_device):
     libasora.density_to_device(create_density_data(32))
 
 
-def test_photo_table_to_device(init_device):
+def test_photo_tables_to_device(init_device):
     # Two arguments required
     with pytest.raises(TypeError):
-        libasora.photo_table_to_device(np.array([]))
+        libasora.photo_tables_to_device(np.array([]))
 
     # Both arguments must be np.float64 arrays
     with pytest.raises(TypeError):
-        libasora.photo_table_to_device(
+        libasora.photo_tables_to_device(
             np.ones(10, dtype=np.float32), np.zeros(10, dtype=np.float64)
         )
 
@@ -60,9 +60,9 @@ def test_photo_table_to_device(init_device):
         return thin, thick
 
     assert libasora is not None
-    libasora.photo_table_to_device(*create_photo_table_data(80))
-    libasora.photo_table_to_device(*create_photo_table_data(100))
-    libasora.photo_table_to_device(*create_photo_table_data(90))
+    libasora.photo_tables_to_device(*create_photo_table_data(80))
+    libasora.photo_tables_to_device(*create_photo_table_data(100))
+    libasora.photo_tables_to_device(*create_photo_table_data(90))
 
 
 def test_source_data_to_device(init_device):
@@ -114,7 +114,7 @@ def setup_do_all_sources(
 
     # Allocate tables to GPU device
     assert libasora is not None
-    libasora.photo_table_to_device(photo_thin_table, photo_thick_table)
+    libasora.photo_tables_to_device(photo_thin_table, photo_thick_table)
 
     size = mesh_size**3
     phi_ion = np.empty(size, dtype=np.float64)
