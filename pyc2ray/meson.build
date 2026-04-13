@@ -8,9 +8,11 @@ pyc2ray_sources = [
     'c2ray_fstar.py',
     'c2ray_test.py',
     'c2ray_thesan.py',
+    'constants.py',
     'evolve.py',
     'interface_p21c.py',
     'load_extensions.py',
+    'parameters.py',
     'raytracing.py',
     'sinks_model.py',
     'source_model.py',
@@ -26,7 +28,6 @@ pyc2ray_sources = [
     'utils/check_source_formalism.py',
     'utils/logutils.py',
     'utils/other_utils.py',
-    'utils/paramutils.py',
     'utils/source_converter.py',
     'utils/sourceutils.py',
     'visualization/__init__.py',
@@ -36,38 +37,6 @@ pyc2ray_sources = [
 
 py.install_sources(
     pyc2ray_sources,
-    subdir: 'pyc2ray',
-    pure: false,
-    preserve_path: true,
-)
-
-pyc2ray_tables = [
-  'tables/dotN_thesan/redshifts.txt',
-  'tables/dotN_thesan/dotN_bins.txt',
-  'tables/dotN_thesan/mass_bins.txt',
-  'tables/dotN_thesan/popt_extMhalo.txt',
-  'tables/fesc_thesan/redshifts.txt',
-  'tables/fesc_thesan/mass_bin.txt',
-  'tables/fesc_thesan/fesc_thesan_tables.txt',
-  'tables/clumping/par_redshift_1.518Mpc.txt',
-  'tables/clumping/par_redshift_1.012Mpc.txt',
-  'tables/clumping/par_redshift_2.094Mpc.txt',
-  'tables/clumping/par_density_2.024Mpc.txt',
-  'tables/clumping/par_density_1.518Mpc.txt',
-  'tables/clumping/par_redshift_2.381Mpc.txt',
-  'tables/clumping/par_density_1.012Mpc.txt',
-  'tables/clumping/par_density_1.162Mpc.txt',
-  'tables/clumping/resolutions.txt',
-  'tables/clumping/par_redshift_1.162Mpc.txt',
-  'tables/clumping/par_redshift_2.024Mpc.txt',
-  'tables/clumping/par_density_2.094Mpc.txt',
-  'tables/clumping/par_density_2.381Mpc.txt',
-  'tables/multifreq/Verner1996_crossect.txt',
-  'tables/multifreq/Verner1996_spectidx.txt',
-]
-
-py.install_sources(
-    pyc2ray_tables,
     subdir: 'pyc2ray',
     pure: false,
     preserve_path: true,

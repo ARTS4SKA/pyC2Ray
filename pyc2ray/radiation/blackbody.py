@@ -1,11 +1,15 @@
+from abc import ABC, abstractmethod
 from functools import partial
-from pathlib import Path
+from typing import TypeVar
 
 import astropy.constants as cst
 import astropy.units as u
 import numpy as np
+import numpy.typing as npt
 import scipy
 from scipy.integrate import quad, quad_vec
+
+import pyc2ray as pc2r
 
 # For detailed comparisons with C2Ray, we use the same exact value for the constants
 # This can be changed to the astropy values once consistency between
@@ -18,59 +22,72 @@ hplanck = cst.h.cgs.value
 ion_freq_HI = (cst.Ryd * cst.c).cgs.value
 sigma_0 = 6.3e-18
 
-__all__ = ["BlackBodySource", "YggdrasilModel"]
+__all__ = ["BlackBodyBase", "BlackBodySource", "YggdrasilModel"]
+
+BlackBodyType = TypeVar("BlackBodyType", bound="BlackBodyBase")
+
+FloatArray = npt.NDArray[np.float64]
 
 
-class BlackBodySource:
+class BlackBodyBase(ABC):
+    @abstractmethod
+    def make_photo_table(
+        self, tau: FloatArray, freq_min: float, freq_max: float, S_star_ref: float
+    ) -> tuple[FloatArray, FloatArray]: ...
+
+    @abstractmethod
+    def make_heat_table(
+        self, tau: FloatArray, freq_min: float, freq_max: float, S_star_ref: float
+    ) -> tuple[FloatArray, FloatArray]: ...
+
+
+class BlackBodySource(BlackBodyBase):
     """A point source emitting a Black-body spectrum"""
 
-    def __init__(self, temp, grey, freq0, pl_index) -> None:
+    def __init__(self, temp: float, grey: bool, freq0: float, pl_index: float) -> None:
         self.temp = temp
         self.grey = grey
         self.freq0 = freq0
         self.pl_index = pl_index
         self.R_star = 1.0
 
-    def SED(self, freq):
-        if freq * h_over_k / self.temp < 700.0:
-            sed = (
-                4
-                * np.pi
-                * self.R_star**2
-                * two_pi_over_c_square
-                * freq**2
-                / (np.exp(freq * h_over_k / self.temp) - 1.0)
-            )
-        else:
-            sed = 0.0
-        return sed
+    def SED(self, freq: float) -> float:
+        if freq * h_over_k / self.temp >= 700.0:
+            return 0.0
+        return (
+            4
+            * np.pi
+            * self.R_star**2
+            * two_pi_over_c_square
+            * freq**2
+            / (np.exp(freq * h_over_k / self.temp) - 1.0)
+        )
 
-    def integrate_SED(self, f1, f2):
-        res = quad(self.SED, f1, f2)
-        return res[0]
+    def integrate_SED(self, f1: float, f2: float) -> float:
+        res, *_ = quad(self.SED, f1, f2)
+        return res
 
-    def normalize_SED(self, f1, f2, S_star_ref):
+    def normalize_SED(self, f1: float, f2: float, S_star_ref: float) -> None:
         S_unscaled = self.integrate_SED(f1, f2)
         S_scaling = S_star_ref / S_unscaled
         self.R_star = np.sqrt(S_scaling) * self.R_star
 
-    def cross_section_freq_dependence(self, freq):
+    def cross_section_freq_dependence(self, freq: float) -> float:
         if self.grey:
             return 1.0
-        else:
-            return (freq / self.freq0) ** (-self.pl_index)
+        return (freq / self.freq0) ** (-self.pl_index)
 
     # C2Ray distinguishes between optically thin and thick cells,
     # and calculates the rates differently for those two cases.
     # See radiation_tables.F90, lines 345 -
-    def _photo_thick_integrand_vec(self, freq, tau):
+    def _photo_thick_integrand_vec(self, freq: float, tau: FloatArray) -> FloatArray:
         itg = self.SED(freq) * np.exp(-tau * self.cross_section_freq_dependence(freq))
         # To avoid overflow in the exponential, check
         return np.where(
             tau * self.cross_section_freq_dependence(freq) < 700.0, itg, 0.0
         )
 
-    def _photo_thin_integrand_vec(self, freq, tau):
+    def _photo_thin_integrand_vec(self, freq: float, tau: FloatArray) -> FloatArray:
         itg = (
             self.SED(freq)
             * self.cross_section_freq_dependence(freq)
@@ -80,15 +97,17 @@ class BlackBodySource:
             tau * self.cross_section_freq_dependence(freq) < 700.0, itg, 0.0
         )
 
-    def _heat_thick_integrand_vec(self, freq, tau):
+    def _heat_thick_integrand_vec(self, freq: float, tau: FloatArray) -> FloatArray:
         photo_thick = self._photo_thick_integrand_vec(freq, tau)
         return hplanck * (freq - ion_freq_HI) * photo_thick
 
-    def _heat_thin_integrand_vec(self, freq, tau):
+    def _heat_thin_integrand_vec(self, freq: float, tau: FloatArray) -> FloatArray:
         photo_thin = self._photo_thin_integrand_vec(freq, tau)
         return hplanck * (freq - ion_freq_HI) * photo_thin
 
-    def make_photo_table(self, tau, freq_min, freq_max, S_star_ref):
+    def make_photo_table(
+        self, tau: FloatArray, freq_min: float, freq_max: float, S_star_ref: float
+    ) -> tuple[FloatArray, FloatArray]:
         self.normalize_SED(freq_min, freq_max, S_star_ref)
 
         integrand_thin = partial(self._photo_thin_integrand_vec, tau=tau)
@@ -98,21 +117,25 @@ class BlackBodySource:
         table_thick = quad_vec(integrand_thick, freq_min, freq_max, epsrel=1e-12)[0]
         return table_thin, table_thick
 
-    def make_heat_table(self, tau, freq_min, freq_max, S_star_ref):
+    def make_heat_table(
+        self, tau: FloatArray, freq_min: float, freq_max: float, S_star_ref: float
+    ) -> tuple[FloatArray, FloatArray]:
         self.normalize_SED(freq_min, freq_max, S_star_ref)
 
-        integrand_thin = partial(self._photo_thin_integrand_vec, tau=tau)
-        integrand_thick = partial(self._photo_thick_integrand_vec, tau=tau)
+        integrand_thin = partial(self._heat_thin_integrand_vec, tau=tau)
+        integrand_thick = partial(self._heat_thick_integrand_vec, tau=tau)
 
         table_thin = quad_vec(integrand_thin, freq_min, freq_max, epsrel=1e-12)[0]
         table_thick = quad_vec(integrand_thick, freq_min, freq_max, epsrel=1e-12)[0]
         return table_thin, table_thick
 
 
-class YggdrasilModel:
+class YggdrasilModel(BlackBodyBase):
     """Use Yggdrasil model for SED"""
 
-    def __init__(self, tabname, grey, freq0, pl_index, S_star_ref) -> None:
+    def __init__(
+        self, tabname: str, grey: bool, freq0: float, pl_index: float, S_star_ref: float
+    ) -> None:
         self.grey = grey
         self.freq0 = freq0
         self.tabname = tabname
@@ -134,7 +157,7 @@ class YggdrasilModel:
         
     """
 
-    def SED(self, f1, f2):
+    def SED(self, f1: float, f2: float) -> tuple[float, FloatArray, FloatArray]:
         lamb, flux = np.loadtxt(
             self.tabname, unpack=True
         )  # wavelenght in (Angstrom), Flux in (erg/s/AA)
@@ -150,34 +173,36 @@ class YggdrasilModel:
         sed = flux[int_range]
         return sed, freqs[int_range], lamb[int_range]
 
-    def integrate_SED(self, sed, freq):
+    def integrate_SED(self, sed: float, freq: FloatArray) -> float:
         assert freq.min() == freq[0]
         assert freq.max() == freq[-1]
 
-        res = scipy.integrate.simpson(x=freq, y=sed, even="simpson")
-        return res
+        return scipy.integrate.simpson(x=freq, y=sed)
 
-    def normalize_SED(self, sed, freq, S_star_ref):
+    def normalize_SED(self, sed: float, freq: FloatArray, S_star_ref: float) -> float:
         S_unscaled = self.integrate_SED(sed, freq)
         # MB: in C2Ray this was: self.R_star = np.sqrt(S_scaling) * self.R_star. Here we define the SED with the proper units so we do not need to squareroot (as we do not multiply to R_star) and instead multiply directly to the SED.
         S_scaling = S_star_ref / S_unscaled
         return sed * S_scaling
 
-    def cross_section_freq_dependence(self, freq):
+    def cross_section_freq_dependence(self, freq: FloatArray) -> FloatArray:
         if self.grey:
-            return 1.0
-        else:
-            return (freq / self.freq0) ** (-self.pl_index)
+            return np.ones_like(freq)
+        return (freq / self.freq0) ** (-self.pl_index)
 
     # C2Ray distinguishes between optically thin and thick cells, and calculates the rates differently for those two cases. See radiation_tables.F90, lines 345 -
-    def _photo_thick_integrand_vec(self, sed, freq, tau):
+    def _photo_thick_integrand_vec(
+        self, sed: float, freq: FloatArray, tau: FloatArray
+    ) -> FloatArray:
         itg = sed * np.exp(-tau * self.cross_section_freq_dependence(freq))
         # To avoid overflow in the exponential, check
         return np.where(
             tau * self.cross_section_freq_dependence(freq) < 700.0, itg, 0.0
         )
 
-    def _photo_thin_integrand_vec(self, sed, freq, tau):
+    def _photo_thin_integrand_vec(
+        self, sed: float, freq: FloatArray, tau: FloatArray
+    ) -> FloatArray:
         itg = (
             sed
             * self.cross_section_freq_dependence(freq)
@@ -187,15 +212,21 @@ class YggdrasilModel:
             tau * self.cross_section_freq_dependence(freq) < 700.0, itg, 0.0
         )
 
-    def _heat_thick_integrand_vec(self, sed, freq, tau):
-        photo_thick = self._photo_thick_integrand_vec(sed, sed, freq, tau)
+    def _heat_thick_integrand_vec(
+        self, sed: float, freq: FloatArray, tau: FloatArray
+    ) -> FloatArray:
+        photo_thick = self._photo_thick_integrand_vec(sed, freq, tau)
         return hplanck * (freq - ion_freq_HI) * photo_thick
 
-    def _heat_thin_integrand_vec(self, sed, freq, tau):
-        photo_thin = self._photo_thin_integrand_vec(sed, sed, freq, tau)
+    def _heat_thin_integrand_vec(
+        self, sed: float, freq: FloatArray, tau: FloatArray
+    ) -> FloatArray:
+        photo_thin = self._photo_thin_integrand_vec(sed, freq, tau)
         return hplanck * (freq - ion_freq_HI) * photo_thin
 
-    def make_photo_table(self, tau, freq_min, freq_max, S_star_ref):
+    def make_photo_table(
+        self, tau: FloatArray, freq_min: float, freq_max: float, S_star_ref: float
+    ) -> tuple[FloatArray, FloatArray]:
         sed, freqs, lamb = self.SED(f1=freq_min, f2=freq_max)
         norm_sed = self.normalize_SED(sed, freqs, S_star_ref)
 
@@ -223,7 +254,9 @@ class YggdrasilModel:
         # tables must have shapes: (num taus, num freq) due to the C++ order
         return table_thin.T, table_thick.T
 
-    def make_heat_table(self, tau, freq_min, freq_max, S_star_ref):
+    def make_heat_table(
+        self, tau: FloatArray, freq_min: float, freq_max: float, S_star_ref: float
+    ) -> tuple[FloatArray, FloatArray]:
         sed, freqs, lamb = self.SED(freq_min, freq_max)
         norm_sed = self.normalize_SED(sed, lamb, S_star_ref)
 
@@ -232,7 +265,6 @@ class YggdrasilModel:
                 scipy.integrate.simpson(
                     y=self._heat_thin_integrand_vec(sed=norm_sed, freq=freqs, tau=t),
                     x=freqs,
-                    even="simpson",
                 )
                 for t in tau
             ]
@@ -242,7 +274,6 @@ class YggdrasilModel:
                 scipy.integrate.simpson(
                     y=self._heat_thick_integrand_vec(sed=norm_sed, freq=freqs, tau=t),
                     x=freqs,
-                    even="simpson",
                 )
                 for t in tau
             ]
@@ -252,10 +283,10 @@ class YggdrasilModel:
         return table_thin.T, table_thick.T
 
 
-class BlackBodySource_Multifreq:
+class BlackBodySource_Multifreq(BlackBodyBase):
     """A point source emitting a Black-body spectrum"""
 
-    def __init__(self, temp, grey) -> None:
+    def __init__(self, temp: float, grey: bool) -> None:
         self.temp = temp
         self.grey = grey
         # self.freq0 = freq0
@@ -267,58 +298,58 @@ class BlackBodySource_Multifreq:
 
         self.freqs_tab, self.pl_index_HI, self.pl_index_HeI, self.pl_index_HeII = (
             np.loadtxt(
-                Path(__file__).parent / "../tables/multifreq/Verner1996_spectidx.txt",
+                pc2r.__path__[0] + "/tables/multifreq/Verner1996_spectidx.txt",
                 unpack=True,
             )
         )
 
-    def SED(self, freq):
-        if freq * h_over_k / self.temp < 700.0:
-            sed = (
-                4
-                * np.pi
-                * self.R_star**2
-                * two_pi_over_c_square
-                * freq**2
-                / (np.exp(freq * h_over_k / self.temp) - 1.0)
-            )
-        else:
-            sed = 0.0
-        return sed
+    def SED(self, freq: float) -> float:
+        if freq * h_over_k / self.temp >= 700.0:
+            return 0.0
+        return (
+            4
+            * np.pi
+            * self.R_star**2
+            * two_pi_over_c_square
+            * freq**2
+            / (np.exp(freq * h_over_k / self.temp) - 1.0)
+        )
 
-    def integrate_SED(self, f1, f2):
-        res = quad(self.SED, f1, f2)
-        return res[0]
+    def integrate_SED(self, f1: float, f2: float) -> float:
+        res, *_ = quad(self.SED, f1, f2)
+        return res
 
-    def normalize_SED(self, f1, f2, S_star_ref):
+    def normalize_SED(self, f1: float, f2: float, S_star_ref: float) -> None:
         S_unscaled = self.integrate_SED(f1, f2)
         S_scaling = S_star_ref / S_unscaled
         self.R_star = np.sqrt(S_scaling) * self.R_star
 
-    def cross_section_freq_dependence(self, freq):
+    def cross_section_freq_dependence(self, freq: float) -> float:
         if self.grey:
             return 1.0
-        else:
-            # MB: use the power-low index of the higher frequency bin (private conversation with Garrelt, Ilian and Sambit), i.e.: use the predominat cross section
-            i = np.digitize(x=freq, bins=self.freqs_tab) - 1
-            freq0 = self.freqs_tab[i]
-            if freq < self.freq0_HeI:
-                pl_index = np.interp(x=freq, xp=self.freqs_tab, fp=self.pl_index_HI)
-            elif freq < self.freq0_HeII and freq >= self.freq0_HeI:
-                pl_index = np.interp(x=freq, xp=self.freqs_tab, fp=self.pl_index_HeI)
-            elif freq >= self.freq0_HeII:
-                pl_index = np.interp(x=freq, xp=self.freqs_tab, fp=self.pl_index_HeII)
-            return (freq / freq0) ** (-pl_index)
+
+        # MB: use the power-low index of the higher frequency bin (private conversation with Garrelt, Ilian and Sambit), i.e.: use the predominat cross section
+        # Not sure if this is correct: see cross-section fit of Verner+ (1996). See Equation 1 and parameters in Table 1.
+        if freq < self.freq0_HeI:
+            pl_index = np.interp(x=freq, xp=self.freqs_tab, fp=self.pl_index_HI)
+            freq0 = self.freq0_HI
+        elif freq < self.freq0_HeII and freq >= self.freq0_HeI:
+            pl_index = np.interp(x=freq, xp=self.freqs_tab, fp=self.pl_index_HeI)
+            freq0 = self.freq0_HeI
+        elif freq >= self.freq0_HeII:
+            pl_index = np.interp(x=freq, xp=self.freqs_tab, fp=self.pl_index_HeII)
+            freq0 = self.freq0_HeII
+        return (freq / freq0) ** (-pl_index)
 
     # C2Ray distinguishes between optically thin and thick cells, and calculates the rates differently for those two cases. See radiation_tables.F90, lines 345 -
-    def _photo_thick_integrand_vec(self, freq, tau):
+    def _photo_thick_integrand_vec(self, freq: float, tau: FloatArray) -> FloatArray:
         itg = self.SED(freq) * np.exp(-tau * self.cross_section_freq_dependence(freq))
         # To avoid overflow in the exponential, check
         return np.where(
             tau * self.cross_section_freq_dependence(freq) < 700.0, itg, 0.0
         )
 
-    def _photo_thin_integrand_vec(self, freq, tau):
+    def _photo_thin_integrand_vec(self, freq: float, tau: FloatArray) -> FloatArray:
         itg = (
             self.SED(freq)
             * self.cross_section_freq_dependence(freq)
@@ -328,21 +359,28 @@ class BlackBodySource_Multifreq:
             tau * self.cross_section_freq_dependence(freq) < 700.0, itg, 0.0
         )
 
-    def _heat_thick_integrand_vec(self, freq, tau):
+    def _heat_thick_integrand_vec(self, freq: float, tau: FloatArray) -> FloatArray:
         photo_thick = self._photo_thick_integrand_vec(freq, tau)
         return hplanck * (freq - ion_freq_HI) * photo_thick
 
-    def _heat_thin_integrand_vec(self, freq, tau):
+    def _heat_thin_integrand_vec(self, freq: float, tau: FloatArray) -> FloatArray:
         photo_thin = self._photo_thin_integrand_vec(freq, tau)
         return hplanck * (freq - ion_freq_HI) * photo_thin
 
-    def make_photo_table(self, tau, freq_min, freq_max, S_star_ref):
+    def make_photo_table(
+        self, tau: FloatArray, freq_min: float, freq_max: float, S_star_ref: float
+    ) -> tuple[FloatArray, FloatArray]:
         self.normalize_SED(freq_min, freq_max, S_star_ref)
 
         integrand_thin = partial(self._photo_thin_integrand_vec, tau=tau)
         integrand_thick = partial(self._photo_thick_integrand_vec, tau=tau)
 
-        # limit the frequency integration based on the provided frequency
+        # limit the frequency integration based on the provided limit
+        # assert freq_min >= self.freqs_tab.min(), "Minimum frequency (freq_min = %.3e Hz) is below value in table %.3e Hz" %(freq_min, self.freqs_tab.min())
+        # assert freq_max <= self.freqs_tab.max(), "Maximum frequency (freq_max = %.3e Hz) exceed value in table %.3e Hz" %(freq_max, self.freqs_tab.max())
+
+        # freqs = self.freqs_tab[(self.freqs_tab >= freq_min) * (self.freqs_tab <= freq_max)]
+        # freqs = np.linspace(self.freqs_tab.min(), self.freqs_tab.max(), 100)    # TODO: need to be carefull as this can lead to error if the sub-bin is not mentioned in the raytracing
         freqs = self.freqs_tab
 
         # empty tables
@@ -358,12 +396,20 @@ class BlackBodySource_Multifreq:
         # tables must have shapes: (num taus, num freq) due to the C++ order
         return table_thin.T, table_thick.T
 
-    def make_heat_table(self, tau, freq_min, freq_max, S_star_ref):
+    def make_heat_table(
+        self, tau: FloatArray, freq_min: float, freq_max: float, S_star_ref: float
+    ) -> tuple[FloatArray, FloatArray]:
         self.normalize_SED(freq_min, freq_max, S_star_ref)
 
-        # limit the frequency integration based on the provided frequency
         integrand_thin = partial(self._heat_thin_integrand_vec, tau=tau)
         integrand_thick = partial(self._heat_thick_integrand_vec, tau=tau)
+
+        # limit the frequency integration based on the provided limit
+        # assert freq_min >= self.freqs_tab.min(), "Minimum frequency (freq_min = %.3e Hz) is below value in table %.3e Hz" %(freq_min, self.freqs_tab.min())
+        # assert freq_max <= self.freqs_tab.max(), "Maximum frequency (freq_max = %.3e Hz) exceed value in table %.3e Hz" %(freq_max, self.freqs_tab.max())
+
+        # freqs = self.freqs_tab[(self.freqs_tab >= freq_min) * (self.freqs_tab <= freq_max)]
+        # freqs = np.linspace(self.freqs_tab.min(), self.freqs_tab.max(), 100)    # TODO: need to be carefull as this can lead to error if the sub-bin is not mentioned in the raytracing
         freqs = self.freqs_tab
 
         # empty tables

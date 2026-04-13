@@ -1,20 +1,19 @@
 import array
+import logging
 import time
 
 import numpy as np
-import numpy.typing as npt
 from mpi4py import MPI
 
-from .asora_core import cuda_is_init
-from .load_extensions import load_asora, load_c2ray
-from .utils import display_time, printlog
-from .utils.sourceutils import format_sources
-
-# Load extension modules
-libc2ray = load_c2ray()
-libasora = load_asora()
+from .asora_core import is_device_init
+from .load_extensions import libasora, libc2ray
+from .utils import display_time
+from .utils.logutils import allow_rank_logging
+from .utils.sourceutils import FloatArray, IntArray, format_sources
 
 __all__ = ["evolve3D"]
+
+logger = logging.getLogger(__name__)
 
 # =========================================================================
 # This file contains the main time-evolution subroutine, which updates
@@ -43,22 +42,22 @@ __all__ = ["evolve3D"]
 def evolve3D(
     dt: float,
     dr: float,
-    src_flux: npt.NDArray,
-    src_pos: npt.NDArray,
+    src_flux: FloatArray,
+    src_pos: IntArray,
+    src_batch_size: int,
     use_gpu: bool,
     max_subbox: int,
     subboxsize: int,
     loss_fraction: float,
     use_mpi: bool,
-    comm: MPI.Intracomm,
     rank: int,
     nprocs: int,
-    temp: npt.NDArray,
-    ndens: npt.NDArray,
-    xh: npt.NDArray,
-    clump: float,
-    photo_thin_table: npt.NDArray,
-    photo_thick_table: npt.NDArray,
+    temp: FloatArray,
+    ndens: FloatArray,
+    xh: FloatArray,
+    clump: FloatArray,
+    photo_thin_table: FloatArray,
+    photo_thick_table: FloatArray,
     minlogtau: float,
     dlogtau: float,
     R_max_LLS: float,
@@ -69,9 +68,7 @@ def evolve3D(
     colh0: float,
     temph0: float,
     abu_c: float,
-    logfile: str = "pyC2Ray.log",
-    quiet: bool = False,
-) -> tuple[npt.NDArray, npt.NDArray]:
+) -> tuple[FloatArray, FloatArray]:
     """Evolves the ionization fraction over one timestep for the whole grid
 
     Warning: Calling this function with use_gpu = True assumes that the radiation
@@ -126,10 +123,6 @@ def evolve3D(
         Hydrogen ionization energy expressed in K
     abu_c : float
         Carbon abundance
-    logfile : str
-        Name of the file to append logs to. Default: pyC2Ray.log
-    quiet : bool
-        Don't write logs to stdout. Default is false
 
     Returns
     -------
@@ -138,11 +131,12 @@ def evolve3D(
     phi_ion : 3D-array
         Photoionization rate of each cell due to all sources
     """
+    rank_prefix = f"Rank={rank}: " if use_mpi else ""
 
     # Allow a call with GPU only if
     # 1. the asora library is present and
     # 2. the GPU memory has been allocated using device_init()
-    if use_gpu and not cuda_is_init():
+    if use_gpu and not is_device_init():
         raise RuntimeError(
             "GPU not initialized. Please initialize it by calling device_init(N)"
         )
@@ -158,12 +152,11 @@ def evolve3D(
     conv_criterion = min(int(convergence_fraction * NumCells), (NumSrc - 1) / 3)
 
     # Initialize convergence metrics
-    prev_sum_xh1_int = 2 * NumCells
-    prev_sum_xh0_int = 2 * NumCells
+    prev_sum_xh1_int: float = 2 * NumCells
+    prev_sum_xh0_int: float = 2 * NumCells
     converged = False
     if rank != 0:
         xh_new = np.empty_like(xh)
-    niter = 0
 
     # initialize average and intermediate results to values at beginning of timestep
     xh_av = np.copy(xh)
@@ -188,11 +181,13 @@ def evolve3D(
             srcpos_flat, normflux_flat = format_sources(
                 src_pos[:, i_start:i_end], src_flux[i_start:i_end]
             )
-            printlog(f"...rank={rank:n} has {NumSrc:n} sources.", logfile, quiet)
+            with allow_rank_logging(rank):
+                logger.info(f"{rank_prefix}{NumSrc} sources.")
         else:
             srcpos_flat, normflux_flat = format_sources(src_pos, src_flux)
 
         # Copy positions & fluxes of sources to the GPU in advance
+        assert libasora is not None
         libasora.source_data_to_device(srcpos_flat, normflux_flat)
 
         # Initialize Flat Column density & ionization rate arrays.
@@ -200,52 +195,37 @@ def evolve3D(
         phi_ion_flat = np.ravel(np.zeros((N, N, N), dtype="float64"))
 
         # Copy density field to GPU once at the beginning of timestep (!! do_all_sources assumes this !!)
+        assert libasora is not None
         libasora.density_to_device(ndens_flat)
-        if use_mpi:
-            printlog("Copied source data to device.", logfile, quiet)
-        else:
-            printlog("Rank %d copied source data to device." % rank, logfile, quiet)
+        with allow_rank_logging(rank):
+            logger.info(f"{rank_prefix}Copied source data to device.")
 
     # -----------------------------------------------------------
     # Start Evolve step, Iterate until convergence in <x> and <y>
     # -----------------------------------------------------------
     if rank == 0:
-        printlog("Calling evolve3D...", logfile, quiet)
-        printlog(f"dr [Mpc]: {dr / 3.086e24:.3e}", logfile, quiet)
-        printlog(f"dt [years]: {dt / 3.15576e07:.3e}", logfile, quiet)
-        printlog(
-            f"Running on {NumSrc:n} source(s), total normalized ionizing flux: {src_flux.sum():.2e}",
-            logfile,
-            quiet,
-        )
-        printlog(
-            f"Mean density (cgs): {ndens.mean():.3e}, Mean ionized fraction: {xh.mean():.3e}",
-            logfile,
-            quiet,
-        )
-        printlog(
-            f"Convergence Criterion (Number of points): {conv_criterion: n}",
-            logfile,
-            quiet,
-            end="\n\n",
-        )
         n_count = 0
 
-    while not converged:
-        niter += 1
+    logger.info(f"""Calling evolve3D...
+dr [Mpc]: {dr / 3.086e24:.3e}
+dt [years]: {dt / 3.15576e07:.3e}
+Running on {NumSrc:n} source(s), total normalized ionizing flux: {src_flux.sum():.2e}
+Mean density (cgs): {ndens.mean():.3e}, Mean ionized fraction: {xh.mean():.3e}
+Convergence Criterion (Number of points): {conv_criterion: n}
+""")
 
+    while not converged:
         # --------------------
         # (1): Raytracing Step
         # --------------------
         trt0 = time.time()
-        if use_mpi:
-            printlog("Doing Raytracing...", logfile, quiet, " ")
-        else:
-            printlog("Rank=%d is doing Raytracing..." % rank, logfile, quiet, " ")
+        with allow_rank_logging(rank):
+            logger.info(f"{rank_prefix}Doing Raytracing...")
 
         # Do the raytracing part for each source. This computes the cumulative ionization rate for each cell.
         if use_gpu:
             # Use GPU raytracing
+            assert libasora is not None
             libasora.do_all_sources(
                 R_max_LLS,
                 sig,
@@ -257,6 +237,7 @@ def evolve3D(
                 minlogtau,
                 dlogtau,
                 NumTau,
+                src_batch_size,
             )
         else:
             # Set rates to 0. When using ASORA, this is done internally by the library (directly on the GPU)
@@ -289,37 +270,33 @@ def evolve3D(
             )
 
         trt1 = time.time() - trt0
-        if use_mpi:
-            printlog("rank=%d took %s." % (rank, display_time(trt1)), logfile, quiet)
-        else:
-            printlog("took %s." % display_time(trt1), logfile, quiet)
+        with allow_rank_logging(rank):
+            logger.info(f"took {display_time(trt1)}.")
 
         # Since chemistry (ODE solving) is done on the CPU in Fortran, flattened CUDA arrays need to be reshaped
         if use_gpu:
             phi_ion = np.reshape(phi_ion_flat, (N, N, N))
         else:
-            printlog(
-                f"Average number of subboxes: {nsubbox / NumSrc:n}, Total photon loss: {photonloss:.3e}",
-                logfile,
-                quiet,
+            logger.info(
+                f"Average number of subboxes: {nsubbox / NumSrc:n}, Total photon loss: {photonloss:.3e}"
             )
 
         if use_mpi:
             # collect results from the different MPI processors
             if rank == 0:
-                comm.Reduce(
-                    use_mpi.IN_PLACE, [phi_ion, use_mpi.DOUBLE], op=use_mpi.SUM, root=0
+                MPI.COMM_WORLD.Reduce(
+                    MPI.IN_PLACE, [phi_ion, MPI.DOUBLE], op=MPI.SUM, root=0
                 )
             else:
-                comm.Reduce([phi_ion, use_mpi.DOUBLE], None, op=use_mpi.SUM, root=0)
-            comm.Bcast([phi_ion, use_mpi.DOUBLE], root=0)
+                MPI.COMM_WORLD.Reduce([phi_ion, MPI.DOUBLE], None, op=MPI.SUM, root=0)
+            MPI.COMM_WORLD.Bcast([phi_ion, MPI.DOUBLE], root=0)
 
         if rank == 0:
             # ---------------------
             # (2): ODE Solving Step
             # ---------------------
             tch0 = time.time()
-            printlog("Doing Chemistry...", logfile, quiet, " ")
+            logger.info("Doing Chemistry...")
             # Apply the global rates to compute the updated ionization fraction
             conv_flag = libc2ray.chemistry.global_pass(
                 dt,
@@ -337,10 +314,24 @@ def evolve3D(
                 abu_c,
             )
 
-            # TODO: the line blow is the same function but completely in python (much slower then the fortran version, due to a lot of loops)
-            # xh_intermed, xh_av, conv_flag = global_pass(dt, ndens, temp, xh, xh_av, xh_intermed, phi_ion, clump, bh00, albpow, colh0, temph0, abu_c)
+            # TODO: the line below is the same function but completely in python
+            # xh_intermed, xh_av, conv_flag = global_pass(
+            #     dt,
+            #     ndens,
+            #     temp,
+            #     xh,
+            #     xh_av,
+            #     xh_intermed,
+            #     phi_ion,
+            #     clump,
+            #     bh00,
+            #     albpow,
+            #     colh0,
+            #     temph0,
+            #     abu_c,
+            # )
 
-            printlog(f"took {(time.time() - tch0): .1f} s.", logfile, quiet)
+            logger.info(f"took {(time.time() - tch0): .1f} s.")
 
             # ----------------------------
             # (3): Test Global Convergence
@@ -359,10 +350,9 @@ def evolve3D(
                 rel_change_xh0 = 1.0
 
             # Display convergence
-            printlog(
-                f"Number of non-converged points: {conv_flag} of {NumCells} ({conv_flag / NumCells * 100: .3f} % ), Relative change in ionfrac: {rel_change_xh1: .2e}",
-                logfile,
-                quiet,
+            logger.info(
+                f"Number of non-converged points: {conv_flag} of {NumCells} ({conv_flag / NumCells * 100: .3f} % ), "
+                f"Relative change in ionfrac: {rel_change_xh1: .2e}",
             )
 
             converged = (conv_flag < conv_criterion) or (
@@ -383,31 +373,27 @@ def evolve3D(
 
         if use_mpi:
             # broadcast ionised fraction field
-            comm.Bcast([xh_av_flat, use_mpi.DOUBLE], root=0)
-            comm.Bcast([xh_intermed, use_mpi.DOUBLE], root=0)
+            MPI.COMM_WORLD.Bcast([xh_av_flat, MPI.DOUBLE], root=0)
+            MPI.COMM_WORLD.Bcast([xh_intermed, MPI.DOUBLE], root=0)
 
             # convert the bool variable to bit
             # converged_array = array.array("i", [converged])
             converged_array = array.array("i", [int(converged)])
 
-            # braodcast convergence to the other ranks
-            comm.Bcast(converged_array, root=0)
+            # broadcast convergence to the other ranks
+            MPI.COMM_WORLD.Bcast(converged_array, root=0)
             if rank != 0:
                 converged = bool(converged_array[0])
 
-    # TODO: Theremal here?
     if rank == 0:
-        # When converged, return the updated ionization fractions at the end of the timestep
-        printlog(
-            "Multiple source convergence reached after %d ray-tracing iterations."
-            % n_count,
-            logfile,
-            quiet,
+        logger.info(
+            f"Multiple source convergence reached after {n_count} ray-tracing iterations."
         )
+        # When converged, return the updated ionization fractions at the end of the timestep
         xh_new = xh_intermed
 
     if use_mpi:
-        # braodcast final result
-        comm.Bcast([xh_new, use_mpi.DOUBLE], root=0)
+        # broadcast final result
+        MPI.COMM_WORLD.Bcast([xh_new, MPI.DOUBLE], root=0)
 
     return xh_new, phi_ion
