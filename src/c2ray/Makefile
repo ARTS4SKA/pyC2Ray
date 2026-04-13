@@ -9,7 +9,7 @@ EXT_SUFFIX := $(shell python3-config --extension-suffix)
 
 all: libc2ray
 
-libc2ray: photorates.f90 raytracing.f90 chemistry.f90
-	$(F2PY) $(F2PYFLAGS) --f90flags=$(FCFLAGS) -c photorates.f90 raytracing.f90 chemistry.f90 -m libc2ray
+libc2ray: photorates.f90 raytracing.f90 chemistry.f90 chem_utils.f90 thermalevolution.f90 chemistry_he.f90
+	$(F2PY) $(F2PYFLAGS) --f90flags=$(FCFLAGS) $^ -m libc2ray -c libc2ray.pyf
 clean:
 	rm *.so *.o *.mod

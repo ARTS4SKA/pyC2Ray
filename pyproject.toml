@@ -36,6 +36,7 @@ lint = [
   "pre-commit",
   "ruff",
   "clang-format",
+  "fprettify",
   "mypy",
   "meson",
   "types-PyYAML",

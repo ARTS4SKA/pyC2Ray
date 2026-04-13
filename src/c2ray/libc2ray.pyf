@@ -1,0 +1,381 @@
+!    -*- f90 -*-
+! Note: the context of this file is case sensitive.
+
+python module libc2ray ! in 
+    interface  ! in :libc2ray
+        module photorates ! in :libc2ray:../src/c2ray/photorates.f90
+            real(kind=real64), parameter,optional :: inv4pi=0.079577471545947672804111050482_real64
+            real(kind=real64), parameter,optional :: s_star=1.0e48_real64
+            subroutine photoion_rates_test(normflux,coldens_in,coldens_out,vfact,nhi,sig,phi_photo_cell,phi_photo_out) ! in :libc2ray:../src/c2ray/photorates.f90:photorates
+                real(kind=real64) intent(in) :: normflux
+                real(kind=real64) intent(in) :: coldens_in
+                real(kind=real64) intent(in) :: coldens_out
+                real(kind=real64) intent(in) :: vfact
+                real(kind=real64) intent(in) :: nhi
+                real(kind=real64) intent(in) :: sig
+                real(kind=real64) intent(out) :: phi_photo_cell
+                real(kind=real64) intent(out) :: phi_photo_out
+            end subroutine photoion_rates_test
+            subroutine photoion_rates(normflux,coldens_in,coldens_out,vfact,sig,phi_photo_cell,phi_photo_out,phi_heat_cell,photo_thin_table,photo_thick_table,heat_thin_table,heat_thick_table,minlogtau,dlogtau,numtau) ! in :libc2ray:../src/c2ray/photorates.f90:photorates
+                real(kind=real64) intent(in) :: normflux
+                real(kind=real64) intent(in) :: coldens_in
+                real(kind=real64) intent(in) :: coldens_out
+                real(kind=real64) intent(in) :: vfact
+                real(kind=real64) intent(in) :: sig
+                real(kind=real64) intent(out) :: phi_photo_cell
+                real(kind=real64) intent(out) :: phi_photo_out
+                real(kind=real64) intent(out) :: phi_heat_cell
+                real(kind=real64) dimension(numtau),intent(in) :: photo_thin_table
+                real(kind=real64) dimension(numtau),intent(in),depend(numtau) :: photo_thick_table
+                real(kind=real64) dimension(numtau),intent(in),depend(numtau) :: heat_thin_table
+                real(kind=real64) dimension(numtau),intent(in),depend(numtau) :: heat_thick_table
+                real(kind=real64) intent(in) :: minlogtau
+                real(kind=real64) intent(in) :: dlogtau
+                integer, optional,intent(in),check(shape(photo_thin_table, 0) == numtau),depend(photo_thin_table) :: numtau=shape(photo_thin_table, 0)
+            end subroutine photoion_rates
+        end module photorates
+        module raytracing ! in :libc2ray:../src/c2ray/raytracing.f90
+            use photorates, only: photoion_rates_test,photoion_rates,s_star
+            real(kind=real64), parameter,optional :: pi=3.14159265358979323846264338_real64
+            real(kind=real64), parameter,optional :: epsilon=1e-14_real64
+            subroutine do_all_sources(normflux,srcpos,max_subbox,subboxsize,coldensh_out,sig,dr,ndens,xh_av,phi_ion,phi_heat,sum_nbox,photon_loss,loss_fraction,photo_thin_table,photo_thick_table,heat_thin_table,heat_thick_table,minlogtau,dlogtau,r_max_lls,numtau,numsrc,m1,m2,m3) ! in :libc2ray:../src/c2ray/raytracing.f90:raytracing
+                real(kind=real64) dimension(numsrc),intent(in) :: normflux
+                integer dimension(3,numsrc),intent(in),depend(numsrc) :: srcpos
+                integer intent(in) :: max_subbox
+                integer intent(in) :: subboxsize
+                real(kind=real64) dimension(m1,m2,m3),intent(inout) :: coldensh_out
+                real(kind=real64) intent(in) :: sig
+                real(kind=real64) intent(in) :: dr
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: ndens
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xh_av
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: phi_ion
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: phi_heat
+                integer intent(out) :: sum_nbox
+                real(kind=real64) intent(out) :: photon_loss
+                real intent(in) :: loss_fraction
+                real(kind=real64) dimension(numtau),intent(in) :: photo_thin_table
+                real(kind=real64) dimension(numtau),intent(in),depend(numtau) :: photo_thick_table
+                real(kind=real64) dimension(numtau),intent(in),depend(numtau) :: heat_thin_table
+                real(kind=real64) dimension(numtau),intent(in),depend(numtau) :: heat_thick_table
+                real(kind=real64) intent(in) :: minlogtau
+                real(kind=real64) intent(in) :: dlogtau
+                real(kind=real64) intent(in) :: r_max_lls
+                integer, optional,intent(in),check(shape(photo_thin_table, 0) == numtau),depend(photo_thin_table) :: numtau=shape(photo_thin_table, 0)
+                integer, optional,intent(in),check(shape(normflux, 0) == numsrc),depend(normflux) :: numsrc=shape(normflux, 0)
+                integer, optional,intent(in),check(shape(coldensh_out, 0) == m1),depend(coldensh_out) :: m1=shape(coldensh_out, 0)
+                integer, optional,intent(in),check(shape(coldensh_out, 1) == m2),depend(coldensh_out) :: m2=shape(coldensh_out, 1)
+                integer, optional,intent(in),check(shape(coldensh_out, 2) == m3),depend(coldensh_out) :: m3=shape(coldensh_out, 2)
+            end subroutine do_all_sources
+            subroutine do_source(normflux,srcpos,ns,max_subbox,subboxsize,coldensh_out,sig,dr,ndens,xh_av,phi_ion,phi_heat,loss_fraction,sum_nbox,photon_loss,photo_thin_table,photo_thick_table,heat_thin_table,heat_thick_table,minlogtau,dlogtau,r_max_lls,numtau,numsrc,m1,m2,m3) ! in :libc2ray:../src/c2ray/raytracing.f90:raytracing
+                real(kind=real64) dimension(numsrc),intent(in) :: normflux
+                integer dimension(3,numsrc),intent(in),depend(numsrc) :: srcpos
+                integer intent(in) :: ns
+                integer intent(in) :: max_subbox
+                integer intent(in) :: subboxsize
+                real(kind=real64) dimension(m1,m2,m3),intent(inout) :: coldensh_out
+                real(kind=real64) intent(in) :: sig
+                real(kind=real64) intent(in) :: dr
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: ndens
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xh_av
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: phi_ion
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: phi_heat
+                real intent(in) :: loss_fraction
+                integer intent(inout) :: sum_nbox
+                real(kind=real64) intent(inout) :: photon_loss
+                real(kind=real64) dimension(numtau),intent(in) :: photo_thin_table
+                real(kind=real64) dimension(numtau),intent(in),depend(numtau) :: photo_thick_table
+                real(kind=real64) dimension(numtau),intent(in),depend(numtau) :: heat_thin_table
+                real(kind=real64) dimension(numtau),intent(in),depend(numtau) :: heat_thick_table
+                real(kind=real64) intent(in) :: minlogtau
+                real(kind=real64) intent(in) :: dlogtau
+                real(kind=real64) intent(in) :: r_max_lls
+                integer, optional,intent(in),check(shape(photo_thin_table, 0) == numtau),depend(photo_thin_table) :: numtau=shape(photo_thin_table, 0)
+                integer, optional,intent(in),check(shape(normflux, 0) == numsrc),depend(normflux) :: numsrc=shape(normflux, 0)
+                integer, optional,intent(in),check(shape(coldensh_out, 0) == m1),depend(coldensh_out) :: m1=shape(coldensh_out, 0)
+                integer, optional,intent(in),check(shape(coldensh_out, 1) == m2),depend(coldensh_out) :: m2=shape(coldensh_out, 1)
+                integer, optional,intent(in),check(shape(coldensh_out, 2) == m3),depend(coldensh_out) :: m3=shape(coldensh_out, 2)
+            end subroutine do_source
+            subroutine evolve2d(k,normflux,srcpos,ns,last_l,last_r,coldensh_out,sig,dr,ndens,xh_av,phi_ion,phi_heat,photon_loss_src,photo_thin_table,photo_thick_table,heat_thin_table,heat_thick_table,minlogtau,dlogtau,r_max_lls,numtau,numsrc,m1,m2,m3) ! in :libc2ray:../src/c2ray/raytracing.f90:raytracing
+                integer intent(in) :: k
+                real(kind=real64) dimension(numsrc),intent(in) :: normflux
+                integer dimension(3,numsrc),intent(in),depend(numsrc) :: srcpos
+                integer intent(in) :: ns
+                integer dimension(3),intent(in) :: last_l
+                integer dimension(3),intent(in) :: last_r
+                real(kind=real64) dimension(m1,m2,m3),intent(inout) :: coldensh_out
+                real(kind=real64) intent(in) :: sig
+                real(kind=real64) intent(in) :: dr
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: ndens
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xh_av
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: phi_ion
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: phi_heat
+                real(kind=real64) intent(inout) :: photon_loss_src
+                real(kind=real64) dimension(numtau),intent(in) :: photo_thin_table
+                real(kind=real64) dimension(numtau),intent(in),depend(numtau) :: photo_thick_table
+                real(kind=real64) dimension(numtau),intent(in),depend(numtau) :: heat_thin_table
+                real(kind=real64) dimension(numtau),intent(in),depend(numtau) :: heat_thick_table
+                real(kind=real64) intent(in) :: minlogtau
+                real(kind=real64) intent(in) :: dlogtau
+                real(kind=real64) intent(in) :: r_max_lls
+                integer, optional,intent(in),check(shape(photo_thin_table, 0) == numtau),depend(photo_thin_table) :: numtau=shape(photo_thin_table, 0)
+                integer, optional,intent(in),check(shape(normflux, 0) == numsrc),depend(normflux) :: numsrc=shape(normflux, 0)
+                integer, optional,intent(in),check(shape(coldensh_out, 0) == m1),depend(coldensh_out) :: m1=shape(coldensh_out, 0)
+                integer, optional,intent(in),check(shape(coldensh_out, 1) == m2),depend(coldensh_out) :: m2=shape(coldensh_out, 1)
+                integer, optional,intent(in),check(shape(coldensh_out, 2) == m3),depend(coldensh_out) :: m3=shape(coldensh_out, 2)
+            end subroutine evolve2d
+            subroutine evolve0d(rtpos,normflux,srcpos,ns,coldensh_out,sig,dr,ndens,xh_av,phi_ion,phi_heat,last_l,last_r,photon_loss_src,photo_thin_table,photo_thick_table,heat_thin_table,heat_thick_table,minlogtau,dlogtau,r_max_lls,numtau,numsrc,m1,m2,m3) ! in :libc2ray:../src/c2ray/raytracing.f90:raytracing
+                integer dimension(3),intent(in) :: rtpos
+                real(kind=real64) dimension(numsrc),intent(in) :: normflux
+                integer dimension(3,numsrc),intent(in),depend(numsrc) :: srcpos
+                integer intent(in) :: ns
+                real(kind=real64) dimension(m1,m2,m3),intent(inout) :: coldensh_out
+                real(kind=real64) intent(in) :: sig
+                real(kind=real64) intent(in) :: dr
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: ndens
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xh_av
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: phi_ion
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: phi_heat
+                integer dimension(3),intent(in) :: last_l
+                integer dimension(3),intent(in) :: last_r
+                real(kind=real64) intent(inout) :: photon_loss_src
+                real(kind=real64) dimension(numtau),intent(in) :: photo_thin_table
+                real(kind=real64) dimension(numtau),intent(in),depend(numtau) :: photo_thick_table
+                real(kind=real64) dimension(numtau),intent(in),depend(numtau) :: heat_thin_table
+                real(kind=real64) dimension(numtau),intent(in),depend(numtau) :: heat_thick_table
+                real(kind=real64) intent(in) :: minlogtau
+                real(kind=real64) intent(in) :: dlogtau
+                real(kind=real64) intent(in) :: r_max_lls
+                integer, optional,intent(in),check(shape(photo_thin_table, 0) == numtau),depend(photo_thin_table) :: numtau=shape(photo_thin_table, 0)
+                integer, optional,intent(in),check(shape(normflux, 0) == numsrc),depend(normflux) :: numsrc=shape(normflux, 0)
+                integer, optional,intent(in),check(shape(coldensh_out, 0) == m1),depend(coldensh_out) :: m1=shape(coldensh_out, 0)
+                integer, optional,intent(in),check(shape(coldensh_out, 1) == m2),depend(coldensh_out) :: m2=shape(coldensh_out, 1)
+                integer, optional,intent(in),check(shape(coldensh_out, 2) == m3),depend(coldensh_out) :: m3=shape(coldensh_out, 2)
+            end subroutine evolve0d
+            subroutine cinterp(pos,srcpos,cdensi,path,coldensh_out,sigma_hi_at_ion_freq,m1,m2,m3) ! in :libc2ray:../src/c2ray/raytracing.f90:raytracing
+                integer dimension(3),intent(in) :: pos
+                integer dimension(3),intent(in) :: srcpos
+                real(kind=real64) intent(out) :: cdensi
+                real(kind=real64) intent(out) :: path
+                real(kind=real64) dimension(m1,m2,m3),intent(inout) :: coldensh_out
+                real(kind=real64) intent(in) :: sigma_hi_at_ion_freq
+                integer, optional,intent(in),check(shape(coldensh_out, 0) == m1),depend(coldensh_out) :: m1=shape(coldensh_out, 0)
+                integer, optional,intent(in),check(shape(coldensh_out, 1) == m2),depend(coldensh_out) :: m2=shape(coldensh_out, 1)
+                integer, optional,intent(in),check(shape(coldensh_out, 2) == m3),depend(coldensh_out) :: m3=shape(coldensh_out, 2)
+            end subroutine cinterp
+        end module raytracing
+        module chemistry ! in :libc2ray:../src/c2ray/chemistry.f90
+            real(kind=real64), parameter,optional :: epsilon=1e-14_real64
+            real(kind=real64), parameter,optional :: minimum_fractional_change=0.001
+            real(kind=real64), parameter,optional :: minimum_fraction_of_atoms=1e-08
+            subroutine global_pass(dt,ndens,temp,xh,xh_av,xh_intermed,phi_ion,clump,bh00,albpow,colh0,temph0,abu_c,conv_flag,m1,m2,m3) ! in :libc2ray:../src/c2ray/chemistry.f90:chemistry
+                real(kind=real64) intent(in) :: dt
+                real(kind=real64) dimension(m1,m2,m3),intent(in) :: ndens
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: temp
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xh
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xh_av
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xh_intermed
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: phi_ion
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: clump
+                real(kind=real64) intent(in) :: bh00
+                real(kind=real64) intent(in) :: albpow
+                real(kind=real64) intent(in) :: colh0
+                real(kind=real64) intent(in) :: temph0
+                real(kind=real64) intent(in) :: abu_c
+                integer intent(out) :: conv_flag
+                integer, optional,intent(in),check(shape(ndens, 0) == m1),depend(ndens) :: m1=shape(ndens, 0)
+                integer, optional,intent(in),check(shape(ndens, 1) == m2),depend(ndens) :: m2=shape(ndens, 1)
+                integer, optional,intent(in),check(shape(ndens, 2) == m3),depend(ndens) :: m3=shape(ndens, 2)
+            end subroutine global_pass
+            subroutine evolve0d_global(dt,pos,ndens,temp,xh,xh_av,xh_intermed,phi_ion,clump,bh00,albpow,colh0,temph0,abu_c,conv_flag,m1,m2,m3) ! in :libc2ray:../src/c2ray/chemistry.f90:chemistry
+                real(kind=real64) intent(in) :: dt
+                integer dimension(3),intent(in) :: pos
+                real(kind=real64) dimension(m1,m2,m3),intent(in) :: ndens
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: temp
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xh
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xh_av
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xh_intermed
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: phi_ion
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: clump
+                real(kind=real64) intent(in) :: bh00
+                real(kind=real64) intent(in) :: albpow
+                real(kind=real64) intent(in) :: colh0
+                real(kind=real64) intent(in) :: temph0
+                real(kind=real64) intent(in) :: abu_c
+                integer intent(inout) :: conv_flag
+                integer, optional,intent(in),check(shape(ndens, 0) == m1),depend(ndens) :: m1=shape(ndens, 0)
+                integer, optional,intent(in),check(shape(ndens, 1) == m2),depend(ndens) :: m2=shape(ndens, 1)
+                integer, optional,intent(in),check(shape(ndens, 2) == m3),depend(ndens) :: m3=shape(ndens, 2)
+            end subroutine evolve0d_global
+            subroutine do_chemistry(dt,ndens_p,temperature_start,xh_p,xh_av_p,xh_intermed_p,phi_ion_p,clump_p,bh00,albpow,colh0,temph0,abu_c) ! in :libc2ray:../src/c2ray/chemistry.f90:chemistry
+                real(kind=real64) intent(in) :: dt
+                real(kind=real64) intent(in) :: ndens_p
+                real(kind=real64) intent(in) :: temperature_start
+                real(kind=real64) intent(inout) :: xh_p
+                real(kind=real64) intent(out) :: xh_av_p
+                real(kind=real64) intent(out) :: xh_intermed_p
+                real(kind=real64) intent(in) :: phi_ion_p
+                real(kind=real64) intent(in) :: clump_p
+                real(kind=real64) intent(in) :: bh00
+                real(kind=real64) intent(in) :: albpow
+                real(kind=real64) intent(in) :: colh0
+                real(kind=real64) intent(in) :: temph0
+                real(kind=real64) intent(in) :: abu_c
+            end subroutine do_chemistry
+            subroutine doric(xh_old,dt,temp_p,rhe,phi_p,bh00,albpow,colh0,temph0,clumping,xh,xh_av) ! in :libc2ray:../src/c2ray/chemistry.f90:chemistry
+                real(kind=real64) intent(in) :: xh_old
+                real(kind=real64) intent(in) :: dt
+                real(kind=real64) intent(in) :: temp_p
+                real(kind=real64) intent(in) :: rhe
+                real(kind=real64) intent(in) :: phi_p
+                real(kind=real64) intent(in) :: bh00
+                real(kind=real64) intent(in) :: albpow
+                real(kind=real64) intent(in) :: colh0
+                real(kind=real64) intent(in) :: temph0
+                real(kind=real64) intent(in) :: clumping
+                real(kind=real64) intent(out) :: xh
+                real(kind=real64) intent(out) :: xh_av
+            end subroutine doric
+        end module chemistry
+        module chemistry_he ! in :libc2ray:../src/c2ray/chemistry_he.f90
+            use thermalevolution, only: thermal_impl=>thermal
+            use chem_utils, only: electrondens
+            real(kind=real64), parameter,optional :: epsilon=1e-14_real64
+            real(kind=real64), parameter,optional :: minimum_fractional_change=0.001
+            real(kind=real64), parameter,optional :: minimum_fraction_of_atoms=1e-08
+            real(kind=real64), parameter,optional :: minitemp=1.0_real64
+            real(kind=real64), parameter,optional :: sigma_h_at_hei=1.238e-18
+            real(kind=real64), parameter,optional :: sigma_h_at_heii=1.230695924714239e-19
+            real(kind=real64), parameter,optional :: sigma_h_at_helya=9.907e-22
+            real(kind=real64), parameter,optional :: sigma_hei_at_ion_freq=7.43e-18
+            real(kind=real64), parameter,optional :: sigma_hei_at_heii=1.690780687052975e-18
+            real(kind=real64), parameter,optional :: sigma_hei_at_helya=1.301e-20
+            real(kind=real64), parameter,optional :: sigma_heii_at_ion_freq=1.589e-18
+            real(kind=real64), parameter,optional :: p_rec=0.96_real64
+            real(kind=real64), parameter,optional :: l_dec=1.425_real64
+            real(kind=real64), parameter,optional :: m_dec=0.737_real64
+            real(kind=real64), parameter,optional :: f_lya=1.0_real64
+            real(kind=real64), parameter,optional :: abu_he=0.074_real64
+            real(kind=real64), parameter,optional :: abu_h=0.926_real64
+            real(kind=real64), parameter,optional :: abu_c=7.1e-07
+            real(kind=real64), parameter,optional :: gamma=5.0_real64/3.0_real64
+            subroutine thermal(dt,end_temper,avg_temper,ndens_el,ndens_atom,heat,hz) ! in :libc2ray:../src/c2ray/chemistry_he.f90:chemistry_he
+                real(kind=real64) intent(in) :: dt
+                real(kind=real64) intent(inout) :: end_temper
+                real(kind=real64) intent(inout) :: avg_temper
+                real(kind=real64) intent(in) :: ndens_el
+                real(kind=real64) intent(in) :: ndens_atom
+                real(kind=real64) intent(in) :: heat
+                real(kind=real64) intent(in) :: hz
+            end subroutine thermal
+            subroutine global_pass(dt,dr,hz,ndens,temp,temp_av,xhii,xhii_av,xhii_intermed,xheii,xheii_av,xheii_intermed,xheiii,xheiii_av,xheiii_intermed,phi_hi_ion,phi_hei_ion,phi_heii_ion,heat_hi_ion,heat_hei_ion,heat_heii_ion,clump,conv_flag,m1,m2,m3) ! in :libc2ray:../src/c2ray/chemistry_he.f90:chemistry_he
+                real(kind=real64) intent(in) :: dt
+                real(kind=real64) intent(in) :: dr
+                real(kind=real64) intent(in) :: hz
+                real(kind=real64) dimension(m1,m2,m3),intent(in) :: ndens
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: temp
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: temp_av
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xhii
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xhii_av
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xhii_intermed
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xheii
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xheii_av
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xheii_intermed
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xheiii
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xheiii_av
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xheiii_intermed
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: phi_hi_ion
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: phi_hei_ion
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: phi_heii_ion
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: heat_hi_ion
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: heat_hei_ion
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: heat_heii_ion
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: clump
+                integer intent(out) :: conv_flag
+                integer, optional,intent(in),check(shape(ndens, 0) == m1),depend(ndens) :: m1=shape(ndens, 0)
+                integer, optional,intent(in),check(shape(ndens, 1) == m2),depend(ndens) :: m2=shape(ndens, 1)
+                integer, optional,intent(in),check(shape(ndens, 2) == m3),depend(ndens) :: m3=shape(ndens, 2)
+            end subroutine global_pass
+            subroutine evolve0d_global(dt,dr,hz,pos,ndens,temp,temp_av,xhii,xhii_av,xhii_intermed,xheii,xheii_av,xheii_intermed,xheiii,xheiii_av,xheiii_intermed,phi_hi_ion,phi_hei_ion,phi_heii_ion,heat_hi_ion,heat_hei_ion,heat_heii_ion,clump,conv_flag,m1,m2,m3) ! in :libc2ray:../src/c2ray/chemistry_he.f90:chemistry_he
+                real(kind=real64) intent(in) :: dt
+                real(kind=real64) intent(in) :: dr
+                real(kind=real64) intent(in) :: hz
+                integer dimension(3),intent(in) :: pos
+                real(kind=real64) dimension(m1,m2,m3),intent(in) :: ndens
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: temp
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: temp_av
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xhii
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xhii_av
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xhii_intermed
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xheii
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xheii_av
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xheii_intermed
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xheiii
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xheiii_av
+                real(kind=real64) dimension(m1,m2,m3),intent(inout),depend(m2,m3,m1) :: xheiii_intermed
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: phi_hi_ion
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: phi_hei_ion
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: phi_heii_ion
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: heat_hi_ion
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: heat_hei_ion
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: heat_heii_ion
+                real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: clump
+                integer intent(inout) :: conv_flag
+                integer, optional,intent(in),check(shape(ndens, 0) == m1),depend(ndens) :: m1=shape(ndens, 0)
+                integer, optional,intent(in),check(shape(ndens, 1) == m2),depend(ndens) :: m2=shape(ndens, 1)
+                integer, optional,intent(in),check(shape(ndens, 2) == m3),depend(ndens) :: m3=shape(ndens, 2)
+            end subroutine evolve0d_global
+            subroutine do_chemistry(dt,dr,hz,ndens_p,temperature_start,xhii_p,xhii_av_p,xhii_intermed_p,xheii_p,xheii_av_p,xheii_intermed_p,xheiii_p,xheiii_av_p,xheiii_intermed_p,phi_hi_ion_p,phi_hei_ion_p,phi_heii_ion_p,heat_hi_ion_p,heat_hei_ion_p,heat_heii_ion_p,clump_p) ! in :libc2ray:../src/c2ray/chemistry_he.f90:chemistry_he
+                real(kind=real64) intent(in) :: dt
+                real(kind=real64) intent(in) :: dr
+                real(kind=real64) intent(in) :: hz
+                real(kind=real64) intent(in) :: ndens_p
+                real(kind=real64) intent(in) :: temperature_start
+                real(kind=real64) intent(inout) :: xhii_p
+                real(kind=real64) intent(out) :: xhii_av_p
+                real(kind=real64) intent(out) :: xhii_intermed_p
+                real(kind=real64) intent(inout) :: xheii_p
+                real(kind=real64) intent(out) :: xheii_av_p
+                real(kind=real64) intent(out) :: xheii_intermed_p
+                real(kind=real64) intent(inout) :: xheiii_p
+                real(kind=real64) intent(out) :: xheiii_av_p
+                real(kind=real64) intent(out) :: xheiii_intermed_p
+                real(kind=real64) intent(in) :: phi_hi_ion_p
+                real(kind=real64) intent(in) :: phi_hei_ion_p
+                real(kind=real64) intent(in) :: phi_heii_ion_p
+                real(kind=real64) intent(in) :: heat_hi_ion_p
+                real(kind=real64) intent(in) :: heat_hei_ion_p
+                real(kind=real64) intent(in) :: heat_heii_ion_p
+                real(kind=real64) intent(in) :: clump_p
+            end subroutine do_chemistry
+            subroutine friedrich(dt,dr,temp_p,n_e,xhii_old,xheii_old,xheiii_old,phi_hi,phi_hei,phi_heii,heat_hi,heat_hei,heat_heii,nhi_p,nhei_p,nheii_p,clumping,xhii,xheii,xheiii,xhii_av,xheii_av,xheiii_av) ! in :libc2ray:../src/c2ray/chemistry_he.f90:chemistry_he
+                real(kind=real64) intent(in) :: dt
+                real(kind=real64) intent(in) :: dr
+                real(kind=real64) intent(in) :: temp_p
+                real(kind=real64) intent(in) :: n_e
+                real(kind=real64) intent(in) :: xhii_old
+                real(kind=real64) intent(in) :: xheii_old
+                real(kind=real64) intent(in) :: xheiii_old
+                real(kind=real64) intent(in) :: phi_hi
+                real(kind=real64) intent(in) :: phi_hei
+                real(kind=real64) intent(in) :: phi_heii
+                real(kind=real64) intent(in) :: heat_hi
+                real(kind=real64) intent(in) :: heat_hei
+                real(kind=real64) intent(in) :: heat_heii
+                real(kind=real64) intent(in) :: nhi_p
+                real(kind=real64) intent(in) :: nhei_p
+                real(kind=real64) intent(in) :: nheii_p
+                real(kind=real64) intent(in) :: clumping
+                real(kind=real64) intent(out) :: xhii
+                real(kind=real64) intent(out) :: xheii
+                real(kind=real64) intent(out) :: xheiii
+                real(kind=real64) intent(out) :: xhii_av
+                real(kind=real64) intent(out) :: xheii_av
+                real(kind=real64) intent(out) :: xheiii_av
+            end subroutine friedrich
+        end module chemistry_he
+    end interface 
+end python module libc2ray
+
+! This file was auto-generated with f2py (version:2.4.4).
+! See:
+! https://web.archive.org/web/20140822061353/http://cens.ioc.ee/projects/f2py2e
