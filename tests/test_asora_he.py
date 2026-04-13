@@ -6,26 +6,23 @@ import astropy.units as u
 import numpy as np
 import pytest
 
-from pyc2ray.load_extensions import load_asora_he
+from pyc2ray.load_extensions import libasora_He as libasora
 from pyc2ray.radiation.blackbody import BlackBodySource_Multifreq
 from pyc2ray.radiation.common import make_tau_table
 
-asora = load_asora_he()
-
-if asora is None:
-    pytest.skip("libasoraHe.so missing, skipping tests", allow_module_level=True)
+if libasora is None:
+    pytest.skip("libasora_He.so missing, skipping tests", allow_module_level=True)
 
 
 @pytest.fixture
 def init_device():
-    asora.device_init()
+    libasora.device_init()
     yield
-    asora.device_close()
+    libasora.device_close()
 
 
 def test_device_init(init_device):
-    asora.is_device_init()
-    pass
+    libasora.is_device_init()
 
 
 @contextmanager
@@ -35,10 +32,8 @@ def setup_do_all_sources(
     mesh_size: int = 50,
     batch_size: int = 1,
     block_size: int = 256,
+    radius: float = 15.0,
 ):
-    R_max = 15.0
-
-    # HI cross section at its ionzing frequency (weighted by freq_factor)
     # Calculate the table
     minlog_tau, maxlog_tau, num_tau = -20.0, 4.0, 20000
     tau, dlogtau = make_tau_table(minlog_tau, maxlog_tau, num_tau)
@@ -73,7 +68,7 @@ def setup_do_all_sources(
     assert photo_thin_table.shape[0] == num_freq
 
     # Allocate tables to GPU device
-    asora.tables_to_device(
+    libasora.photo_tables_to_device(
         photo_thin_table.ravel(),
         photo_thick_table.ravel(),
         heat_thin_table.ravel(),
@@ -82,12 +77,12 @@ def setup_do_all_sources(
 
     size = mesh_size**3
 
-    phion_HI = np.zeros(size, dtype=np.float64)
-    phion_HeI = np.zeros(size, dtype=np.float64)
-    phion_HeII = np.zeros(size, dtype=np.float64)
-    pheat_HI = np.zeros(size, dtype=np.float64)
-    pheat_HeI = np.zeros(size, dtype=np.float64)
-    pheat_HeII = np.zeros(size, dtype=np.float64)
+    phion_HI = np.empty(size, dtype=np.float64)
+    phion_HeI = np.empty(size, dtype=np.float64)
+    phion_HeII = np.empty(size, dtype=np.float64)
+    pheat_HI = np.empty(size, dtype=np.float64)
+    pheat_HeI = np.empty(size, dtype=np.float64)
+    pheat_HeII = np.empty(size, dtype=np.float64)
 
     ndens = np.full(size, 1.87e-7, dtype=np.float64)
     xHI = np.full(size, 1.2e-3, dtype=np.float64)
@@ -95,7 +90,7 @@ def setup_do_all_sources(
     xHeII = np.full(size, 1e-3, dtype=np.float64)
 
     # Copy density field to GPU device
-    asora.density_to_device(ndens)
+    libasora.density_to_device(ndens)
 
     # Efficiency factor (converting mass to photons)
     f_gamma = 100.0
@@ -107,15 +102,14 @@ def setup_do_all_sources(
     norm_flux *= f_gamma / 1e48
 
     # Copy source list to GPU device
-    print(src_pos.reshape(num_sources, 3))
-    asora.source_data_to_device(src_pos, norm_flux)
+    libasora.source_data_to_device(src_pos, norm_flux)
 
     # Size of a cell
     boxsize = 1.62022035 * u.Mpc
     dr = (boxsize / mesh_size).cgs.value
 
     yield (
-        R_max,
+        radius,
         sigma_HI,
         sigma_HeI,
         sigma_HeII,
@@ -145,7 +139,7 @@ def setup_do_all_sources(
 
 def test_do_all_sources(data_dir, init_device):
     with setup_do_all_sources(data_dir) as args:
-        asora.do_all_sources(*args)
+        libasora.do_all_sources(*args)
 
         phion_HI = args[12] * 1e48
         phion_HeI = args[13] * 1e48
@@ -154,6 +148,7 @@ def test_do_all_sources(data_dir, init_device):
         pheat_HeI = args[16] * 1e48
         pheat_HeII = args[17] * 1e48
 
+        # TODO: keep this line here until we are satisfied with the black body radiation tables
         if False:
             np.savez(
                 data_dir / "photo_rates_with_helium.npz",

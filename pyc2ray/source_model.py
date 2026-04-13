@@ -1,7 +1,10 @@
 from functools import partial
+from typing import Any, Callable
 
 import astropy.units as u
 import numpy as np
+import numpy.typing as npt
+from astropy.cosmology import FlatLambdaCDM
 from scipy.integrate import quad_vec
 from scipy.interpolate import RegularGridInterpolator
 from scipy.spatial import cKDTree
@@ -9,6 +12,8 @@ from scipy.stats import binned_statistic_dd
 from sklearn.neighbors import KNeighborsRegressor
 
 import pyc2ray as pc2r
+
+FloatLike = float | npt.NDArray[np.float64]
 
 # Conversion Factors.
 # When doing direct comparisons with C2Ray, the difference between astropy.constants and the C2Ray values may be visible, thus we use the same exact value for the constants. This can be changed to the astropy values once consistency between the two codes has been established
@@ -25,7 +30,9 @@ import pyc2ray as pc2r
 class StellarToHaloRelation:
     """Modelling the mass relation between dark matter halo and the residing stars/galaxies."""
 
-    def __init__(self, model, pars, cosmo=None):
+    def __init__(
+        self, model: str, pars: dict[str, Any], cosmo: FlatLambdaCDM | None = None
+    ):
         self.cosmo = cosmo
         self.model = model
         self.Nion = pars["Nion"]
@@ -38,48 +45,53 @@ class StellarToHaloRelation:
         self.g4 = pars["g4"]
         self.alph_h = pars["alpha_h"]
 
-        if self.model == "fgamma":
-            # TODO: there is something wrong with this, The photoionization gets super high like 1e-5?????? to check
-            self.get = lambda Mhalo: self.cosmo.Ob0 / self.cosmo.Om0 * Mhalo * self.f0
-        elif self.model == "dpl":
-            self.get = self.deterministic
-        elif self.model == "lognorm":
-            self.get = self.stochastic_lognormal
-        elif self.model == "Muv":
-            self.get = self.fstar_from_Muv
-        elif "spice" in self.model:
-            self.get = self.deterministic
-            self.spice_model = SPICE_scatterSFR(self.model)
-        else:
-            ValueError(
-                " Selected stellar-to-halo relation model that does not exist : %s"
-                % self.model
-            )
+        self.get: Callable
+        match self.model:
+            case "fgamma":
+                # TODO: there is something wrong with this, The photoionization gets super high like 1e-5?????? to check
+                self.get = (
+                    lambda Mhalo: self.cosmo.Ob0 / self.cosmo.Om0 * Mhalo * self.f0  # type: ignore
+                )
+            case "dpl":
+                self.get = self.deterministic
+            case "lognorm":
+                self.get = self.stochastic_lognormal
+            case "Muv":
+                self.get = self.fstar_from_Muv
+            case mod if "spice" in mod:
+                self.get = self.deterministic
+                self.spice_model = SPICE_scatterSFR(self.model)
+            case _:
+                ValueError(
+                    " Selected stellar-to-halo relation model that does not exist : %s"
+                    % self.model
+                )
 
-    def source_liftime(self, z):
+    def source_lifetime(self, z: float) -> float:
+        assert self.cosmo is not None
         ts = 1.0 / (self.alph_h * (1 + z) * self.cosmo.H(z=z).cgs.value)
         return ts
 
-    def deterministic(self, Mhalo):
+    def deterministic(self, Mhalo: FloatLike) -> FloatLike:
         fstar_mean = self.stellar_to_halo_fraction(Mhalo)
         return fstar_mean
 
-    def stochastic_Gaussian(self, Mhalo, sigma):
+    def stochastic_Gaussian(self, Mhalo: FloatLike, sigma: FloatLike) -> FloatLike:
         fstar_mean = self.stellar_to_halo_fraction(Mhalo)
 
         if isinstance(sigma, float):
-            # FIXME: shouldn't the following line be = sigma * np.ones_like(Mhalo)??
-            fstar_std = lambda M: sigma * np.ones_like(Mhalo)  # noqa: E731
+            fstar_std = np.full_like(Mhalo, sigma)
         else:
             fstar_std = sigma
 
-        fstar = np.clip(
-            fstar_mean * (1 + np.random.normal(0, fstar_std)), a_min=0, a_max=1
-        )
+        rng = np.random.default_rng()
+        fstar = np.clip(fstar_mean * (1 + rng.normal(0, fstar_std)), a_min=0, a_max=1)  # type: ignore
 
         return fstar
 
-    def stochastic_lognormal(self, Mhalo, sigma=None):
+    def stochastic_lognormal(
+        self, Mhalo: FloatLike, sigma: FloatLike | None = None
+    ) -> FloatLike:
         fstar_mean = self.stellar_to_halo_fraction(Mhalo)
 
         if isinstance(sigma, (np.ndarray, list)):
@@ -93,9 +105,11 @@ class StellarToHaloRelation:
         fstar = np.clip(a=np.exp(log_fstar), a_min=0, a_max=1)
         return fstar
 
-    def fstar_from_Muv(self, Mhalo, z, a_s=-0.33334, b_s=4.5):
+    def fstar_from_Muv(
+        self, Mhalo: FloatLike, z: float, a_s: float = -0.33334, b_s: float = 4.5
+    ) -> FloatLike:
         # source life-time (for accreation mass) in cgs units
-        ts = self.source_liftime(z=z)
+        ts = self.source_lifetime(z=z)
 
         # mean absolute magnitude
         mean_fstar = self.stellar_to_halo_fraction(Mhalo=Mhalo)
@@ -107,6 +121,7 @@ class StellarToHaloRelation:
         # absolute magnitude with scatter
         Muv = np.random.normal(loc=mean_Muv, scale=std_Muv)
 
+        assert self.cosmo is not None
         # calibrated for 1500 Å dust-corrected rest-frame UV luminosity
         M0, k_val = 51.6, 3.64413e-36  # in [Msun/s * Hz / (s erg)]
         fstar = (
@@ -118,10 +133,11 @@ class StellarToHaloRelation:
         )
         return np.clip(fstar, 0.0, 1.0)
 
-    def stellar_to_halo_fraction(self, Mhalo):
+    def stellar_to_halo_fraction(self, Mhalo: FloatLike) -> FloatLike:
         """
         A parameterised stellar to halo relation (2011.12308, 2201.02210, 2302.06626).
         """
+        assert self.cosmo is not None
         # Double power law, motivated by UVLFs
         dpl = (
             2
@@ -138,7 +154,7 @@ class StellarToHaloRelation:
 
         return fstar
 
-    def UV_magnitude(self, fstar, mdot):
+    def UV_magnitude(self, fstar: FloatLike, mdot: FloatLike) -> FloatLike:
         # corresponding to AB magnitude system (Oke 1974)
         M0 = 51.6
 
@@ -146,6 +162,7 @@ class StellarToHaloRelation:
         # k_val = 1.15e-28 # in [Msun/yr * Hz / (s erg)]
         k_val = 3.64413e-36  # in [Msun/s * Hz / (s erg)]
 
+        assert self.cosmo is not None
         M_UV = M0 - 2.5 * (
             np.log10(fstar)
             + np.log10(self.cosmo.Ob0 / self.cosmo.Om0)
@@ -153,9 +170,9 @@ class StellarToHaloRelation:
         )
         return M_UV
 
-    def sfr_SPICE(self, Mhalo, z):
+    def sfr_SPICE(self, Mhalo: FloatLike, z: float) -> FloatLike:
         # source life-time (for accreation mass) in yr units
-        ts = (self.source_liftime(z=z) * u.s).to("yr").value
+        ts = (self.source_lifetime(z=z) * u.s).to("yr").value
 
         # mean fstar
         mean_fstar = self.stellar_to_halo_fraction(Mhalo=Mhalo)
@@ -177,12 +194,13 @@ class StellarToHaloRelation:
 class EscapeFraction:
     """Modelling the escape of photons from the stars/galaxies inside dark matter haloes."""
 
-    def __init__(self, model, pars):
+    def __init__(self, model: str, pars: dict[str, Any]) -> None:
         self.model = model
         self.f0_esc = pars["f0_esc"]
         self.Mp_esc = pars["Mp_esc"]
         self.al_esc = pars["al_esc"]
 
+        self.get: Callable
         if self.model == "constant":
             self.get = lambda Mhalo: self.f0_esc
         elif self.model == "power" or self.model == "power_obs":
@@ -270,10 +288,12 @@ class BurstySFR:
                 " Selected burstiness model that does not exist : %s" % self.model
             )
 
-    def time_burstiness(self, mass, z):
+    def time_burstiness(self, mass: float, z: float) -> float:
+        rng = np.random.default_rng()
+        M0: npt.NDArray[np.float64]
         if self.t_rnd:
             # FIXME: M0 used in lhs and rhs, this is a bug
-            M0 = 10 ** np.random.normal(np.log10(M0), self.t_rnd)  # noqa: F821
+            M0 = 10 ** rng.normal(np.log10(M0), self.t_rnd)  # noqa: F821
         else:
             M0 = mass / np.exp(-self.alpha_h * (z - self.z0))
 
@@ -289,14 +309,11 @@ class BurstySFR:
         return tB
 
     @np.vectorize
-    def _burstiness_timescale(t_age, tB, tQ):
+    def _burstiness_timescale(t_age: float, tB: float, tQ: float) -> int:
         """of internal use for the integrated_burst_or_quiescent_galaxies method"""
         i_time = np.floor(t_age / (tB + tQ))
 
-        if t_age <= i_time * (tB + tQ) + tB:
-            return 1
-        else:
-            return 0
+        return int(t_age <= i_time * (tB + tQ) + tB)
 
     def integrated_burst_or_quiescent_galaxies(self, mass, z, zi, zf, cosmo):
         """This case integrate the burst or quench time withing the time-step. It return a factor between 0 and 1 for quenched (value 0) or bursting (value 1). In bewteen values indicate that the sources are quencing for a period of time withing the time-step."""

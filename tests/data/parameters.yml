@@ -1,0 +1,97 @@
+# ===========================================================
+# Parameter File for pyc2ray.
+# ===========================================================
+
+Output:
+  results_basename: "/home/username/data"
+  logfile: "pyC2Ray.log"
+
+Grid:
+  boxsize: 1.62022035
+  meshsize: 256
+  gpu: 0
+  mpi: 0
+  resume: 0
+
+Raytracing:
+  loss_fraction: 1e-2
+  subboxsize: 128
+  max_subbox: 1000
+  source_batch_size: 1
+  convergence_fraction: 1e-4
+
+Material:
+  temp0: 1e4
+  xh0: 1.2e-3
+  avg_dens: 1.87e-7
+
+CGS:
+  albpow: -0.7
+  bh00: 2.59e-13
+  alcpow: -0.672
+  eth0: 13.598
+  ethe0: 24.587
+  ethe1: 54.416
+  xih0: 1.0
+  fh0: 0.83
+  colh0_fact: 1.3e-8
+
+Cosmology:
+  cosmological: 0
+  h: 1.0 #0.7
+  Omega0: 0.27
+  Omega_B: 0.044
+  cmbtemp: 2.726
+  zred_0: 9.0
+
+Abundances:
+  abu_h: 0.926
+  abu_he: 0.074
+  abu_c: 7.1e-7
+
+Photo:
+  sigma_HI_at_ion_freq: 6.30e-18
+  minlogtau: -20
+  maxlogtau: 4
+  NumTau: 20000
+  grey: 1
+  SourceType: blackbody
+  compute_heating_rates: 0
+
+Sinks:
+  clumping_model: "constant"
+  clumping: 5.0
+  mfp_model: "constant"
+  R_max_cMpc: 15.0
+  A_mfp: 175.0
+  eta_mfp: -4.4
+
+BlackBodySource:
+  Teff: 5e4
+  cross_section_pl_index: 2.8
+
+Sources:
+  fstar_kind: "dpl"
+  fgamma_hm: 30
+  fgamma_lm: 0.
+  Nion: 2000.0
+  f0: 0.1 
+  Mt: 1e10
+  Mp: 1e10
+  g1: -0.3
+  g2: -0.3
+  g3: 0
+  g4: 0.0
+  fesc_model: "constant"
+  f0_esc: 0.02
+  Mp_esc: 1e10
+  al_esc: -0.25
+  accretion_model: "EXP"
+  alpha_h: 0.79
+  bursty_sfr: "no"
+  beta1: 0.1
+  beta2: 1.5
+  tB0: 200.
+  tQ_frac: 1.6
+  z0: 30.0
+  t_rnd: 0

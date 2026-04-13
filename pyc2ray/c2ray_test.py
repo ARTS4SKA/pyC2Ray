@@ -1,9 +1,19 @@
+import logging
+import pickle as pkl
+
 import numpy as np
 
-from .c2ray_base import YEAR, C2Ray
-from .utils.sourceutils import read_test_sources
+import pyc2ray.constants as c
+from pyc2ray.c2ray_base import C2Ray
+from pyc2ray.utils.sourceutils import (
+    FloatArray,
+    IntArray,
+    PathType,
+    read_test_sources,
+)
 
 __all__ = ["C2Ray_Test"]
+logger = logging.getLogger(__name__)
 
 # ======================================================================
 # This file contains the C2Ray_Test subclass of C2Ray, which is a
@@ -13,7 +23,7 @@ __all__ = ["C2Ray_Test"]
 
 
 class C2Ray_Test(C2Ray):
-    def __init__(self, paramfile):
+    def __init__(self, paramfile: PathType) -> None:
         """A C2Ray Test-case simulation
 
         Parameters
@@ -27,9 +37,11 @@ class C2Ray_Test(C2Ray):
         """
         super().__init__(paramfile)
         if self.rank == 0:
-            self.printlog('Running: "C2Ray Test"')
+            logger.info('Running: "C2Ray Test"')
 
-    def read_sources(self, file, numsrc, S_star_ref=1e48):
+    def read_sources(
+        self, file: PathType, numsrc: int, S_star_ref: float = 1e48
+    ) -> tuple[IntArray, FloatArray]:
         """Read in a source file formatted for Test-C2Ray
 
         Read in a file that gives source positions and total ionizing flux
@@ -43,25 +55,20 @@ class C2Ray_Test(C2Ray):
 
         Parameters
         ----------
-        file : string
-            Name of the file to read
-        numsrc : int
-            Numer of sources to read from the file
-        S_star_ref : float, optional
-            Flux of the reference source. Default: 1e48
+        file : Name of the file to read
+        numsrc : Numer of sources to read from the file
+        S_star_ref : Flux of the reference source. Default: 1e48
             There is no real reason to change this, but if it is changed, the value in src/c2ray/photorates.f90
             has to be changed accordingly and the library recompiled.
 
         Returns
         -------
-        src_pos : 2D-array of shape (3,numsrc)
-            Source positions
-        src_flux : 1D-array of shape (numsrc)
-            Normalization of the strength of each source, i.e. total ionizing flux / reference flux
+        src_pos : Source positions
+        src_flux : Normalization of the strength of each source, i.e. total ionizing flux / reference flux
         """
         return read_test_sources(file, numsrc, S_star_ref)
 
-    def density_init(self, z):
+    def density_init(self, z: float) -> None:
         """Set density at redshift z
 
         Sets the density to a constant value, specified in the parameter file,
@@ -71,11 +78,41 @@ class C2Ray_Test(C2Ray):
         ----------
         z : float
             Redshift slice
-        """
 
+        """
         self.set_constant_average_density(self.avg_dens, z)
 
-    def set_constant_average_density(self, ndens, z):
+    def write_output(self, z: float, ext: str = ".dat") -> None:
+        """Write ionization fraction & ionization rates as pickle files
+
+        Parameters
+        ----------
+        z : float
+            Redshift (used to name the file)
+        """
+        np.save(f"{self.results_basename}/xfrac_{z:.3f}.npy", self.xh)
+        np.save(f"{self.results_basename}/IonRates_{z:.3f}.npy", self.phi_ion)
+        # suffix = f"_{z:.3f}.pkl"
+        # with open(self.results_basename + "xfrac" + suffix,"wb") as f:
+        #     pkl.dump(self.xh,f)
+        # with open(self.results_basename + "IonRates" + suffix,"wb") as f:
+        #     pkl.dump(self.phi_ion,f)
+
+    def write_output_numbered(self, n: int) -> None:
+        """Write ionization fraction & ionization rates as pickle files with number rather than redshift
+
+        Parameters
+        ----------
+        n : int
+            Number of the file
+        """
+        suffix = f"_{n:n}.pkl"
+        with open(self.results_basename / f"xfrac{suffix}", "wb") as f:
+            pkl.dump(self.xh, f)
+        with open(self.results_basename / f"IonRates{suffix}", "wb") as f:
+            pkl.dump(self.phi_ion, f)
+
+    def set_constant_average_density(self, ndens: float, z: float) -> None:
         """Helper function to set the density grid to a constant value
 
         Parameters
@@ -94,9 +131,9 @@ class C2Ray_Test(C2Ray):
             redshift = z
         else:
             redshift = self.zred_0
-        self.ndens = ndens * np.ones(self.shape, order="F") * (1 + redshift) ** 3
+        self.ndens = np.full(self.shape, ndens * (1 + redshift) ** 3, order="F")
 
-    def generate_redshift_array(self, num_zred, delta_t):
+    def generate_redshift_array(self, num_zred: int, delta_t: float) -> FloatArray:
         """Helper function to generate a list of equally-time-spaced redshifts
 
         Generate num_zred redshifts that correspond to cosmic ages
@@ -105,18 +142,28 @@ class C2Ray_Test(C2Ray):
 
         Parameters
         ----------
-        num_zred : int
-            Number of redshifts to generate
-        delta_t : float
-            Spacing between redshifts in years
+        num_zred : Number of redshifts to generate
+        delta_t : Spacing between redshifts in years
 
         Returns
         -------
-        zred_array : 1D-array
-            List of redshifts (including initial one)
+        zred_array : List of redshifts (including initial one)
         """
-        step = delta_t * YEAR
+        step = delta_t * c.year2s
         zred_array = np.empty(num_zred)
         for i in range(num_zred):
             zred_array[i] = self.time2zred(self.age_0 + i * step)
         return zred_array
+
+    # =====================================================================================================
+    # Below are the overridden initialization routines specific to the test case
+    # =====================================================================================================
+
+    def _redshift_init(self) -> None:
+        """Initialize time and redshift counter"""
+        self.time = self.age_0
+        self.zred = self.zred_0
+
+    @property
+    def avg_dens(self) -> float:
+        return self.material_params.avg_dens

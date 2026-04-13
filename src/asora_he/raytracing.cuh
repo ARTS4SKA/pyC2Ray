@@ -23,7 +23,8 @@ namespace asora {
         double *__restrict__ column_density;
         const double *__restrict__ cross_section;
         size_t first_bin;
-        cuda::std::array<const double *__restrict__, 3> shared_cdens;
+
+        cuda::std::array<const double *__restrict__, 3> shared_cdens = {};
 
         // Prepare shared column density memory banks for cell interpolation
         __device__ void partition_column_density(int q);
