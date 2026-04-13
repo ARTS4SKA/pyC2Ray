@@ -1,8 +1,9 @@
 # Fortran source files for C2Ray
-c2ray_sources = ['photorates.f90', 'raytracing.f90', 'chemistry.f90']
+c2ray_sources = ['photorates.f90', 'raytracing.f90', 'chemistry.f90', 'chemistry_he.f90', 'chem_utils.f90', 'thermalevolution.f90']
 
 # F2PY type mapping file for Fortran -> C
 f2cmapfile = files('f2c.f2py_f2cmap')
+c2raypyf = files('libc2ray.pyf')
 
 cc = meson.get_compiler('c')
 m_dep = cc.find_library('m', required: false)
@@ -19,11 +20,12 @@ c2ray_wrapper_sources = custom_target(
         py,
         '-m',
         'numpy.f2py',
-        '@INPUT@',
-        '-m',
-        'libc2ray',
+        '-mlibc2ray',
         '--f2cmap',
         f2cmapfile,
+        '-c',
+        c2raypyf,
+        '@INPUT@',
         '--build-dir',
         meson.current_build_dir(),
     ],
