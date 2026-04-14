@@ -5,11 +5,12 @@ from types import ModuleType
 
 import pyc2ray.lib.libc2ray as libc2ray
 
+libasora: ModuleType | None
+libasora_He: ModuleType | None
+
 try:
-    libasora: ModuleType | None
-    libasora_He: ModuleType | None
-    import pyc2ray.lib.libasora as libasora
-    import pyc2ray.lib.libasora_He as libasora_He
+    import pyc2ray.lib.libasora as libasora  # type: ignore
+    import pyc2ray.lib.libasora_He as libasora_He  # type: ignore
 except ImportError as e:
     print("Import error!")
     warnings.warn(f"{e!s}. ASORA Library functionalities are disabled.")

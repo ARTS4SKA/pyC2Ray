@@ -146,13 +146,8 @@ Cosmology:
 # Output setup
 # ------------
 Output:
-<<<<<<<< HEAD:docs/examples/parameters_shadow.yml
   # Directory where results and log files are stored
   results_basename: ./test_results/
-========
-  # Directory where results and log files are stored (don't forget slash at end)
-  results_basename: /capstor/scratch/cscs/mibianco/results_c2ray/test_pyc2ray/
->>>>>>>> refs/rewritten/feat-improved-solver:examples/paper_tests/raytracing_benchmark/parameters.yml
   # Name of the log file to write
   logfile: pyC2Ray.log
 
