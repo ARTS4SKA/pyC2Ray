@@ -3,57 +3,62 @@
 # GPU memory has been allocated when GPU-accelerated functions are called.
 # ===================================================================================================
 
-from pyc2ray.load_extensions import libasora_He as libasora
+from .load_extensions import load_asora, load_asora_he
 
-__all__ = ["is_device_init", "device_init", "device_close", "photo_tables_to_device"]
+libasora = load_asora()
+libasora_he = load_asora_he()
+
+__all__ = ["cuda_is_init", "device_init", "device_close", "photo_table_to_device"]
 
 # This flag indicates whether GPU memory has been correctly allocated before calling any methods.
 # NOTE: there is no check if the allocated memory has the correct mesh size when calling a function,
 # so the user is responsible for that.
+cuda_init = False
 
 
-def check_libasora(func):
-    def _run_func(*args, **kwargs):
-        if libasora is None:
-            raise RuntimeError("ASORA Library not loaded")
-        return func(*args, **kwargs)
-
-    return _run_func
+def cuda_is_init():
+    global cuda_init
+    return cuda_init
 
 
-@check_libasora
-def is_device_init() -> bool:
-    assert libasora is not None
-    return libasora.is_device_init()
-
-
-@check_libasora
-def device_init(rank: int) -> None:
+def device_init(N, source_batch_size, rank, nr_gpus):
     """Initialize GPU and allocate memory for grid data
 
     Parameters
     ----------
-    rank : int
-        MPI rank of this process
+    N : int
+        Mesh size in grid coordinates
+    source_batch_size : int
+        Number of sources the GPU handles in parallel. Increasing this parameter
+        will speed up raytracing for large numbers of sources, but also increase
+        memory usage
     """
-    assert libasora is not None
-    libasora.device_init(rank)
+    global cuda_init
+    if libasora is not None:
+        libasora.device_init(N, source_batch_size, rank, nr_gpus)
+        cuda_init = True
+    else:
+        raise RuntimeError("Could not initialize GPU: ASORA library not loaded")
 
 
-@check_libasora
-def device_close() -> None:
+def device_close():
     """Deallocate GPU memory"""
-    assert libasora is not None
-    if libasora.is_device_init():
+    global cuda_init
+    if cuda_init:
         libasora.device_close()
-
-
-@check_libasora
-def photo_tables_to_device(thin_table, thick_table):
-    """Copy radiation tables to GPU (optically thin & thick tables)"""
-    assert libasora is not None
-    if not libasora.is_device_init():
+        cuda_init = False
+    else:
         raise RuntimeError(
-            "GPU not initialized. Please initialize it by calling device_init"
+            "GPU not initialized. Please initialize it by calling device_init(N)"
         )
-    libasora.photo_tables_to_device(thin_table, thick_table)
+
+
+def photo_table_to_device(thin_table, thick_table):
+    """Copy radiation tables to GPU (optically thin & thick tables)"""
+    global cuda_init
+    if cuda_init:
+        libasora.photo_table_to_device(thin_table, thick_table)
+    else:
+        raise RuntimeError(
+            "GPU not initialized. Please initialize it by calling device_init(N)"
+        )

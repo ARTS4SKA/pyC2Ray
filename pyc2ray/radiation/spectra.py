@@ -322,5 +322,5 @@ class YggdrasilModel(Source):
         self.lamb, self.sed_tab = np.loadtxt(tabname)
 
     def SED(self, freq):
-        sed = cst.h.cgs.value * freq ** (1 - self.pl_index)
+        sed = cst.h.cgs.value * freq ** (1 - self.index)
         return sed

@@ -1,17 +1,17 @@
-import logging
 import time
 
 import numpy as np
 
-from .asora_core import is_device_init
-from .load_extensions import libasora_He as libasora
-from .load_extensions import libc2ray
-from .utils.logutils import disable_newline
+from .asora_core import cuda_is_init
+from .load_extensions import load_asora, load_c2ray
+from .utils import printlog
 from .utils.sourceutils import format_sources
 
-__all__ = ["do_raytracing"]
+# Load extension modules
+libc2ray = load_c2ray()
+libasora = load_asora()
 
-logger = logging.getLogger(__name__)
+__all__ = ["do_raytracing"]
 
 # =========================================================================
 # This file contains the standalone raytracing subroutine, which may be
@@ -51,10 +51,12 @@ def do_raytracing(
     dlogtau,
     R_max_LLS,
     sig,
+    logfile="pyC2Ray.log",
+    quiet=False,
     stats=False,
 ):
     # Allow a call with GPU only if 1. the asora library is present and 2. the GPU memory has been allocated using device_init()
-    if use_gpu and not is_device_init():
+    if use_gpu and not cuda_is_init():
         raise RuntimeError(
             "GPU not initialized. Please initialize it by calling device_init(N)"
         )
@@ -72,7 +74,6 @@ def do_raytracing(
         srcpos_flat, normflux_flat = format_sources(src_pos, src_flux)
 
         # Copy positions & fluxes of sources to the GPU in advance
-        assert libasora is not None
         libasora.source_data_to_device(srcpos_flat, normflux_flat, NumSrc)
 
         # Initialize Flat Column density & ionization rate arrays. These are used to store the
@@ -81,17 +82,23 @@ def do_raytracing(
         phi_ion_flat = np.ravel(np.zeros((N, N, N), dtype="float64"))
 
         # Copy density field to GPU once at the beginning of timestep (!! do_all_sources assumes this !!)
-        assert libasora is not None
         libasora.density_to_device(ndens_flat, N)
-        logger.info("Copied source data to device.")
+        printlog("Copied source data to device.", logfile, quiet)
 
-    logger.info(f"""dr [Mpc]: {dr / 3.086e24:.3e}
-Running on {NumSrc:n} source(s), total normalized ionizing flux: {src_flux.sum():.2e}
-Mean density (cgs): {ndens.mean():.3e}, Mean ionized fraction: {xh_av.mean():.3e}""")
+    printlog(f"dr [Mpc]: {dr / 3.086e24:.3e}", logfile, quiet)
+    printlog(
+        f"Running on {NumSrc:n} source(s), total normalized ionizing flux: {src_flux.sum():.2e}",
+        logfile,
+        quiet,
+    )
+    printlog(
+        f"Mean density (cgs): {ndens.mean():.3e}, Mean ionized fraction: {xh_av.mean():.3e}",
+        logfile,
+        quiet,
+    )
 
     trt0 = time.time()
-    with disable_newline():
-        logger.info("Doing Raytracing...")
+    printlog("Doing Raytracing...", logfile, quiet, " ")
     # Set rates to 0. When using ASORA, this is done internally by the library (directly on the GPU)
     if not use_gpu:
         phi_ion = np.zeros((N, N, N), order="F")
@@ -101,7 +108,6 @@ Mean density (cgs): {ndens.mean():.3e}, Mean ionized fraction: {xh_av.mean():.3e
     # Do the raytracing part for each source. This computes the cumulative ionization rate for each cell.
     if use_gpu:
         # Use GPU raytracing
-        assert libasora is not None
         libasora.do_all_sources(
             R_max_LLS,
             coldensh_out_flat,
@@ -139,14 +145,16 @@ Mean density (cgs): {ndens.mean():.3e}, Mean ionized fraction: {xh_av.mean():.3e
             dlogtau,
             R_max_LLS,
         )
-    logger.info(f"  took {(time.time() - trt0): .1f} s.")
+    printlog(f"took {(time.time() - trt0): .1f} s.", logfile, quiet)
 
     # Since chemistry (ODE solving) is done on the CPU in Fortran, flattened CUDA arrays need to be reshaped
     if use_gpu:
         phi_ion = np.reshape(phi_ion_flat, (N, N, N))
     else:
-        logger.info(
-            f"Average number of subboxes: {nsubbox / NumSrc:n}, Total photon loss: {photonloss:.3e}"
+        printlog(
+            f"Average number of subboxes: {nsubbox / NumSrc:n}, Total photon loss: {photonloss:.3e}",
+            logfile,
+            quiet,
         )
 
     if stats and not use_gpu:
@@ -229,7 +237,7 @@ def do_all_sources(
         Flux of photons that leaves the subbox used for RT
     """
     # Allow a call with GPU only if 1. the asora library is present and 2. the GPU memory has been allocated using device_init()
-    if use_gpu and not is_device_init():
+    if use_gpu and not cuda_is_init():
         raise RuntimeError(
             "GPU not initialized. Please initialize it by calling device_init(N)"
         )
@@ -252,7 +260,6 @@ def do_all_sources(
         phi_ion_flat = np.ravel(np.zeros((N, N, N), dtype="float64"))
 
         # Copy density field to GPU once at the beginning of timestep (!! do_all_sources assumes this !!)
-        assert libasora is not None
         libasora.density_to_device(ndens_flat, N)
 
     # Set rates to 0. When using ASORA, this is done internally by the library (directly on the GPU)
@@ -263,7 +270,6 @@ def do_all_sources(
     # Raytrace all sources
     if use_gpu:
         # Use GPU raytracing
-        assert libasora is not None
         libasora.do_all_sources(
             srcpos_flat,
             normflux_flat,

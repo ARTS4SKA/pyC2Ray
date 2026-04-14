@@ -1,3 +1,6 @@
+#define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
+#define PY_SSIZE_T_CLEAN
+
 #include "../asora/memory.h"
 #include "../asora/utils.cuh"
 #include "raytracing.cuh"
@@ -8,17 +11,8 @@
 #include <string>
 #include <typeinfo>
 
-/* @file python_module.cu
- * @brief ASORA Python C-extension module
- *
- * This file contains the wrappers for python to access the C++ functions of the ASORA
- * library. Care has to be taken mostly with the numpy array arguments, since the
- * underlying raw C pointer is passed directly to the C++ functions with little checks.
- */
-
 namespace {
 
-    /// Helper function to map C++ types to NPY_TYPES for type checking
     template <typename T>
     NPY_TYPES getNpyType();
 
@@ -32,7 +26,6 @@ namespace {
         return NPY_INT;
     }
 
-    /// Perform type checking on numpy arrays.
     template <typename T>
     bool numpy_check(const PyArrayObject *array) {
         if (!PyArray_Check(array) || PyArray_TYPE(array) != getNpyType<T>()) {
@@ -45,7 +38,6 @@ namespace {
         return true;
     }
 
-    /// Load numpy array data to device buffer with error handling
     template <typename T>
     bool load_array_to_device(const PyArrayObject *array, asora::buffer_tag tag) {
         if (!numpy_check<T>(array)) return false;
@@ -54,7 +46,7 @@ namespace {
         auto size = static_cast<size_t>(PyArray_SIZE(array));
 
         try {
-            asora::device::ensure_transfer<T>(tag, data, size);
+            asora::device::transfer<T>(tag, data, size);
         } catch (const std::exception &e) {
             PyErr_SetString(PyExc_TypeError, e.what());
             return false;
@@ -64,7 +56,17 @@ namespace {
 
 }  // namespace
 
-/// Expose asora::do_all_sources
+// ===========================================================================
+// ASORA Python C-extension module
+// Mostly boilerplate code, this file contains the wrappers for python
+// to access the C++ functions of the ASORA library. Care has to be taken
+// mostly with the numpy array arguments, since the underlying raw C pointer
+// is passed directly to the C++ functions without additional type checking.
+// ===========================================================================
+
+// ========================================================================
+// Raytrace all sources and compute photoionization rates
+// ========================================================================
 static PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) {
     double R;
     PyArrayObject *sig_HI;
@@ -139,7 +141,7 @@ static PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject 
     return Py_None;
 }
 
-/// Expose asora::device::initialize
+// Initialize GPU device and allocate some memory for grid data
 PyObject *asora_device_init([[maybe_unused]] PyObject *self, PyObject *args) {
     unsigned int mpi_rank = 0;
     if (!PyArg_ParseTuple(args, "|I", &mpi_rank)) return nullptr;
@@ -155,7 +157,7 @@ PyObject *asora_device_init([[maybe_unused]] PyObject *self, PyObject *args) {
     return Py_None;
 }
 
-/// Expose asora::device::close
+// Close device and deallocate memory
 PyObject *asora_device_close([[maybe_unused]] PyObject *self, PyObject *args) {
     if (!PyArg_ParseTuple(args, "")) return nullptr;
 
@@ -168,14 +170,13 @@ PyObject *asora_device_close([[maybe_unused]] PyObject *self, PyObject *args) {
     return Py_None;
 }
 
-/// Expose asora::device::is_initialized.
 PyObject *asora_is_device_init([[maybe_unused]] PyObject *self, PyObject *args) {
     if (!PyArg_ParseTuple(args, "")) return nullptr;
 
     return asora::device::is_initialized() ? Py_True : Py_False;
 }
 
-/// Allocate and copy density grid to the device.
+// Copy density grid to GPU
 PyObject *asora_density_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
     PyArrayObject *ndens;
     return PyArg_ParseTuple(args, "O", &ndens) &&  //
@@ -186,10 +187,8 @@ PyObject *asora_density_to_device([[maybe_unused]] PyObject *self, PyObject *arg
                : nullptr;
 }
 
-/// Allocate and copy radiation tables to the device.
-PyObject *asora_photo_tables_to_device(
-    [[maybe_unused]] PyObject *self, PyObject *args
-) {
+// Copy radiation tables to GPU
+PyObject *asora_tables_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
     PyArrayObject *phion_thin_table;
     PyArrayObject *phion_thick_table;
     PyArrayObject *pheat_thin_table;
@@ -220,7 +219,7 @@ PyObject *asora_photo_tables_to_device(
     return Py_None;
 }
 
-/// Allocate and copy source properties to the device.
+// Copy source data to GPU
 PyObject *asora_source_data_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
     PyArrayObject *src_pos, *src_flux;
     return PyArg_ParseTuple(args, "OO", &src_pos, &src_flux) &&
@@ -250,10 +249,10 @@ static PyMethodDef asoraMethods[] = {
      "Check if the device is initialized"},
     {"density_to_device", asora_density_to_device, METH_VARARGS,
      "Copy density field to GPU"},
-    {"photo_tables_to_device", asora_photo_tables_to_device, METH_VARARGS,
-     "Copy radiation tables to the device"},
+    {"tables_to_device", asora_tables_to_device, METH_VARARGS,
+     "Copy radiation tables to GPU"},
     {"source_data_to_device", asora_source_data_to_device, METH_VARARGS,
-     "Copy source data to the device"},
+     "Copy source data to GPU"},
     {NULL, NULL, 0, NULL} /* Sentinel */
 };
 

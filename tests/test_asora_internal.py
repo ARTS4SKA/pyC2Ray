@@ -5,12 +5,12 @@ import pytest
 from numpy.typing import NDArray
 
 try:
-    import pyc2ray.lib.libasoratest as libasoratest
+    from pyc2ray.lib import libasoratest as asoratest
 except ImportError:
     pytest.skip("libasoratest.so missing, skipping tests", allow_module_level=True)
 
 
-def test_path_in_cell() -> None:
+def test_path_in_cell(data_dir: Path) -> None:
     def create_path_in_cell_data(N: int) -> NDArray:
         """Return the length of the ray intersecting cell at pos emitted from pos0"""
         N2 = N // 2
@@ -26,15 +26,15 @@ def test_path_in_cell() -> None:
         return paths
 
     N = 11
-    path = libasoratest.path_in_cell((N, N, N))
+    path = asoratest.path_in_cell((N, N, N))
     expected = create_path_in_cell_data(N)
 
     assert np.allclose(path, expected)
 
 
-def test_geometric_factors() -> None:
+def test_geometric_factors(data_dir: Path) -> None:
     def create_geometric_factors_data(N: int) -> NDArray:
-        """Return the geometric interpolation factors (weights) for the 4 adjacent cells"""
+        """Return the length of the ray intersecting cell at pos emitted from pos0"""
         N2 = N // 2
         grid = np.mgrid[-N2 : N2 + 1, -N2 : N2 + 1, -N2 : N2 + 1]
         indices = np.abs(grid).argsort(axis=0)
@@ -53,7 +53,7 @@ def test_geometric_factors() -> None:
         return facts
 
     N = 11
-    facts = libasoratest.geometric_factors((N, N, N))
+    facts = asoratest.geometric_factors((N, N, N))
     expected = create_geometric_factors_data(N)
 
     assert np.allclose(facts, expected)
@@ -64,7 +64,7 @@ def test_cell_interpolator(data_dir: Path) -> None:
     N = 11
     dens = rng.random((N, N, N), dtype=np.float64)
 
-    cdens = libasoratest.cell_interpolator(dens)
+    cdens = asoratest.cell_interpolator(dens)
     expected_output = np.load(data_dir / "cell_interpolator_output.npy")
 
     assert np.allclose(cdens, expected_output)
@@ -74,17 +74,17 @@ Q_MAX = 100
 
 
 def test_cells_in_shell() -> None:
-    assert libasoratest.cells_in_shell(0) == 1
+    assert asoratest.cells_in_shell(0) == 1
     for q in range(1, Q_MAX):
-        assert libasoratest.cells_in_shell(q) == 4 * q**2 + 2
+        assert asoratest.cells_in_shell(q) == 4 * q**2 + 2
 
 
 def test_cells_to_shell() -> None:
     q_tot = 1
-    assert libasoratest.cells_to_shell(0) == q_tot
+    assert asoratest.cells_to_shell(0) == q_tot
     for q in range(1, Q_MAX):
         q_tot += 4 * q**2 + 2
-        assert libasoratest.cells_to_shell(q) == q_tot
+        assert asoratest.cells_to_shell(q) == q_tot
 
 
 @pytest.mark.parametrize("q", range(0, Q_MAX))
@@ -93,7 +93,7 @@ def test_shell_mapping(q: int) -> None:
     q_max = 4 * q**2 + 2 if q > 0 else 1
     for s in range(q_max):
         # Check value makes sense
-        ijk = libasoratest.linthrd2cart(q, s)
+        ijk = asoratest.linthrd2cart(q, s)
         assert q == sum(abs(x) for x in ijk)
 
         # Check it's unique
@@ -101,4 +101,4 @@ def test_shell_mapping(q: int) -> None:
         cells.add(ijk)
 
         # Check inverse function
-        assert (q, s) == libasoratest.cart2linthrd(*ijk)
+        assert (q, s) == asoratest.cart2linthrd(*ijk)

@@ -1,17 +1,18 @@
 import array
-import logging
 import time
 
 import numpy as np
 
-from .asora_core import is_device_init
-from .load_extensions import libasora, libc2ray
-from .utils.logutils import disable_newline
+from .asora_core import cuda_is_init
+from .load_extensions import load_asora, load_c2ray
+from .utils import printlog
 from .utils.sourceutils import format_sources
 
-__all__ = ["evolve3D"]
+# Load extension modules
+libc2ray = load_c2ray()
+libasora = load_asora()
 
-logger = logging.getLogger(__name__)
+__all__ = ["evolve3D"]
 
 # =========================================================================
 # This file contains the main time-evolution subroutine, which updates
@@ -61,6 +62,8 @@ def evolve3D(
     colh0,
     temph0,
     abu_c,
+    logfile="pyC2Ray.log",
+    quiet=False,
 ):
     """Evolves the ionization fraction over one timestep for the whole grid
 
@@ -116,6 +119,10 @@ def evolve3D(
         Hydrogen ionization energy expressed in K
     abu_c : float
         Carbon abundance
+    logfile : str
+        Name of the file to append logs to. Default: pyC2Ray.log
+    quiet : bool
+        Don't write logs to stdout. Default is false
 
     Returns
     -------
@@ -126,7 +133,7 @@ def evolve3D(
     """
 
     # Allow a call with GPU only if 1. the asora library is present and 2. the GPU memory has been allocated using device_init()
-    if use_gpu and not is_device_init():
+    if use_gpu and not cuda_is_init():
         raise RuntimeError(
             "GPU not initialized. Please initialize it by calling device_init(N)"
         )
@@ -159,7 +166,6 @@ def evolve3D(
         srcpos_flat, normflux_flat = format_sources(src_pos, src_flux)
 
         # Copy positions & fluxes of sources to the GPU in advance
-        assert libasora is not None
         libasora.source_data_to_device(srcpos_flat, normflux_flat, NumSrc)
 
         # Initialize Flat Column density & ionization rate arrays. These are used to store the
@@ -168,20 +174,31 @@ def evolve3D(
         phi_ion_flat = np.ravel(np.zeros((N, N, N), dtype="float64"))
 
         # Copy density field to GPU once at the beginning of timestep (!! do_all_sources assumes this !!)
-        assert libasora is not None
         libasora.density_to_device(ndens_flat, N)
-        logger.info("Copied source data to device.")
+        printlog("Copied source data to device.", logfile, quiet)
 
     # -----------------------------------------------------------
     # Start Evolve step, Iterate until convergence in <x> and <y>
     # -----------------------------------------------------------
-    logger.info(f"""Calling evolve3D...
-dr [Mpc]: {dr / 3.086e24:.3e}
-dt [years]: {dt / 3.15576e07:.3e}
-Running on {NumSrc:n} source(s), total normalized ionizing flux: {src_flux.sum():.2e}
-Mean density (cgs): {ndens.mean():.3e}, Mean ionized fraction: {xh.mean():.3e}
-Convergence Criterion (Number of points): {conv_criterion: n}
-""")
+    printlog("Calling evolve3D...", logfile, quiet)
+    printlog(f"dr [Mpc]: {dr / 3.086e24:.3e}", logfile, quiet)
+    printlog(f"dt [years]: {dt / 3.15576e07:.3e}", logfile, quiet)
+    printlog(
+        f"Running on {NumSrc:n} source(s), total normalized ionizing flux: {src_flux.sum():.2e}",
+        logfile,
+        quiet,
+    )
+    printlog(
+        f"Mean density (cgs): {ndens.mean():.3e}, Mean ionized fraction: {xh.mean():.3e}",
+        logfile,
+        quiet,
+    )
+    printlog(
+        f"Convergence Criterion (Number of points): {conv_criterion: n}",
+        logfile,
+        quiet,
+        end="\n\n",
+    )
 
     while not converged:
         niter += 1
@@ -190,8 +207,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
         # (1): Raytracing Step
         # --------------------
         trt0 = time.time()
-        with disable_newline():
-            logger.info("Doing Raytracing...")
+        printlog("Doing Raytracing...", logfile, quiet, " ")
         # Set rates to 0. When using ASORA, this is done internally by the library (directly on the GPU)
         if not use_gpu:
             phi_ion = np.zeros((N, N, N), order="F")
@@ -203,7 +219,6 @@ Convergence Criterion (Number of points): {conv_criterion: n}
         # Do the raytracing part for each source. This computes the cumulative ionization rate for each cell.
         if use_gpu:
             # Use GPU raytracing
-            assert libasora is not None
             libasora.do_all_sources(
                 R_max_LLS,
                 coldensh_out_flat,
@@ -242,22 +257,23 @@ Convergence Criterion (Number of points): {conv_criterion: n}
                 R_max_LLS,
             )
 
-        logger.info(f"  took {(time.time() - trt0): .1f} s.")
+        printlog(f"took {(time.time() - trt0): .1f} s.", logfile, quiet)
 
         # Since chemistry (ODE solving) is done on the CPU in Fortran, flattened CUDA arrays need to be reshaped
         if use_gpu:
             phi_ion = np.reshape(phi_ion_flat, (N, N, N))
         else:
-            logger.info(
-                f"Average number of subboxes: {nsubbox / NumSrc:n}, Total photon loss: {photonloss:.3e}"
+            printlog(
+                f"Average number of subboxes: {nsubbox / NumSrc:n}, Total photon loss: {photonloss:.3e}",
+                logfile,
+                quiet,
             )
 
         # ---------------------
         # (2): ODE Solving Step
         # ---------------------
         tch0 = time.time()
-        with disable_newline():
-            logger.info("Doing Chemistry...")
+        printlog("Doing Chemistry...", logfile, quiet, " ")
         # Apply the global rates to compute the updated ionization fraction
         conv_flag = libc2ray.chemistry.global_pass(
             dt,
@@ -273,7 +289,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             temph0,
             abu_c,
         )
-        logger.info(f"  took {(time.time() - tch0): .1f} s.")
+        printlog(f"took {(time.time() - tch0): .1f} s.", logfile, quiet)
 
         # ----------------------------
         # (3): Test Global Convergence
@@ -292,9 +308,10 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             rel_change_xh0 = 1.0
 
         # Display convergence
-        logger.info(
-            f"Number of non-converged points: {conv_flag} of {NumCells} ({conv_flag / NumCells * 100: .3f} % ), "
-            f"Relative change in ionfrac: {rel_change_xh1: .2e}"
+        printlog(
+            f"Number of non-converged points: {conv_flag} of {NumCells} ({conv_flag / NumCells * 100: .3f} % ), Relative change in ionfrac: {rel_change_xh1: .2e}",
+            logfile,
+            quiet,
         )
 
         converged = (conv_flag < conv_criterion) or (
@@ -311,7 +328,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             xh_av_flat = np.ravel(xh_av)
 
     # When converged, return the updated ionization fractions at the end of the timestep
-    logger.info("Multiple source convergence reached.")
+    printlog("Multiple source convergence reached.", logfile, quiet)
     xh_new = xh_intermed
     return xh_new, phi_ion
 
@@ -418,7 +435,7 @@ def evolve3D_MPI(
     # nprocs = comm.Get_size()
 
     # Allow a call with GPU only if 1. the asora library is present and 2. the GPU memory has been allocated using device_init()
-    if use_gpu and not is_device_init():
+    if use_gpu and not cuda_is_init():
         raise RuntimeError(
             "GPU not initialized. Please initialize it by calling device_init(N)"
         )
@@ -467,7 +484,7 @@ def evolve3D_MPI(
         else:
             srcpos_flat, normflux_flat = format_sources(src_pos, src_flux)
 
-        logger.info(f"...rank={rank:n} has {NumSrc:n} sources.")
+        printlog(f"...rank={rank:n} has {NumSrc:n} sources.", logfile, quiet)
 
         # Initialize Flat Column density & ionization rate arrays. These are used to store the output of the raytracing module.
         # TODO: python column density array is actually not needed ?
@@ -475,24 +492,34 @@ def evolve3D_MPI(
         phi_ion_flat = np.ravel(np.zeros((N, N, N), dtype="float64"))
 
         # Copy density field to GPU once at the beginning of timestep (!! do_all_sources assumes this !!)
-        assert libasora is not None
         libasora.density_to_device(ndens_flat, N)
 
         # Copy positions & fluxes of sources to the GPU in advance
-        assert libasora is not None
         libasora.source_data_to_device(srcpos_flat, normflux_flat, NumSrc)
 
     # -----------------------------------------------------------
     # Start Evolve step, Iterate until convergence in <x> and <y>
     # -----------------------------------------------------------
     if rank == 0:
-        logger.info(f"""Calling evolve3D with {nprocs:n} MPI-processors...
-dr [Mpc]: {dr / 3.086e24:.3e}
-dt [years]: {dt / 3.15576e07:.3e}
-Running on {NumSrc:n} source(s), total normalized ionizing flux: {src_flux.sum():.2e}
-Mean density (cgs): {ndens.mean():.3e}, Mean ionized fraction: {xh.mean():.3e}
-Convergence Criterion (Number of points): {conv_criterion: n}
-""")
+        printlog(f"Calling evolve3D with {nprocs:n} MPI-processors...", logfile, quiet)
+        printlog(f"dr [Mpc]: {dr / 3.086e24:.3e}", logfile, quiet)
+        printlog(f"dt [years]: {dt / 3.15576e07:.3e}", logfile, quiet)
+        printlog(
+            f"Running on {NumSrc:n} source(s), total normalized ionizing flux: {src_flux.sum():.2e}",
+            logfile,
+            quiet,
+        )
+        printlog(
+            f"Mean density (cgs): {ndens.mean():.3e}, Mean ionized fraction: {xh.mean():.3e}",
+            logfile,
+            quiet,
+        )
+        printlog(
+            f"Convergence Criterion (Number of points): {conv_criterion: n}",
+            logfile,
+            quiet,
+            end="\n\n",
+        )
 
     while not converged:
         niter += 1
@@ -501,8 +528,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
         # (1): Raytracing Step
         # --------------------
         trt0 = time.time()
-        with disable_newline():
-            logger.info(f"Doing Raytracing (rank={rank:n})...")
+        printlog(f"Doing Raytracing (rank={rank:n})...", logfile, quiet, " ")
         # Set rates to 0. When using ASORA, this is done internally by the library (directly on the GPU)
         if not use_gpu:
             phi_ion = np.zeros((N, N, N), order="F")
@@ -514,7 +540,6 @@ Convergence Criterion (Number of points): {conv_criterion: n}
         # Do the raytracing part for each source. This computes the cumulative ionization rate for each cell.
         if use_gpu:
             # Use GPU raytracing
-            assert libasora is not None
             libasora.do_all_sources(
                 R_max_LLS,
                 coldensh_out_flat,
@@ -553,14 +578,16 @@ Convergence Criterion (Number of points): {conv_criterion: n}
                 R_max_LLS,
             )
 
-        logger.info(f"  rank={rank:n} took {(time.time() - trt0): .1e} s.")
+        printlog(f"rank={rank:n} took {(time.time() - trt0): .1e} s.", logfile, quiet)
 
         # Since chemistry (ODE solving) is done on the CPU in Fortran, flattened CUDA arrays need to be reshaped
         if use_gpu:
             phi_ion = np.reshape(phi_ion_flat, (N, N, N))
         else:
-            logger.info(
-                f"Average number of subboxes: {nsubbox / NumSrc:n}, Total photon loss: {photonloss:.3e}"
+            printlog(
+                f"Average number of subboxes: {nsubbox / NumSrc:n}, Total photon loss: {photonloss:.3e}",
+                logfile,
+                quiet,
             )
 
         if rank == 0:
@@ -576,8 +603,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             # (2): ODE Solving Step
             # ---------------------
             tch0 = time.time()
-            with disable_newline():
-                logger.info("Doing Chemistry...")
+            printlog("Doing Chemistry...", logfile, quiet, " ")
 
             # Apply the global rates to compute the updated ionization fraction
             conv_flag = libc2ray.chemistry.global_pass(
@@ -594,7 +620,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
                 temph0,
                 abu_c,
             )
-            logger.info(f"  took {(time.time() - tch0): .1f} s.")
+            printlog(f"took {(time.time() - tch0): .1f} s.", logfile, quiet)
 
             # ----------------------------
             # (3): Test Global Convergence
@@ -613,9 +639,10 @@ Convergence Criterion (Number of points): {conv_criterion: n}
                 rel_change_xh0 = 1.0
 
             # Display convergence
-            logger.info(
-                f"Number of non-converged points: {conv_flag} of {NumCells} ({conv_flag / NumCells * 100: .3f} % ), "
-                f"Relative change in ionfrac: {rel_change_xh1: .2e}"
+            printlog(
+                f"Number of non-converged points: {conv_flag} of {NumCells} ({conv_flag / NumCells * 100: .3f} % ), Relative change in ionfrac: {rel_change_xh1: .2e}",
+                logfile,
+                quiet,
             )
 
             converged = (conv_flag < conv_criterion) or (
@@ -645,7 +672,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
 
     if rank == 0:
         # When converged, return the updated ionization fractions at the end of the timestep
-        logger.info("Multiple source convergence reached.")
+        printlog("Multiple source convergence reached.", logfile, quiet)
         xh_new = xh_intermed
 
     # braodcast final result

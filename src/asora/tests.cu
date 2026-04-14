@@ -3,8 +3,6 @@
 #include "memory.h"
 #include "utils.cuh"
 
-#include <algorithm>
-#include <cmath>
 #include <numeric>
 #include <vector>
 
@@ -13,16 +11,16 @@ namespace asoratest {
     namespace {
 
         __global__ void cell_interpolator_kernel(
-            double *coldens_data, const double *shared_cdens_data
+            double *coldens_data, const double *dens_data
         ) {
             int di = blockIdx.x - gridDim.x / 2;
             int dj = threadIdx.x - blockDim.x / 2;
             int dk = threadIdx.y - blockDim.y / 2;
             auto q0 = abs(di) + abs(dj) + abs(dk);
             cuda::std::array<const double *__restrict__, 3> shared_cdens = {
-                shared_cdens_data + asora::cells_to_shell(q0 - 2),
-                shared_cdens_data + asora::cells_to_shell(q0 - 3),
-                shared_cdens_data + asora::cells_to_shell(q0 - 4)
+                dens_data + asora::cells_to_shell(q0 - 2),
+                dens_data + asora::cells_to_shell(q0 - 3),
+                dens_data + asora::cells_to_shell(q0 - 4)
             };
 
             auto idx =
@@ -79,34 +77,12 @@ namespace asoratest {
     void cell_interpolator(
         double *coldens_data, double *dens_data, const std::array<size_t, 3> &shape
     ) {
-        size_t size =
-            std::accumulate(shape.begin(), shape.end(), 1u, std::multiplies<>());
-
-        // Create an array that simulates a column density octahedral array:
-        auto n_max = *std::max_element(shape.begin(), shape.end());
-        // Size of the octahedron
-        size_t dens_size = asora::cells_to_shell(int(std::ceil(1.5 * n_max)));
-        std::vector<double> dens_data_vec(dens_size, 0.0);
-        for (size_t i = 0; i < shape[0]; ++i) {
-            for (size_t j = 0; j < shape[1]; ++j) {
-                for (size_t k = 0; k < shape[2]; ++k) {
-                    int di = i - shape[0] / 2;
-                    int dj = j - shape[1] / 2;
-                    int dk = k - shape[2] / 2;
-                    auto &&[q, s] = asora::cart2linthrd(di, dj, dk);
-                    auto i_off = k + shape[2] * (j + shape[1] * i);
-                    auto q_off = asora::cells_to_shell(q - 1) + s;
-                    dens_data_vec[q_off] = dens_data[i_off];
-                }
-            }
-        }
-
-        // This is the input:
-        asora::device_buffer shared_cdens_dev(dens_size * sizeof(double));
-        shared_cdens_dev.copyFromHost(dens_data_vec.data());
-
-        // This is the output:
-        asora::device_buffer coldens_dev(size * sizeof(double));
+        size_t size = std::accumulate(
+            shape.begin(), shape.end(), sizeof(double), std::multiplies<>()
+        );
+        asora::device_buffer coldens_dev(size);
+        asora::device_buffer dens_dev(size);
+        dens_dev.copyFromHost(dens_data, dens_dev.size());
 
         uint3 gs = {static_cast<unsigned int>(shape[0]), 1, 1};
         uint3 ts = {
@@ -115,7 +91,7 @@ namespace asoratest {
 
         cell_interpolator_kernel<<<gs, ts>>>(
             coldens_dev.view<double>().data(),  //
-            shared_cdens_dev.view<double>().data()
+            dens_dev.view<double>().data()
         );
 
         asora::safe_cuda(cudaPeekAtLastError());

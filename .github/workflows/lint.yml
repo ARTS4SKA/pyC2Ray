@@ -18,18 +18,14 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
 
     steps:
     - uses: actions/checkout@v5
 
-    - name: Set up Python ${{ matrix.python-version }}
+    - name: Set up Python 3.12
       uses: actions/setup-python@v6
       with:
-        python-version: ${{ matrix.python-version }}
+        python-version: "3.12"
 
     - name: Install openMPI
       run: sudo apt install libopenmpi-dev
@@ -38,14 +34,11 @@ jobs:
       run: |
         pip install .[lint]
 
-    - name: Check Python code format
+    - name: Check code format
       run: ruff format --check pyc2ray/ tests/
 
-    - name: Check Python code style
+    - name: Check code style
       run: ruff check --extend-select I --output-format=concise pyc2ray/ tests/
 
-    - name: Check Python code type annotations
-      run: mypy pyc2ray/ tests/
-
-    - name: Check C++ and CUDA code style
+    - name: Check code style
       run: find src/ -regex '.*\.\(cu\|cuh\|cpp\|h\)' -exec clang-format -n -Werror {} \;

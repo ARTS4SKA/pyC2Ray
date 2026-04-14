@@ -8,9 +8,6 @@ namespace asora {
     device_buffer::device_buffer(size_t nbytes) : _nbytes(nbytes) {
         std::byte *ptr;
         safe_cuda(cudaMalloc(&ptr, _nbytes));
-
-        // Custom deleter ensures cudaFree is called on destruction
-        // The shared_ptr deleter can't throw, so we ignore any exceptions
         _ptr.reset(ptr, [](std::byte *ptr) {
             try {
                 safe_cuda(cudaFree(ptr));
@@ -24,27 +21,15 @@ namespace asora {
         std::swap(lhs._nbytes, rhs._nbytes);
     }
 
-    void device_buffer::copyFromHost(const void *src) {
-        safe_cuda(cudaMemcpy(data(), src, size(), cudaMemcpyHostToDevice));
-    }
-
-    void device_buffer::copyToHost(void *dst) const {
-        safe_cuda(cudaMemcpy(dst, data(), size(), cudaMemcpyDeviceToHost));
-    }
-
     void device_buffer::copyFromHost(const void *src, size_t nbytes) {
-        if (size() < nbytes)
-            throw std::invalid_argument(
-                "requested more bytes to copy than the buffer size"
-            );
+        if (size() != nbytes)
+            throw std::invalid_argument("this device buffer is not large enough");
         safe_cuda(cudaMemcpy(data(), src, nbytes, cudaMemcpyHostToDevice));
     }
 
     void device_buffer::copyToHost(void *dst, size_t nbytes) const {
-        if (size() < nbytes)
-            throw std::invalid_argument(
-                "requested more bytes to copy than the buffer size"
-            );
+        if (size() != nbytes)
+            throw std::invalid_argument("the destination buffer is not large enough");
         safe_cuda(cudaMemcpy(dst, data(), nbytes, cudaMemcpyDeviceToHost));
     }
 
@@ -53,10 +38,8 @@ namespace asora {
         auto &self = instance();
         if (is_initialized()) return self;
 
-        // Map MPI rank to available GPUs using modulo and select the device
-        int device_count;
-        safe_cuda(cudaGetDeviceCount(&device_count));
-        self._gpu_id = rank % device_count;
+        safe_cuda(cudaGetDeviceCount(&self._gpu_id));
+        self._gpu_id = rank % self._gpu_id;
         safe_cuda(cudaSetDevice(self._gpu_id));
         return self;
     }
@@ -76,7 +59,6 @@ namespace asora {
         return is_initialized() && instance()._memory_pool.contains(tag);
     }
 
-    // Thread-safe singleton by C++11 standard
     device &device::instance() noexcept {
         static device self;
         return self;
@@ -85,7 +67,7 @@ namespace asora {
     void device::check_initialized(const std::source_location &loc) {
         if (!is_initialized()) {
             auto msg = std::format(
-                "device not initialized at {} in {}:{}; call "
+                "device not initialized at At {} in {}:{}; call "
                 "asora::device::initialize(...) before",
                 loc.function_name(), loc.file_name(), loc.line()
             );
@@ -93,21 +75,11 @@ namespace asora {
         }
     }
 
-    void device::allocate_or_copy(
-        buffer_tag tag, size_t nbytes, const void *src, bool ensure
-    ) {
+    void device::allocate_or_copy(buffer_tag tag, size_t nbytes, const void *src) {
         check_initialized();
 
         auto &&[it, success] = _memory_pool.try_emplace(tag, nbytes);
-
-        // Reallocate if existing buffer is too small
-        if (ensure && it->second.size() < nbytes) it->second = device_buffer(nbytes);
-
-        // Throw if tag exists but no copy requested, otherwise copy data
-        if (!success && !ensure && !src)
-            throw std::runtime_error(
-                std::format("tag {} already in use", static_cast<int>(tag))
-            );
+        if (!success && !src) throw std::runtime_error("tag already in use");
         if (src) it->second.copyFromHost(src, nbytes);
     }
 

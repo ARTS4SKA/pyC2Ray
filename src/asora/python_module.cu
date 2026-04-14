@@ -1,70 +1,23 @@
-#include "chemistry.h"
+#define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
+#define PY_SSIZE_T_CLEAN
+
 #include "memory.h"
 #include "raytracing.cuh"
 
 #include <Python.h>
 #include <numpy/arrayobject.h>
 
-#include <string>
-#include <typeinfo>
+// ===========================================================================
+// ASORA Python C-extension module
+// Mostly boilerplate code, this file contains the wrappers for python
+// to access the C++ functions of the ASORA library. Care has to be taken
+// mostly with the numpy array arguments, since the underlying raw C pointer
+// is passed directly to the C++ functions without additional type checking.
+// ===========================================================================
 
-/* @file python_module.cu
- * @brief ASORA Python C-extension module
- *
- * This file contains the wrappers for python to access the C++ functions of the ASORA
- * library. Care has to be taken mostly with the numpy array arguments, since the
- * underlying raw C pointer is passed directly to the C++ functions with little checks.
- */
-
-namespace {
-
-    /// Helper function to map C++ types to NPY_TYPES for type checking
-    template <typename T>
-    NPY_TYPES getNpyType();
-
-    template <>
-    NPY_TYPES getNpyType<double>() {
-        return NPY_DOUBLE;
-    }
-
-    template <>
-    NPY_TYPES getNpyType<int>() {
-        return NPY_INT;
-    }
-
-    /// Perform type checking on numpy arrays.
-    template <typename T>
-    bool numpy_check(const PyArrayObject *array) {
-        if (!PyArray_Check(array) || PyArray_TYPE(array) != getNpyType<T>()) {
-            using namespace std::string_literals;
-            std::string msg =
-                "array must be a numpy NDArray of type "s + typeid(T).name();
-            PyErr_SetString(PyExc_TypeError, msg.c_str());
-            return false;
-        }
-        return true;
-    }
-
-    /// Load numpy array data to device buffer with error handling
-    template <typename T>
-    bool load_array_to_device(const PyArrayObject *array, asora::buffer_tag tag) {
-        if (!numpy_check<T>(array)) return false;
-
-        auto data = static_cast<T *>(PyArray_DATA(array));
-        auto size = static_cast<size_t>(PyArray_SIZE(array));
-
-        try {
-            asora::device::ensure_transfer<T>(tag, data, size);
-        } catch (const std::exception &e) {
-            PyErr_SetString(PyExc_ValueError, e.what());
-            return false;
-        }
-        return true;
-    }
-
-}  // namespace
-
-/// Expose asora::do_all_sources
+// ========================================================================
+// Raytrace all sources and compute photoionization rates
+// ========================================================================
 PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) {
     double R;
     double sig;
@@ -86,7 +39,14 @@ PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) 
         return nullptr;
 
     // Error checking
-    if (!numpy_check<double>(xh_av) || !numpy_check<double>(phi_ion)) return nullptr;
+    if (!PyArray_Check(xh_av) || PyArray_TYPE(xh_av) != NPY_DOUBLE) {
+        PyErr_SetString(PyExc_TypeError, "xh_av must be Array of type double");
+        return nullptr;
+    }
+    if (!PyArray_Check(phi_ion) || PyArray_TYPE(phi_ion) != NPY_DOUBLE) {
+        PyErr_SetString(PyExc_TypeError, "phi_ion must be Array of type double");
+        return nullptr;
+    }
 
     // Get Array data
     auto xh_av_data = static_cast<double *>(PyArray_DATA(xh_av));
@@ -105,7 +65,7 @@ PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) 
     return Py_None;
 }
 
-/// Expose asora::device::initialize
+// Initialize GPU device and allocate some memory for grid data
 PyObject *asora_device_init([[maybe_unused]] PyObject *self, PyObject *args) {
     unsigned int mpi_rank = 0;
     if (!PyArg_ParseTuple(args, "|I", &mpi_rank)) return nullptr;
@@ -121,7 +81,7 @@ PyObject *asora_device_init([[maybe_unused]] PyObject *self, PyObject *args) {
     return Py_None;
 }
 
-/// Expose asora::device::close
+// Close device and deallocate memory
 PyObject *asora_device_close([[maybe_unused]] PyObject *self, PyObject *args) {
     if (!PyArg_ParseTuple(args, "")) return nullptr;
 
@@ -134,14 +94,52 @@ PyObject *asora_device_close([[maybe_unused]] PyObject *self, PyObject *args) {
     return Py_None;
 }
 
-/// Expose asora::device::is_initialized.
 PyObject *asora_is_device_init([[maybe_unused]] PyObject *self, PyObject *args) {
     if (!PyArg_ParseTuple(args, "")) return nullptr;
 
     return asora::device::is_initialized() ? Py_True : Py_False;
 }
 
-/// Allocate and copy density grid to the device.
+namespace {
+
+    template <typename T>
+    NPY_TYPES getNpyType();
+
+    template <>
+    NPY_TYPES getNpyType<double>() {
+        return NPY_DOUBLE;
+    }
+
+    template <>
+    NPY_TYPES getNpyType<int>() {
+        return NPY_INT;
+    }
+
+    template <typename T>
+    bool load_array_to_device(const PyArrayObject *array, asora::buffer_tag tag) {
+        if (!PyArray_Check(array) || PyArray_TYPE(array) != getNpyType<T>()) {
+            using namespace std::string_literals;
+            std::string msg =
+                "array must be a numpy NDArray of type "s + typeid(T).name();
+            PyErr_SetString(PyExc_TypeError, msg.c_str());
+            return false;
+        }
+
+        auto data = static_cast<T *>(PyArray_DATA(array));
+        auto size = static_cast<size_t>(PyArray_SIZE(array));
+
+        try {
+            asora::device::transfer<T>(tag, data, size);
+        } catch (const std::exception &e) {
+            PyErr_SetString(PyExc_TypeError, e.what());
+            return false;
+        }
+        return true;
+    }
+
+}  // namespace
+
+// Copy density grid to GPU
 PyObject *asora_density_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
     PyArrayObject *ndens;
     return PyArg_ParseTuple(args, "O", &ndens) &&  //
@@ -152,10 +150,8 @@ PyObject *asora_density_to_device([[maybe_unused]] PyObject *self, PyObject *arg
                : nullptr;
 }
 
-/// Allocate and copy radiation tables to the device.
-PyObject *asora_photo_tables_to_device(
-    [[maybe_unused]] PyObject *self, PyObject *args
-) {
+// Copy radiation tables to GPU
+PyObject *asora_photo_table_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
     PyArrayObject *thin_table, *thick_table;
     return PyArg_ParseTuple(args, "OO", &thin_table, &thick_table) &&
                    load_array_to_device<double>(
@@ -168,7 +164,7 @@ PyObject *asora_photo_tables_to_device(
                : nullptr;
 }
 
-/// Allocate and copy source properties to the device.
+// Copy source data to GPU
 PyObject *asora_source_data_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
     PyArrayObject *src_pos, *src_flux;
     return PyArg_ParseTuple(args, "OO", &src_pos, &src_flux) &&
@@ -182,70 +178,26 @@ PyObject *asora_source_data_to_device([[maybe_unused]] PyObject *self, PyObject 
                : nullptr;
 }
 
-PyObject *asora_chemistry_global_pass([[maybe_unused]] PyObject *self, PyObject *args) {
-    double dt;
-    PyArrayObject *ndens;
-    PyArrayObject *temp;
-    PyArrayObject *xh;
-    PyArrayObject *xh_av;
-    PyArrayObject *xh_int;
-    PyArrayObject *phi_ion;
-    PyArrayObject *clump;
-    double bh00;
-    double albpow;
-    double colh0;
-    double temph0;
-    double abu_c;
-    size_t block_size = 512;
-
-    if (!PyArg_ParseTuple(
-            args, "dOOOOOOOddddd|k", &dt, &ndens, &temp, &xh, &xh_av, &xh_int, &phi_ion,
-            &clump, &bh00, &albpow, &colh0, &temph0, &abu_c, &block_size
-        ))
-        return nullptr;
-
-    // Get Array data
-    auto xh_data = static_cast<double *>(PyArray_DATA(xh));
-    auto xh_av_data = static_cast<double *>(PyArray_DATA(xh_av));
-    auto xh_int_data = static_cast<double *>(PyArray_DATA(xh_int));
-    auto temp_data = static_cast<double *>(PyArray_DATA(temp));
-    auto ndens_data = static_cast<double *>(PyArray_DATA(ndens));
-    auto phi_ion_data = static_cast<double *>(PyArray_DATA(phi_ion));
-    auto clump_data = static_cast<double *>(PyArray_DATA(clump));
-    auto n_cells = static_cast<size_t>(PyArray_SIZE(xh));
-
-    try {
-        auto conv_flag = asora::global_pass(
-            xh_data, xh_av_data, xh_int_data, temp_data, ndens_data, phi_ion_data,
-            clump_data, dt, bh00, albpow, colh0, temph0, abu_c, n_cells, block_size
-        );
-        return Py_BuildValue("k", conv_flag);
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
-        return nullptr;
-    }
-    return Py_None;
-}
-
 #ifdef __cplusplus
 extern "C" {
 #endif  // __cplusplus
 
+// ========================================================================
+// Define module functions and initialization function
+// ========================================================================
 static PyMethodDef asoraMethods[] = {
-    {"do_all_sources", asora_do_all_sources, METH_VARARGS, "Perform ASORA raytracing"},
+    {"do_all_sources", asora_do_all_sources, METH_VARARGS, "Do OCTA raytracing (GPU)"},
     {"device_init", asora_device_init, METH_VARARGS,
      "Initialize device and allocate memory"},
     {"device_close", asora_device_close, METH_VARARGS, "Close device and free memory"},
     {"is_device_init", asora_is_device_init, METH_VARARGS,
      "Check if the device is initialized"},
     {"density_to_device", asora_density_to_device, METH_VARARGS,
-     "Copy density field to the device"},
-    {"photo_tables_to_device", asora_photo_tables_to_device, METH_VARARGS,
-     "Copy radiation tables to the device"},
+     "Copy density field to GPU"},
+    {"photo_table_to_device", asora_photo_table_to_device, METH_VARARGS,
+     "Copy radiation tables to GPU"},
     {"source_data_to_device", asora_source_data_to_device, METH_VARARGS,
-     "Copy source data to the device"},
-    {"chemistry_global_pass", asora_chemistry_global_pass, METH_VARARGS,
-     "Solve chemistry ODE"},
+     "Copy source data to GPU"},
     {NULL, NULL, 0, NULL} /* Sentinel */
 };
 

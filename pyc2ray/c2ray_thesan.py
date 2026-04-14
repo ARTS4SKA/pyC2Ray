@@ -1,15 +1,10 @@
-import logging
-from pathlib import Path
-
 import h5py
 import numpy as np
 import tools21cm as t2c
 
 import pyc2ray as pc2r
-import pyc2ray.constants as c
-from pyc2ray.utils.sourceutils import FloatArray, IntArray, PathType
 
-from .c2ray_base import C2Ray
+from .c2ray_base import YEAR, C2Ray, m_p
 from .utils import bin_sources
 from .utils.other_utils import (
     find_bins,
@@ -20,7 +15,8 @@ from .utils.other_utils import (
 # from .source_model import StellarToHaloRelation, BurstySFR, EscapeFraction, Halo2Grid
 
 __all__ = ["C2Ray_Thesan"]
-logger = logging.getLogger(__name__)
+
+# m_p = 1.672661e-24
 
 # ======================================================================
 # This file contains the C2Ray_Thesan subclass of C2Ray, which is a
@@ -34,16 +30,17 @@ def func(x, a, b):
 
 
 class C2Ray_Thesan(C2Ray):
-    def __init__(self, paramfile: PathType) -> None:
+    def __init__(self, paramfile):
         """Basis class for a C2Ray Simulation
 
         Parameters
         ----------
-        paramfile : Name of a YAML file containing parameters for the C2Ray simulation
+        paramfile : str
+            Name of a YAML file containing parameters for the C2Ray simulation
 
         """
         super().__init__(paramfile)
-        logger.info('Running: "C2Ray for %d Mpc/h volume"', self.boxsize)
+        self.printlog('Running: "C2Ray for %d Mpc/h volume"' % self.boxsize)
 
         # path to tables
         path_data = pc2r.__path__[0] + "/tables/dotN_thesan/"
@@ -59,33 +56,29 @@ class C2Ray_Thesan(C2Ray):
     # USER DEFINED METHODS
     # =====================================================================================================
 
-    def ionizing_flux(
-        self,
-        file: PathType,
-        z: float,
-        dt: float,
-        rad_feedback: bool = False,
-        save_Mstar: bool = False,
-    ) -> tuple[IntArray, FloatArray]:
+    def ionizing_flux(self, file, z, dt, rad_feedback=False, save_Mstar=False):
         """Read sources from a C2Ray-formatted file
         Parameters
         ----------
-        file : Filename to read.
-        z : redshift
-        dt : time-step in Myrs.
-        rad_feedback : ?
-        save_Mstar : ?
+        file : str
+            Filename to read.
+        ts : float
+            time-step in Myrs.
+        kind: str
+            The kind of source model to use.
 
-        Returns
+        Returns<
         -------
-        srcpos : Grid positions of the sources formatted in a suitable way for the chosen raytracing algorithm
-        normflux : Normalization of the flux of each source (relative to S_star)
+        srcpos : array
+            Grid positions of the sources formatted in a suitable way for the chosen raytracing algorithm
+        normflux : array
+            Normalization of the flux of each source (relative to S_star)
         """
         S_star_ref = 1e48
 
         # read halo list
         srcpos_mpc, srcmass_msun = self.read_haloes(
-            f"{self.sources_basename}{file}", self.boxsize
+            self.sources_basename + file, self.boxsize
         )
 
         # select table based on the closest redshift
@@ -156,60 +149,56 @@ class C2Ray_Thesan(C2Ray):
         # calculate total number of ionizing photons
         self.tot_phots = np.sum(normflux * dt * S_star_ref)
 
-        logger.info(
-            """
----- Reading source file with total of %d ionizing source:
-%s
- Total Flux : %e [1/s]
- Total number of ionizing photons : %e
- Source lifetime : %f Myr
- min, max halo (grid) mass : %.3e  %.3e [Msun] and min, mean, max number of ionising sources : %.3e  %.3e  %.3e [1/s]""",
-            normflux.size,
-            file,
-            normflux.sum() * S_star_ref,
-            self.tot_phots,
-            dt / (1e6 * c.year2s),
-            srcmass_msun.min(),
-            srcmass_msun.max(),
-            normflux.min() * S_star_ref,
-            normflux.mean() * S_star_ref,
-            normflux.max() * S_star_ref,
+        self.printlog(
+            "\n---- Reading source file with total of %d ionizing source:\n%s"
+            % (normflux.size, file)
+        )
+        self.printlog(" Total Flux : %e [1/s]" % np.sum(normflux * S_star_ref))
+        self.printlog(" Total number of ionizaing photons : %e" % self.tot_phots)
+        self.printlog(" Source lifetime : %f Myr" % (dt / (1e6 * YEAR)))
+        self.printlog(
+            " min, max halo (grid) mass : %.3e  %.3e [Msun] and min, mean, max number of ionising sources : %.3e  %.3e  %.3e [1/s]"
+            % (
+                srcmass_msun.min(),
+                srcmass_msun.max(),
+                normflux.min() * S_star_ref,
+                normflux.mean() * S_star_ref,
+                normflux.max() * S_star_ref,
+            )
         )
 
         return srcpos, normflux
 
-    def read_haloes(
-        self, halo_file: PathType, box_len: float
-    ) -> tuple[IntArray, FloatArray]:
+    def read_haloes(self, halo_file, box_len):
         """Read haloes from a file.
 
         Parameters
         ----------
-        halo_file : Filename to read
-        box_len : Box length in Mpc/h
+        halo_file : str
+            Filename to read
 
         Returns
         -------
-        srcpos_mpc : Positions of the haloes in Mpc.
-        srcmass_msun : Masses of the haloes in Msun.
+        srcpos_mpc : array
+            Positions of the haloes in Mpc.
+        srcmass_msun : array
+            Masses of the haloes in Msun.
         """
 
-        suffix = Path(halo_file).suffix
-        if suffix == ".hdf5":
+        if halo_file.endswith(".hdf5"):
             # Read haloes from a CUBEP3M file format converted in hdf5.
             f = h5py.File(halo_file)
             h = f.attrs["h"]
             srcmass_msun = f["mass"][:] / h  # Msun
             srcpos_mpc = f["pos"][:] / h  # Mpc
             f.close()
-        elif suffix == ".dat":
+        elif halo_file.endswith(".dat"):
             # Read haloes from a CUBEP3M file format.
             hl = t2c.HaloCubeP3MFull(filename=halo_file, box_len=box_len)
-            # FIXME: unknown attribute
-            h = self.h  # type: ignore
+            h = self.h
             srcmass_msun = hl.get(var="m") / h  # Msun
             srcpos_mpc = hl.get(var="pos") / h  # Mpc
-        elif suffix == ".txt":
+        elif halo_file.endswith(".txt"):
             # Read haloes from a PKDGrav converted in txt.
             hl = np.loadtxt(halo_file)
             srcmass_msun = hl[:, 0] / self.cosmology.h  # Msun
@@ -223,15 +212,15 @@ class C2Ray_Thesan(C2Ray):
             srcpos_mpc /= self.cosmology.h  # Mpc
         return srcpos_mpc, srcmass_msun
 
-    def read_density(self, fbase: str, z: float) -> None:
+    def read_density(self, fbase, z=None):
         """Read coarser density field from C2Ray-formatted file
 
         This method is meant for reading density field run with either N-body or hydro-dynamical simulations. The field is then smoothed on a coarse mesh grid.
 
         Parameters
         ----------
-        fbase : the file name (cwithout the path) of the file to open
-        z : redshift
+        fbase : string
+            the file name (cwithout the path) of the file to open
 
         """
         file = self.density_basename + fbase
@@ -240,25 +229,20 @@ class C2Ray_Thesan(C2Ray):
             self.cosmology.critical_density0.cgs.value
             * self.cosmology.Ob0
             * (1.0 + rdr.load_density_field(file))
-            / (self.mean_molecular * c.m_p)
+            / (self.mean_molecular * m_p)
             * (1 + z) ** 3
         )
-        logger.info(
-            """
----- Reading density file:
-  %s
- min, mean and max density : %.3e  %.3e  %.3e [1/cm3]""",
-            file,
-            self.ndens.min(),
-            self.ndens.mean(),
-            self.ndens.max(),
+        self.printlog("\n---- Reading density file:\n  %s" % file)
+        self.printlog(
+            " min, mean and max density : %.3e  %.3e  %.3e [1/cm3]"
+            % (self.ndens.min(), self.ndens.mean(), self.ndens.max())
         )
 
     # =====================================================================================================
     # Below are the overridden initialization routines specific to the f_star case
     # =====================================================================================================
 
-    def _redshift_init(self) -> None:
+    def _redshift_init(self):
         """Initialize time and redshift counter"""
         self.zred_density = np.loadtxt(self.density_basename + "redshift_density.txt")
         self.zred_sources = np.loadtxt(self.sources_basename + "redshift_sources.txt")
@@ -274,11 +258,11 @@ class C2Ray_Thesan(C2Ray):
 
         self.time = self.zred2time(self.zred)
 
-    def _material_init(self) -> None:
+    def _material_init(self):
         """Initialize material properties of the grid"""
         if self.resume:
             # get fields at the resuming redshift
-            self.read_density(
+            self.ndens = self.read_density(
                 fbase="CDM_200Mpc_2048.%05d.den.256.0" % self.resume, z=self.prev_zdens
             )
 
@@ -305,27 +289,30 @@ class C2Ray_Thesan(C2Ray):
                     % (self.results_basename, self.zred)
                 )
 
-            logger.info(
-                """
----- Reading ionized fraction field:
- %s
- min, mean and max density : %.5e  %.5e  %.5e""",
-                fname,
-                self.xh.min(),
-                self.xh.mean(),
-                self.xh.max(),
+            self.printlog("\n---- Reading ionized fraction field:\n %s" % fname)
+            self.printlog(
+                " min, mean and max density : %.5e  %.5e  %.5e"
+                % (self.xh.min(), self.xh.mean(), self.xh.max())
             )
 
             # TODO: implement heating
-            self.temp = np.full(self.shape, self.material_params.temp0, order="F")
+            temp0 = self._ld["Material"]["temp0"]
+            self.temp = temp0 * np.ones(self.shape, order="F")
         else:
-            super()._material_init()
+            xh0 = self._ld["Material"]["xh0"]
+            temp0 = self._ld["Material"]["temp0"]
+            avg_dens = self._ld["Material"]["avg_dens"]
 
-    def _sources_init(self) -> None:
+            self.ndens = avg_dens * np.empty(self.shape, order="F")
+            self.xh = xh0 * np.ones(self.shape, order="F")
+            self.temp = temp0 * np.ones(self.shape, order="F")
+            self.phi_ion = np.zeros(self.shape, order="F")
+
+    def _sources_init(self):
         """Initialize settings to read source files"""
-        logger.info(""" --- You are using the Thesan source model so:
- NO stellar-to-halo relation model.
- NO stellar accretion model.
- NO burstiness model for the star formation history.
- NO escaping fraction model.
- Instead reading fit tables created from Thesan simulations.""")
+        self.printlog(" --- You are using the Thesan source model so:")
+        self.printlog(" NO stallar-to-halo relaction model.")
+        self.printlog(" NO stellar accretion model.")
+        self.printlog(" NO bustiness model for the star formation history.")
+        self.printlog(" NO escaping fraction model.")
+        self.printlog(" Instead reading fit tables created from Thesan simulations.")

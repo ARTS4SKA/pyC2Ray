@@ -14,9 +14,10 @@ description = "Python-wrapped and Accelerated version of C2Ray"
 maintainers = [
   { name = "Patrick Hirling & Michele Bianco" },
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 classifiers = [
   "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -36,9 +37,7 @@ lint = [
   "pre-commit",
   "ruff",
   "clang-format",
-  "mypy",
   "meson",
-  "types-PyYAML",
 ]
 test = [
   "pytest",
@@ -51,6 +50,3 @@ testpaths = "tests"
 
 [tool.meson-python.args]
 setup = ["-Dbuildtype=release"]
-
-[tool.mypy]
-ignore_missing_imports = true
