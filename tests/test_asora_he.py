@@ -68,6 +68,7 @@ def setup_do_all_sources(
     assert photo_thin_table.shape[0] == num_freq
 
     # Allocate tables to GPU device
+    assert libasora is not None
     libasora.photo_tables_to_device(
         photo_thin_table.ravel(),
         photo_thick_table.ravel(),
@@ -90,6 +91,7 @@ def setup_do_all_sources(
     xHeII = np.full(size, 1e-3, dtype=np.float64)
 
     # Copy density field to GPU device
+    assert libasora is not None
     libasora.density_to_device(ndens)
 
     # Efficiency factor (converting mass to photons)
@@ -102,6 +104,7 @@ def setup_do_all_sources(
     norm_flux *= f_gamma / 1e48
 
     # Copy source list to GPU device
+    assert libasora is not None
     libasora.source_data_to_device(src_pos, norm_flux)
 
     # Size of a cell
