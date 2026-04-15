@@ -34,3 +34,6 @@ msun2g: Final[float] = (1 * u.Msun).cgs.value
 
 # proton mass to grams
 m_p: Final[float] = cst.m_p.cgs.value
+
+# Boltzmann constant in erg/K
+k_B: Final[float] = cst.k_B.cgs.value

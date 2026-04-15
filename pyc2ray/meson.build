@@ -23,6 +23,7 @@ pyc2ray_sources = [
     'solver/__init__.py',
     'solver/chemistry.py',
     'solver/hydrogen.py',
+    'solver/helium.py',
     'tables/multifreq/cross_section_index.py',
     'utils/__init__.py',
     'utils/check_source_formalism.py',

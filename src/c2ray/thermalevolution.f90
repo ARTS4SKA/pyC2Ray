@@ -43,7 +43,7 @@ contains
       ! record the time elapsed
       real(kind=real64) :: cumulative_time
       ! internal energy of the cell
-      real(kind=real64) :: internal_energy
+      real(kind=real64) :: internal_energy, average_energy
       ! thermal timescale, used to calculate the thermal timestep
       real(kind=real64) :: thermal_timescale
       ! heating rate
@@ -52,104 +52,70 @@ contains
       real(kind=real64) :: cooling
       ! difference of heating and cooling rate
       real(kind=real64) :: thermal_rate
-      ! cosmological cooling rate
-      real(kind=real64) :: cosmo_cool_rate
+      ! total rate of energy change
+      real(kind=real64) :: rate
       ! Counter of number of thermal timesteps taken
-      integer :: i_heating
+      integer :: niter
 
-      ! TODO: this is for debug (consider to pass it as a variable)
-      logical(kind=4) :: cosmological = .true.
+      ! Thermal process is only done if the temperature of the cell is larger than the minimum temperature requirement
+      if (end_temper <= minitemp) then
+         avg_temper = end_temper
+         return
+      end if
 
       ! heating rate
       heating = heat
 
       ! Find initial internal energy
       internal_energy = get_energy(end_temper, ndens_atom, ndens_el, gamma)
+      average_energy = internal_energy
 
-      ! TODO: the variable cosmo_cool_rate can
-      ! Set the cosmological cooling rate
-      if (cosmological) then
-         cosmo_cool_rate = cosmo_cool(internal_energy, Hz)
-      else
-         ! Disabled for testing (non-cosmological)
-         cosmo_cool_rate = 0.0_real64
-      end if
+      ! stores the time elapsed is done
+      cumulative_time = 0.0
 
-      ! Thermal process is only done if the temperature of the cell is larger than the minimum temperature requirement
-      if (end_temper > minitemp) then
+      ! initialize the counter
+      niter = 0
 
-         ! stores the time elapsed is done
-         cumulative_time = 0.0
+      ! thermal process loop begins
+      do while (niter < 10000 .and. cumulative_time < dt*(1.0 + 1e-6))
 
-         ! initialize the counter
-         i_heating = 0
+         ! update cooling rate from cooling tables and add adeabatic cooling (cosmological expansion)
+         ! TODO: check that cosmo_cool_rate is not to be updated at each step
+         cooling = cooling_rate(ndens_atom, ndens_el, end_temper) + cosmo_cool(internal_energy, Hz)
+         rate = heating - cooling
 
-         ! initialize time averaged temperature
-         avg_temper = 0.0
+         ! Find total energy change rate
+         thermal_rate = max(1d-50, abs(rate))
 
-         ! initial temperature
-         initial_temp = end_temper
+         ! Calculate time step needed to limit energy change to a fraction relative_denergy
+         dt_thermal = relative_denergy*internal_energy/thermal_rate
 
-         ! thermal process loop begins
-         do
-            ! update counter
-            i_heating = i_heating + 1
+         ! Time step to large, change it to dt_thermal. Make sure we do not integrate for longer than the total time step
+         dt_ODE = min(dt_thermal, dt - cumulative_time)
 
-            ! update cooling rate from cooling tables and add adeabatic cooling (cosmological expansion)
-            cooling = cooling_rate(ndens_atom, ndens_el, end_temper) + cosmo_cool_rate
+         ! Find new internal energy density
+         internal_energy = internal_energy + dt_ODE*rate
 
-            ! Find total energy change rate
-            thermal_rate = max(1d-50, abs(cooling - heating))
+         ! Update avg_temper sum (first part of dt_thermal sub time step)
+         average_energy = average_energy + dt_ODE*dt_ODE*rate/dt
 
-            ! Calculate thermal time scale
-            thermal_timescale = internal_energy/abs(thermal_rate)
-
-            ! Calculate time step needed to limit energy change to a fraction relative_denergy
-            dt_thermal = relative_denergy*thermal_timescale
-
-            ! Time step to large, change it to dt_thermal. Make sure we do not integrate for longer than the total time step
-            dt_ODE = min(dt_thermal, dt - cumulative_time)
-
-            ! Find new internal energy density
-            internal_energy = internal_energy + dt_ODE*(heating - cooling)
-
-            ! Update avg_temper sum (first part of dt_thermal sub time step)
-            avg_temper = avg_temper + 0.5*end_temper*dt_ODE
-
-            ! Find new temperature from the internal energy density
-            end_temper = get_temperature(internal_energy, ndens_atom, ndens_el, gamma)
-
-            ! Take measures if temperature drops below minitemp
-            if (end_temper < minitemp) then
-               internal_energy = get_energy(minitemp, ndens_atom, ndens_el, gamma)
-               end_temper = minitemp
-            end if
-
-            ! Update avg_temper sum (second part of dt_thermal sub time step)
-            avg_temper = avg_temper + 0.5*end_temper*dt_ODE
-
-            ! Update fractional cumulative_time
-            cumulative_time = cumulative_time + dt_ODE
-
-            ! Exit if we reach dt
-            if (cumulative_time >= dt .or. abs(cumulative_time - dt) < 1e-6*dt) exit
-
-            ! In case we spend too much time here, we exit
-            if (i_heating > 10000) exit
-
-         end do
-
-         ! Calculate the averaged temperature
-         if (dt > 0.0) then
-            avg_temper = avg_temper/dt
-         else
-            avg_temper = initial_temp
-         end if
-
-         ! Calculate the final temperature
          end_temper = get_temperature(internal_energy, ndens_atom, ndens_el, gamma)
 
-      end if
+         ! Update fractional cumulative_time
+         cumulative_time = cumulative_time + dt_ODE
+         niter = niter + 1
+
+         ! Take measures if temperature drops below minitemp
+         if (end_temper < minitemp) then
+            internal_energy = get_energy(minitemp, ndens_atom, ndens_el, gamma)
+            end_temper = minitemp
+            exit
+         end if
+
+      end do
+
+      ! Calculate the final temperature
+      avg_temper = get_temperature(average_energy, ndens_atom, ndens_el, gamma)
 
    end subroutine thermal
 
