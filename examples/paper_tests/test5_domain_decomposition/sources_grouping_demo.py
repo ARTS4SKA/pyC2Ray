@@ -1,6 +1,11 @@
+from __future__ import annotations
+
+import importlib
+import math
+from typing import List, Optional
 
 import numpy as np
-import pyc2ray.utils.domain_decomposition_utils as dd_utils
+import pyc2ray.domain.domain_decomposition_utils as dd_utils
 
 def generate_sources(num_cluster_sources: int = 70, cluster_center: np.ndarray = None, cluster_width: float = 0.02,
                      num_sparse_sources: int = 30, source_strength: float = 1.0, r_max_lls: float = 12.0, boxsize: float = 100.0):
@@ -93,19 +98,19 @@ def _box_faces(pmin: np.ndarray, pmax: np.ndarray):
 
 
 def plot_grid_and_sources(
-    grid: VariableResolutionGrid,
+    grid: dd_utils.Grid,
     sources: List[dd_utils.Source],
     groups: Optional[List[dd_utils.Group]] = None,
     plot_sources: bool = True,
     plot_groups: bool = True,
-    plot_bbox: bool = True
+    plot_bbox: bool = True,
 ):
     """
     Visualize grid patches, sources, and optional group envelopes in 3D.
     
     Parameters    
     ----------
-    grid : VariableResolutionGrid
+    grid : Grid
         Grid model with patches to visualize.
     sources : List[Source]
         List of sources to plot as points.
@@ -130,25 +135,21 @@ def plot_grid_and_sources(
     fig = plt.figure(figsize=(9, 7))
     ax = fig.add_subplot(111, projection="3d")
 
-    # Plot grid patches as translucent boxes. Finer dx is drawn more opaque.
-    dx_values = [dx for _, _, dx in grid.patches]
-    dx_min = min(dx_values)
-    dx_max = max(dx_values)
-    denom = max(dx_max - dx_min, 1e-12)
-
-    # Plot grid patechs in order of decreasing resolution (increasing opacity) for better visibility.
-    for pmin, pmax, dx in sorted(grid.patches, key=lambda t: t[2], reverse=True):
-        rel = (dx - dx_min) / denom
-        color = plt.cm.Blues(0.35 + 0.6 * (1.0 - rel))
-
-        faces = _box_faces(pmin, pmax)
-        poly = Poly3DCollection(
-            faces,
-            facecolors=(0.0, 0.0, 0.0, 0.0),
-            edgecolors=(color[0], color[1], color[2], 0.55),
-            linewidths=0.7,
-        )
-        ax.add_collection3d(poly)
+    # Plot the uniform grid as a single translucent box.
+    pmin = np.asarray(grid.get_domain_min(), dtype=float)
+    pmax = np.asarray(grid.get_domain_max(), dtype=float)
+    if pmin.ndim == 0:
+        pmin = np.repeat(pmin, 3)
+    if pmax.ndim == 0:
+        pmax = np.repeat(pmax, 3)
+    faces = _box_faces(pmin, pmax)
+    poly = Poly3DCollection(
+        faces,
+        facecolors=(0.0, 0.0, 0.0, 0.0),
+        edgecolors=(0.15, 0.55, 0.85, 0.55),
+        linewidths=0.7,
+    )
+    ax.add_collection3d(poly)
 
     # Plot sources as points, optionally colored by group membership.
     if plot_sources:
@@ -224,7 +225,12 @@ def plot_grid_and_sources(
             label = "group sphere" if i == 0 else None
             ax.plot_wireframe(xs, ys, zs, rstride=2, cstride=2, color="tab:blue", linewidth=0.45, alpha=0.25, label=label)
 
-    dmin, dmax = grid.domain_min, grid.domain_max
+    dmin = np.asarray(grid.get_domain_min(), dtype=float)
+    dmax = np.asarray(grid.get_domain_max(), dtype=float)
+    if dmin.ndim == 0:
+        dmin = np.repeat(dmin, 3)
+    if dmax.ndim == 0:
+        dmax = np.repeat(dmax, 3)
     ax.set_xlim(dmin[0], dmax[0])
     ax.set_ylim(dmin[1], dmax[1])
     ax.set_zlim(dmin[2], dmax[2])
@@ -315,7 +321,7 @@ def main():
                 f"ncell={g.get_num_cells():7d}, cost={g.cost:10.1f}"
             )
 
-    # plot_grid_and_sources(grid, sources, groups, )
+    plot_grid_and_sources(grid, sources, groups, )
 
 if __name__ == "__main__":
     main()
