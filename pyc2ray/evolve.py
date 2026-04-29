@@ -10,7 +10,7 @@ from .load_extensions import libasora, libc2ray
 from .utils import display_time
 from .utils.logutils import disable_newline
 from .utils.sourceutils import FloatArray, IntArray, format_sources
-from .utils.domain_decomposition_utils import Group, Source, Grid, build_groups, assign_groups_to_ranks, log_domain_decomposition_assignments, evaluate_group
+from .domain.domain_decomposition_utils import Group, Source, Grid, build_groups, assign_groups_to_ranks, log_domain_decomposition_assignments, evaluate_group
 
 __all__ = ["evolve3D"]
 
@@ -198,7 +198,6 @@ def evolve3D(
         # TODO CB: barrier not needed
         MPI.COMM_WORLD.Barrier() # make sure rank 0 has finished building the groups before other ranks try to receive them
         local_groups = MPI.COMM_WORLD.scatter(ranks_groups, root=0)
-        local_cost = MPI.COMM_WORLD.scatter(ranks_costs, root=0)
 
         local_group = None
         if len(local_groups) == 1:
