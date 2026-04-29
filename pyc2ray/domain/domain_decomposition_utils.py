@@ -1,14 +1,82 @@
+from __future__ import annotations
+
 import logging
-from typing import List, Tuple
+from typing import List, Sequence, Tuple
 import numpy as np
 
+from pyc2ray.domain.sources import SourceGroup
+
 logger = logging.getLogger(__name__)
+
+def log_domain_decomposition_assignments_new(
+    ranks_groups: Sequence[SourceGroup | None] | None,
+    ranks_costs: Sequence[float],
+    dr: float = 0.0,
+) -> None:
+    if ranks_groups is None:
+        logger.info("No groups assigned to ranks.")
+        return
+    for rank, group in enumerate(ranks_groups):
+        n_local_sources = group.get_num_sources() if group is not None else 0
+        group_id = group.id if group is not None else -1
+        rank_cost = float(ranks_costs[rank])
+
+        logger.info(
+            "Scatter check | rank=%d group_id=%d num_sources=%d",
+            rank,
+            group_id,
+            n_local_sources,
+        )
+
+        if group is None:
+            continue
+
+        if dr > 0.0:
+            logger.info(
+                (
+                    "Local group index=%d cost=%.3e "
+                    "center=(%.2f, %.2f, %.2f) "
+                    "center in cell units=(%.2f, %.2f, %.2f) "
+                    "radius=%.2f radius in cell units=(%.2f) "
+                    "bounding_box_min=(%d, %d, %d) "
+                    "bounding_box_max=(%d, %d, %d) "
+                    "clipped_bounding_box_min=(%d, %d, %d) "
+                    "clipped_bounding_box_max=(%d, %d, %d)"
+                ),
+                group.id,
+                rank_cost,
+                group.center[0],
+                group.center[1],
+                group.center[2],
+                group.center[0] / dr,
+                group.center[1] / dr,
+                group.center[2] / dr,
+                group.radius,
+                group.radius / dr,
+            )
+        else:
+            logger.info(
+                (
+                    "Local group index=%d cost=%.3e "
+                    "center=(%.2f, %.2f, %.2f) "
+                    "bounding_box_min=(%d, %d, %d) "
+                    "bounding_box_max=(%d, %d, %d) "
+                    "clipped_bounding_box_min=(%d, %d, %d) "
+                    "clipped_bounding_box_max=(%d, %d, %d)"
+                ),
+                group.id,
+                rank_cost,
+                group.center[0],
+                group.center[1],
+                group.center[2],
+            )
+
 
 # TODO CB: consolidate or delete
 def log_domain_decomposition_assignments(
     ranks_groups: List[List[Group]],
     ranks_costs: List[float],
-    dr: float,
+    dr: float = 0.0,
 ) -> None:
     """Log domain decomposition source group data and distribution for all ranks.
 
@@ -27,40 +95,70 @@ def log_domain_decomposition_assignments(
         )
 
         for i, g in enumerate(groups):
-            logger.info(
-                (
-                    "Local group index=%d cost=%.3e "
-                    "center=(%.2f, %.2f, %.2f) "
-                    "center in cell units=(%.2f, %.2f, %.2f) "
-                    "radius=%.2f radius in cell units=(%.2f) "
-                    "bounding_box_min=(%d, %d, %d) "
-                    "bounding_box_max=(%d, %d, %d) "
-                    "clipped_bounding_box_min=(%d, %d, %d) "
-                    "clipped_bounding_box_max=(%d, %d, %d)"
-                ),
-                i,
-                rank_cost,
-                g.center[0],
-                g.center[1],
-                g.center[2],
-                g.center[0] / dr,
-                g.center[1] / dr,
-                g.center[2] / dr,
-                g.radius,
-                g.radius / dr,
-                g.cells[0][0] + 1,
-                g.cells[0][1] + 1,
-                g.cells[0][2] + 1,
-                g.cells[1][0] + 1,
-                g.cells[1][1] + 1,
-                g.cells[1][2] + 1,
-                g.cells[2][0] + 1,
-                g.cells[2][1] + 1,
-                g.cells[2][2] + 1,
-                g.cells[3][0] + 1,
-                g.cells[3][1] + 1,
-                g.cells[3][2] + 1,
-            )
+            if dr > 0.0:
+                logger.info(
+                    (
+                        "Local group index=%d cost=%.3e "
+                        "center=(%.2f, %.2f, %.2f) "
+                        "center in cell units=(%.2f, %.2f, %.2f) "
+                        "radius=%.2f radius in cell units=(%.2f) "
+                        "bounding_box_min=(%d, %d, %d) "
+                        "bounding_box_max=(%d, %d, %d) "
+                        "clipped_bounding_box_min=(%d, %d, %d) "
+                        "clipped_bounding_box_max=(%d, %d, %d)"
+                    ),
+                    i,
+                    rank_cost,
+                    g.center[0],
+                    g.center[1],
+                    g.center[2],
+                    g.center[0] / dr,
+                    g.center[1] / dr,
+                    g.center[2] / dr,
+                    g.radius,
+                    g.radius / dr,
+                    g.cells[0][0] + 1,
+                    g.cells[0][1] + 1,
+                    g.cells[0][2] + 1,
+                    g.cells[1][0] + 1,
+                    g.cells[1][1] + 1,
+                    g.cells[1][2] + 1,
+                    g.cells[2][0] + 1,
+                    g.cells[2][1] + 1,
+                    g.cells[2][2] + 1,
+                    g.cells[3][0] + 1,
+                    g.cells[3][1] + 1,
+                    g.cells[3][2] + 1,
+                )
+            else:
+                logger.info(
+                    (
+                        "Local group index=%d cost=%.3e "
+                        "center=(%.2f, %.2f, %.2f) "
+                        "bounding_box_min=(%d, %d, %d) "
+                        "bounding_box_max=(%d, %d, %d) "
+                        "clipped_bounding_box_min=(%d, %d, %d) "
+                        "clipped_bounding_box_max=(%d, %d, %d)"
+                    ),
+                    i,
+                    rank_cost,
+                    g.center[0],
+                    g.center[1],
+                    g.center[2],
+                    g.cells[0][0] + 1,
+                    g.cells[0][1] + 1,
+                    g.cells[0][2] + 1,
+                    g.cells[1][0] + 1,
+                    g.cells[1][1] + 1,
+                    g.cells[1][2] + 1,
+                    g.cells[2][0] + 1,
+                    g.cells[2][1] + 1,
+                    g.cells[2][2] + 1,
+                    g.cells[3][0] + 1,
+                    g.cells[3][1] + 1,
+                    g.cells[3][2] + 1,
+                )
+
 
     logger.info("Source groups assigned to ranks.")
 
