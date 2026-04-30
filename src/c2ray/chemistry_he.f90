@@ -483,15 +483,15 @@ contains
       A33 = rHeIII_HeII*n_e
 
       ! define coefficients
-      S = sqrt((A33 - A22)**2.0_real64 + 4.0_real64*A32*A23)
+      S = sqrt((A33 - A22)**2.0 + 4.0*A32*A23)
       K = 1.0_real64/(A32*A23 - A33*A22)
       R = 2.0_real64*A32*(A33*uHeI*K - xHeII_old)
       T = -A32*uHeI*K - xHeIII_old
 
       ! Define eigen-value
       lamb1 = A11
-      lamb2 = 0.5_real64*(A33 + A22 - S)
-      lamb3 = 0.5_real64*(A33 + A22 + S)
+      lamb2 = (A33 + A22 - S)/2.0
+      lamb3 = (A33 + A22 + S)/2.0
 
       ! Particular solution vector
       p1 = -(uHI + (A33*A12 - A32*A13)*uHeI*K)/A11

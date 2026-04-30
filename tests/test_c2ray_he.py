@@ -5,7 +5,7 @@ from astropy import units as u
 from astropy.cosmology import Planck18 as cosmo
 from astropy.cosmology import z_at_value
 
-from pyc2ray.load_extensions import libc2ray
+from pyc2ray.load_extensions import libasora_He, libc2ray
 from pyc2ray.solver.helium import thermal
 
 
@@ -15,7 +15,7 @@ def test_load_c2ray() -> None:
     assert hasattr(libc2ray.chemistry_he, "thermal")
 
 
-def test_thermal_evolution_only_cosmic_expansion_python() -> None:
+def test_thermal_evolution_only_cosmic_expansion_python(data_dir) -> None:
     ti = cosmo.age(40).cgs.value
     tf = cosmo.age(2).cgs.value
     times = np.linspace(ti, tf, 200, endpoint=False)
@@ -39,8 +39,11 @@ def test_thermal_evolution_only_cosmic_expansion_python() -> None:
     # TODO: change this tests once we can update H during the evolution.
     assert (np.abs(temps_num - temps_anal) / temps_anal < 0.75).all()
 
+    expected_temps = np.load(data_dir / "thermal_cosmic_evolution.npy")
+    assert np.allclose(temps_num, expected_temps)
 
-def test_thermal_evolution_only_cosmic_expansion_fortran() -> None:
+
+def test_thermal_evolution_only_cosmic_expansion_fortran(data_dir) -> None:
     ti = cosmo.age(40).cgs.value
     tf = cosmo.age(2).cgs.value
     times = np.linspace(ti, tf, 200, endpoint=False)
@@ -65,6 +68,39 @@ def test_thermal_evolution_only_cosmic_expansion_fortran() -> None:
 
     # TODO: change this tests once we can update H during the evolution.
     assert (np.abs(temps_num - temps_anal) / temps_anal < 0.75).all()
+
+    expected_temps = np.load(data_dir / "thermal_cosmic_evolution.npy")
+    assert np.allclose(temps_num, expected_temps)
+
+
+def test_thermal_evolution_only_cosmic_expansion_cuda(data_dir) -> None:
+    ti = cosmo.age(40).cgs.value
+    tf = cosmo.age(2).cgs.value
+    times = np.linspace(ti, tf, 200, endpoint=False)
+    zreds = z_at_value(cosmo.age, times * u.s).value
+
+    T_start = cosmo.Tcmb(zreds[0]).cgs.value
+    T0 = np.array(T_start, dtype=np.float64)
+
+    # Get analytical solution for the temperature evolution
+    temps_anal = T0 * np.pow(times / times[0], -4 / 3)
+
+    # Get numerical solution using the thermal function
+    dts = np.diff(times)
+    temps_num = np.full_like(temps_anal, T0)
+    for i, (zi, dt) in enumerate(zip(zreds[:-1], dts), 1):
+        Hz = cosmo.H(zi).cgs.value
+        # These combinations of parameters disables heating and cooling rates:
+        # the temperature evolution is only due to cosmic expansion
+        assert libasora_He is not None
+        T0, _ = libasora_He.chemistry_thermal(dt, T0, 1.0, 0.0, 0.0, Hz)
+        temps_num[i] = T0
+
+    # TODO: change this tests once we can update H during the evolution.
+    assert (np.abs(temps_num - temps_anal) / temps_anal < 0.75).all()
+
+    expected_temps = np.load(data_dir / "thermal_cosmic_evolution.npy")
+    assert np.allclose(temps_num, expected_temps)
 
 
 @contextmanager

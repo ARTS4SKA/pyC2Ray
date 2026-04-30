@@ -1,5 +1,6 @@
 #include "../asora/memory.h"
 #include "../asora/utils.cuh"
+#include "../asora_he/chemistry.cuh"
 #include "raytracing.cuh"
 
 #include <Python.h>
@@ -234,6 +235,25 @@ PyObject *asora_source_data_to_device([[maybe_unused]] PyObject *self, PyObject 
                : nullptr;
 }
 
+PyObject *asora_chemistry_thermal([[maybe_unused]] PyObject *self, PyObject *args) {
+    double dt;
+    double temp_start;
+    double ndens_elec;
+    double ndens_atom;
+    double heating;
+    double Hz;
+
+    if (!PyArg_ParseTuple(
+            args, "dddddd", &dt, &temp_start, &ndens_elec, &ndens_atom, &heating, &Hz
+        ))
+        return NULL;
+
+    auto &&[temp_end, temp_avg] =
+        asora::thermal(dt, temp_start, ndens_elec, ndens_atom, heating, Hz);
+
+    return Py_BuildValue("dd", temp_end, temp_avg);
+}
+
 #ifdef __cplusplus
 extern "C" {
 #endif  // __cplusplus
@@ -254,6 +274,7 @@ static PyMethodDef asoraMethods[] = {
      "Copy radiation tables to the device"},
     {"source_data_to_device", asora_source_data_to_device, METH_VARARGS,
      "Copy source data to the device"},
+    {"chemistry_thermal", asora_chemistry_thermal, METH_VARARGS, "Solve chemistry ODE"},
     {NULL, NULL, 0, NULL} /* Sentinel */
 };
 
