@@ -1,7 +1,6 @@
 from contextlib import contextmanager
 
 import numpy as np
-import pytest
 from astropy import units as u
 from astropy.cosmology import Planck18 as cosmo
 from astropy.cosmology import z_at_value
@@ -69,77 +68,95 @@ def test_thermal_evolution_only_cosmic_expansion_fortran() -> None:
 
 
 @contextmanager
-def setup_chemistry(mesh_size: int = 10):
+def setup_chemistry(
+    mesh_size: int = 10, ionize_species: tuple[bool, bool, bool] = (True, True, True)
+):
+    assert len(ionize_species) == 3, "ionize_species should be a tuple of 3 booleans"
+
     mesh_shape = (mesh_size,) * 3
     rng = np.random.default_rng(2023)
 
-    # time-step
-    dt = (50 * u.yr).cgs.value
-    dr = (1 * u.Mpc).cgs.value
+    # time-step at z = 10
+    dt = (1 * u.Myr).cgs.value
+    dr = (1 * u.Mpc).cgs.value  # actual value doesn't really matter
     Hz = cosmo.H(10).cgs.value
 
     # density field [g/cm^3]
-    ndens = rng.normal(1e-7, 1e-8, size=mesh_shape).astype(np.float64, order="F")
+    ndens = rng.uniform(5e-8, 5e-7, size=mesh_shape).astype(np.float64, order="F")
 
     # temperature [K]
-    temp = np.full(mesh_shape, 1e4, dtype=np.float64, order="F")
+    temp = rng.normal(1e4, 10, size=mesh_shape).astype(np.float64, order="F")
 
-    def create_triplets(
-        r1: tuple[float, float],
-        r2: tuple[float, float],
-        r3: tuple[float, float],
-        size: tuple[int, int, int] = mesh_shape,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        nonlocal rng
-        a = rng.uniform(*r1, size=size).astype(np.float64, order="F")
-        b = rng.uniform(*r2, size=size).astype(np.float64, order="F")
-        c = rng.uniform(*r3, size=size).astype(np.float64, order="F")
-        return a, b, c
-
-    # Ionization fractions
-    xHIs = create_triplets((0, 1e-1), (0, 1e-1), (0, 1e-1))
-    xHeIs = create_triplets((0, 1e-2), (0, 1e-2), (0, 1e-2))
-    xHeIIs = create_triplets((0, 1e-3), (0, 1e-3), (0, 1e-3))
-
-    # Photo-ionization rates
-    phion = create_triplets((1e-13, 1e-12), (1e-14, 1e-13), (1e-15, 1e-14))
-    pheat = create_triplets((1e-23, 1e-22), (1e-24, 1e-23), (1e-25, 1e-24))
+    # Ionization fractions for x, x_av and x_int
+    xHIIs = tuple(np.zeros_like(ndens) for _ in ionize_species)
+    xHeIIs = tuple(np.zeros_like(ndens) for _ in ionize_species)
+    xHeIIIs = tuple(np.zeros_like(ndens) for _ in ionize_species)
+    phion = tuple(
+        np.full_like(ndens, s * p)
+        for s, p in zip(ionize_species, (1e-14, 1e-15, 1e-16))
+    )
+    # Unused right now
+    pheat = tuple(np.zeros_like(ndens) for _ in ionize_species)
 
     # Clumping factor
-    clump = np.ones(mesh_shape, dtype=np.float64, order="F")
+    clump = np.ones_like(ndens)
 
     yield (
         dt,
         dr,
         Hz,
-        temp,
-        temp,
         ndens,
-        *xHIs,
-        *xHeIs,
+        temp,
+        temp,
+        *xHIIs,
         *xHeIIs,
+        *xHeIIIs,
         *phion,
         *pheat,
         clump,
     )
 
 
-@pytest.mark.skip(reason="still under R&D")
+def test_chemistry_hydrogen_only(data_dir):
+    with setup_chemistry(ionize_species=(True, False, False)) as args:
+        xHII, xHII_av, xHII_int = args[6:9]
+        xHeII, xHeII_av, xHeII_int = args[9:12]
+        xHeIII, xHeIII_av, xHeIII_int = args[12:15]
+
+        for s in range(10):
+            conv = libc2ray.chemistry_he.global_pass(*args)
+            xHII[:] = xHII_int
+            xHeII[:] = xHeII_int
+            xHeIII[:] = xHeIII_int
+            assert np.allclose(xHeII, 0.0)
+            assert np.allclose(xHeII_av, 0.0)
+            assert np.allclose(xHeIII, 0.0)
+            assert np.allclose(xHeIII_av, 0.0)
+
+        assert conv == 0
+
+        expected_xHII = np.load(data_dir / "ionized_fraction_only_hydrogen.npy")
+        assert np.allclose(xHII, expected_xHII)
+
+
 def test_chemistry(data_dir):
     with setup_chemistry() as args:
-        xHI = args[6]
-        xHI_int = args[8]
-        xHeI = args[9]
-        xHeI_int = args[11]
-        xHeII = args[12]
-        xHeII_int = args[14]
+        xHII, xHII_av, xHII_int = args[6:9]
+        xHeII, xHeII_av, xHeII_int = args[9:12]
+        xHeIII, xHeIII_av, xHeIII_int = args[12:15]
 
-        for _ in range(10):
+        for s in range(10):
             conv = libc2ray.chemistry_he.global_pass(*args)
-            xHI[:] = xHI_int
-            xHeI[:] = xHeI_int
+            xHII[:] = xHII_int
             xHeII[:] = xHeII_int
+            xHeIII[:] = xHeIII_int
 
-        # expected_xh = np.load(data_dir / "ionized_fraction_average.npy")
         assert conv == 0
-        # assert np.allclose(xh, expected_xh)
+
+        exp_xh = np.load(data_dir / "ionized_fraction_all_species.npz")
+        assert np.allclose(xHII, exp_xh["xHII"])
+        assert np.allclose(xHeII, exp_xh["xHeII"])
+        assert np.allclose(xHeIII, exp_xh["xHeIII"])
+        assert np.allclose(xHII_av, exp_xh["xHII_av"])
+        assert np.allclose(xHeII_av, exp_xh["xHeII_av"])
+        assert np.allclose(xHeIII_av, exp_xh["xHeIII_av"])

@@ -52,6 +52,6 @@ py.extension_module(
     dependencies: [py_dep, np_dep],
     install: true,
     subdir: 'pyc2ray/lib',
-    fortran_args: '-DUSE_SUBBOX',
+    fortran_args: ['-DUSE_SUBBOX', '-g', '-fbacktrace'],
     override_options: {'warning_level': '0'}
 )
