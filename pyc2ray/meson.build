@@ -40,6 +40,7 @@ pyc2ray_sources = [
     'utils/sourceutils.py',
     'visualization/__init__.py',
     'visualization/common.py',
+    'visualization/domain_decomposition.py',
     'visualization/tomography.py',
 ]
 
