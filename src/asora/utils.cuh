@@ -44,6 +44,9 @@ namespace asora {
         template <std::floating_point F = double>
         constexpr F sqrt2 = F(1.4142135623730951L);
 
+        template <std::floating_point F = double>
+        constexpr F k_B = F(1.380649e-16L);  // Boltzmann constant in erg/K
+
     }  // namespace c
 
     /* @brief Fortran/Python-style modulo operation (always non-negative).
