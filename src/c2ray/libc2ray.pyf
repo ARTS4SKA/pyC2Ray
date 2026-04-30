@@ -250,10 +250,6 @@ python module libc2ray ! in
             real(kind=real64), parameter,optional :: sigma_hei_at_heii=1.690780687052975e-18
             real(kind=real64), parameter,optional :: sigma_hei_at_helya=1.301e-20
             real(kind=real64), parameter,optional :: sigma_heii_at_ion_freq=1.589e-18
-            real(kind=real64), parameter,optional :: p_rec=0.96_real64
-            real(kind=real64), parameter,optional :: l_dec=1.425_real64
-            real(kind=real64), parameter,optional :: m_dec=0.737_real64
-            real(kind=real64), parameter,optional :: f_lya=1.0_real64
             real(kind=real64), parameter,optional :: abu_he=0.074_real64
             real(kind=real64), parameter,optional :: abu_h=0.926_real64
             real(kind=real64), parameter,optional :: abu_c=7.1e-07
