@@ -1,5 +1,20 @@
+import logging
 import numpy as np
 from typing import Tuple
+
+# TODO: this is probably not needed, check what is the strategy already adopted in pyC2Ray
+def get_domain_logger(name: str) -> logging.Logger:
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.INFO)
+
+    if logger.hasHandlers():
+        return logger
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+    logger.addHandler(handler)
+    logger.propagate = False
+    return logger
 
 def find_enclosing_sphere(centers: np.ndarray, radii: np.ndarray, max_iter: int = 200, tol: float = 1e-8) -> Tuple[np.ndarray, float]:
     """Approximate the minimum enclosing sphere of spheres.
