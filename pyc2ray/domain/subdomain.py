@@ -47,19 +47,20 @@ class Subdomain:
     grid : Grid
         Grid object representing the subset of the main grid that belongs 
         to this subdomain.
-    source_group : SourceGroup
-        Group of sources that have influence on this subdomain.
-    local_grid : Grid
-        Local sub-grid corresponding to the region of influence of the source 
-        group of the subdomain.
+    source_groups : List[SourceGroup]
+        List of source groups that have influence on this subdomain.
+    local_grids : List[Grid]
+        List of local sub-grids corresponding to the regions of influence of the source
+        groups of the subdomain.
     """
     
     def __init__(self, comm: MPI.Comm) -> None:
         self.comm = comm
         self.rank = self.comm.Get_rank()
         self.global_grid = None
-        self.source_group = None
-        self.local_grid = None
+        self.source_groups : List[SourceGroup] | None = None
+        self.local_grids : List[Grid] | None = None
+        self.cost = 0.0
 
     def _build_groups(self, global_grid: Grid, sources: List[Source], grouping_algorithm: str = "morton", 
                       grouping_params: GroupingParams = MortonGroupingParams()) -> List[SourceGroup]:
@@ -86,7 +87,7 @@ class Subdomain:
         else:
             raise NotImplementedError(f"Grouping algorithm {grouping_algorithm} not implemented yet.")
 
-    def _assign_groups_to_ranks(self, groups: List[SourceGroup]) -> Tuple[List[SourceGroup | None], List[float]]:
+    def _assign_groups_to_ranks(self, groups: List[SourceGroup]) -> Tuple[List[List[SourceGroup]], List[float]]:
         """
         Groups to ranks assignement according to cost.
 
@@ -98,47 +99,47 @@ class Subdomain:
         Returns
         -------
 
-        Tuple[List[Group], List[float]]
-            A tuple of (rank_groups, rank_costs), where rank_groups is a lists of 
+        Tuple[List[List[SourceGroup]], List[float]]
+            A tuple of (rank_groups, rank_costs), where rank_groups is a list of lists of
             groups assigned to each rank, and rank_costs is the total cost for each rank.
         """
-        rank_groups: List[SourceGroup | None] = [None for _ in range(self.comm.Get_size())]
+        rank_groups: List[List[SourceGroup]] = [[] for _ in range(self.comm.Get_size())]
         rank_costs = [0.0 for _ in range(self.comm.Get_size())]
 
         # TODO: this is a basic assignment. More sophisticated algorithms 
         # should be used for better load balancing.
         for g in sorted(groups, key=lambda x: x.cost, reverse=True):
             r = int(np.argmin(rank_costs))
-            rank_groups[r] = g
-            rank_costs[r] = g.cost
+            rank_groups[r].append(g)
+            rank_costs[r] += g.cost
 
         return rank_groups, rank_costs
 
-    def get_local_grid(self) -> Grid:
-        """ Get the local grid corresponding to group of sources assigned to this rank.
+    def get_local_grid(self) -> List[Grid]:
+        """ Get the local grids corresponding to the groups assigned to this rank.
 
         Returns
         -------
-        Grid
-            The local grid corresponding to the assigned group of sources
+        List[Grid]
+            The local grids corresponding to the assigned groups of sources.
         """
-        if self.local_grid is None:
-            raise ValueError("No source group assigned to rank, cannot get local grid.")
+        if self.local_grids is None:
+            raise ValueError("No source groups assigned to rank, cannot get local grids.")
 
-        return self.local_grid
+        return self.local_grids
 
-    def get_source_group(self) -> SourceGroup:
-        """ Get the group of sources assigned to this rank.
+    def get_source_group(self) -> List[SourceGroup]:
+        """ Get the groups of sources assigned to this rank.
 
         Returns
         -------
-        SourceGroup
-            The group of sources assigned to this rank.
+        List[SourceGroup]
+            The groups of sources assigned to this rank.
         """
-        if self.source_group is None:
-            raise ValueError("No source group assigned to rank, cannot get source group.")
+        if self.source_groups is None:
+            raise ValueError("No source groups assigned to rank, cannot get source groups.")
 
-        return self.source_group
+        return self.source_groups
 
     def run_decomposition(self, global_grid: Grid, sources: List[Source], grouping_algorithm: str = "morton", 
                           grouping_params: GroupingParams = MortonGroupingParams()) -> None:
@@ -163,12 +164,6 @@ class Subdomain:
             groups = self._build_groups(global_grid, sources, grouping_algorithm=grouping_algorithm, 
                                         grouping_params=grouping_params)
 
-            print("Built {} groups with {} grouping.".format(len(groups), grouping_algorithm))
-
-            # TODO: remove this check and implement the correct procedures for zero or multiple groups per rank, which are currently not supported.
-            if len(groups) != self.comm.Get_size():
-                raise NotImplementedError(f"Error: Number of groups ({len(groups)}) is different from the number of ranks ({self.comm.Get_size()}). This is not supported yet.")
-
             # Assign the groups to the ranks
             ranks_groups, ranks_costs = self._assign_groups_to_ranks(groups)
             
@@ -178,13 +173,10 @@ class Subdomain:
             ranks_groups = None
         
         # Scatter the groups to the ranks
-        self.source_group = self.comm.scatter(ranks_groups, root=0)
-
-        # TODO: remove this check and implementend the correct procedures for zero
-        # or multiple groups per rank, which are currently not supported.
-        if self.source_group is None:
-            raise NotImplementedError(f"Error in rank {self.rank}: No group assigned to rank, which is not supported yet.")
+        self.source_groups = self.comm.scatter(ranks_groups, root=0)
 
         # Retrieve the local grid corresponding to the assigned group of sources
-        self.local_grid = self.global_grid.get_local_grid(self.source_group)
-
+        if self.source_groups is not None:
+            self.local_grids = [self.global_grid.get_local_grid(group) for group in self.source_groups]
+        else:
+            self.local_grids = []
