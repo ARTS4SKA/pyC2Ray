@@ -177,3 +177,49 @@ class Subdomain:
             self.local_grids = [self.global_grid.get_local_grid(group) for group in self.source_groups]
         else:
             self.local_grids = []
+
+    def global_to_local_map(self, subgrid_index: int, global_field: np.ndarray, local_field: np.ndarray) -> None:
+        """Map a field defined on the global grid to the corresponding field on the local grid.
+
+        Parameters
+        ----------
+        subgrid_index : int
+            The index of the subgrid to map.
+        global_field : np.ndarray
+            The field defined on the global grid to map.
+        local_field : np.ndarray
+            The field defined on the local grid initialized with the corresponding values from the global grid.
+            This is an I/O parameter.
+        """
+        if self.local_grids is None:
+            raise ValueError("No source groups assigned to rank, cannot perform global to local mapping.")
+
+        if subgrid_index >= len(self.local_grids):
+            raise ValueError(f"Subgrid index {subgrid_index} out of range for local grids assigned to rank.")
+
+        self.local_grids[subgrid_index].global_to_local_map(global_field, local_field)
+
+    def local_to_global_map(self, subgrid_index: int, local_field: np.ndarray, global_field: np.ndarray) -> None:
+        """Map a field defined on the local grid to the corresponding field on the global grid
+        and update the global field by adding the local field values.
+
+        It is assumed that the size of the global grid is the one corresponding to the global_field.
+
+        Parameters
+        ----------
+        subgrid_index : int
+            The index of the subgrid to map.
+        local_field : np.ndarray
+            The field defined on the local grid to map.
+        global_field : np.ndarray
+            The field defined on the global grid to update with the local field values.
+            This is an I/O parameter, which is updated in place with the values of the local field
+            corresponding to the grid elements included in the current grid.
+        """
+        if self.local_grids is None:
+            raise ValueError("No source groups assigned to rank, cannot perform local to global mapping.")
+
+        if subgrid_index >= len(self.local_grids):
+            raise ValueError(f"Subgrid index {subgrid_index} out of range for local grids assigned to rank.")
+
+        self.local_grids[subgrid_index].local_to_global_map(local_field, global_field)
