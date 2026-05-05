@@ -1,6 +1,9 @@
 import logging
 import numpy as np
-from typing import Tuple
+
+from typing import Sequence, Tuple
+
+from pyc2ray.domain.sources import SourceGroup
 
 # TODO: this is probably not needed, check what is the strategy already adopted in pyC2Ray
 def get_domain_logger(name: str) -> logging.Logger:
@@ -71,3 +74,76 @@ def find_enclosing_sphere(centers: np.ndarray, radii: np.ndarray, max_iter: int 
 
     R = np.max(np.linalg.norm(centers - c[None, :], axis=1) + radii)
     return c, float(R)
+
+logger = get_domain_logger(__name__)
+
+def log_domain_decomposition_assignments(
+    ranks_groups: Sequence[Sequence[SourceGroup]] | None,
+    ranks_costs: Sequence[float],
+    dr: float = 0.0,
+) -> None:
+    if ranks_groups is None:
+        logger.info("No groups assigned to ranks.")
+        return
+    for rank, groups in enumerate(ranks_groups):
+        n_local_sources = sum(group.get_num_sources() for group in groups)
+        rank_cost = float(ranks_costs[rank])
+
+        logger.info(
+            "Scatter check | rank=%d groups=%d total num sources=%d",
+            rank,
+            len(groups),
+            n_local_sources,
+        )
+
+        for group in groups:
+            # TODO: refactoring with dr = 0 case.
+            if dr > 0.0:
+                logger.info(
+                    (
+                        "Local group index=%d cost=%.3e num sources=%d "
+                        "center=(%.2f, %.2f, %.2f) "
+                        "center in cell units=(%.2f, %.2f, %.2f) "
+                        "radius=%.2f radius in cell units=(%.2f) "
+                        "bounding_box_min=(%.2f, %.2f, %.2f) "
+                        "bounding_box_max=(%.2f, %.2f, %.2f)"
+                    ),
+                    group.id,
+                    rank_cost,
+                    group.get_num_sources(),
+                    group.center[0],
+                    group.center[1],
+                    group.center[2],
+                    group.center[0] / dr,
+                    group.center[1] / dr,
+                    group.center[2] / dr,
+                    group.radius,
+                    group.radius / dr,
+                    group.bbox_min[0],
+                    group.bbox_min[1],
+                    group.bbox_min[2],
+                    group.bbox_max[0],
+                    group.bbox_max[1],
+                    group.bbox_max[2],
+                )
+            else:
+                logger.info(
+                    (
+                        "Local group index=%d cost=%.3e num sources=%d "
+                        "center=(%.2f, %.2f, %.2f) "
+                        "bounding_box_min=(%.2f, %.2f, %.2f) "
+                        "bounding_box_max=(%.2f, %.2f, %.2f)"
+                    ),
+                    group.id,
+                    rank_cost,
+                    group.get_num_sources(),
+                    group.center[0],
+                    group.center[1],
+                    group.center[2],
+                    group.bbox_min[0],
+                    group.bbox_min[1],
+                    group.bbox_min[2],
+                    group.bbox_max[0],
+                    group.bbox_max[1],
+                    group.bbox_max[2],
+                )

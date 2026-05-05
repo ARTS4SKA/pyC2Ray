@@ -1,76 +1,11 @@
 from __future__ import annotations
 
-import logging
-from typing import List, Sequence, Tuple
+from typing import List, Tuple
 import numpy as np
 
-from pyc2ray.domain.sources import SourceGroup
+from pyc2ray.domain.utils import get_domain_logger
 
-logger = logging.getLogger(__name__)
-
-def log_domain_decomposition_assignments_new(
-    ranks_groups: Sequence[SourceGroup | None] | None,
-    ranks_costs: Sequence[float],
-    dr: float = 0.0,
-) -> None:
-    if ranks_groups is None:
-        logger.info("No groups assigned to ranks.")
-        return
-    for rank, group in enumerate(ranks_groups):
-        n_local_sources = group.get_num_sources() if group is not None else 0
-        group_id = group.id if group is not None else -1
-        rank_cost = float(ranks_costs[rank])
-
-        logger.info(
-            "Scatter check | rank=%d group_id=%d num_sources=%d",
-            rank,
-            group_id,
-            n_local_sources,
-        )
-
-        if group is None:
-            continue
-
-        if dr > 0.0:
-            logger.info(
-                (
-                    "Local group index=%d cost=%.3e "
-                    "center=(%.2f, %.2f, %.2f) "
-                    "center in cell units=(%.2f, %.2f, %.2f) "
-                    "radius=%.2f radius in cell units=(%.2f) "
-                    "bounding_box_min=(%d, %d, %d) "
-                    "bounding_box_max=(%d, %d, %d) "
-                    "clipped_bounding_box_min=(%d, %d, %d) "
-                    "clipped_bounding_box_max=(%d, %d, %d)"
-                ),
-                group.id,
-                rank_cost,
-                group.center[0],
-                group.center[1],
-                group.center[2],
-                group.center[0] / dr,
-                group.center[1] / dr,
-                group.center[2] / dr,
-                group.radius,
-                group.radius / dr,
-            )
-        else:
-            logger.info(
-                (
-                    "Local group index=%d cost=%.3e "
-                    "center=(%.2f, %.2f, %.2f) "
-                    "bounding_box_min=(%d, %d, %d) "
-                    "bounding_box_max=(%d, %d, %d) "
-                    "clipped_bounding_box_min=(%d, %d, %d) "
-                    "clipped_bounding_box_max=(%d, %d, %d)"
-                ),
-                group.id,
-                rank_cost,
-                group.center[0],
-                group.center[1],
-                group.center[2],
-            )
-
+logger = get_domain_logger(__name__)
 
 # TODO CB: consolidate or delete
 def log_domain_decomposition_assignments(

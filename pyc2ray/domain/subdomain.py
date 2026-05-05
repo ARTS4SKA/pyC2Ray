@@ -1,14 +1,11 @@
 from mpi4py import MPI
 import numpy as np
 from typing import List, Tuple
-from pyc2ray.domain.domain_decomposition_utils import log_domain_decomposition_assignments_new
 from pyc2ray.domain.grid import Grid
 from pyc2ray.domain.morton_grouping import MortonSourceGrouping, MortonGroupingParams
 from pyc2ray.domain.source_grouping import GroupingParams
 from pyc2ray.domain.sources import Source, SourceGroup
-from pyc2ray.domain.utils import get_domain_logger
-
-logger = get_domain_logger(__name__)
+from pyc2ray.domain.utils import log_domain_decomposition_assignments
 
 # TODO: split the functionalities of this class between a Subdomain class, 
 # which contains the data of a specific subdomain and implements its functionalities
@@ -168,7 +165,7 @@ class Subdomain:
             ranks_groups, ranks_costs = self._assign_groups_to_ranks(groups)
             
             # Log the assignments for debugging purposes
-            log_domain_decomposition_assignments_new(ranks_groups, ranks_costs)
+            log_domain_decomposition_assignments(ranks_groups, ranks_costs)
         else:
             ranks_groups = None
         
