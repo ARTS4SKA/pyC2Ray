@@ -39,24 +39,26 @@ def main():
 
     # Run the domain decomposition
     subdomain.run_decomposition(global_grid, sources, grouping_algorithm="morton", 
-                                grouping_params = MortonGroupingParams(max_num_sources_per_group=5,
+                                grouping_params = MortonGroupingParams(max_num_sources_per_group=2,
                                                                        max_cost_per_group=1.0,
                                                                        morton_bits=10))
 
     # Collect source groups from all ranks
-    source_groups: list[SourceGroup] | None = subdomain.comm.gather(
+    source_groups_by_rank: list[list[SourceGroup]] | None = subdomain.comm.gather(
         subdomain.get_source_group(), root=0
     )
 
     # Collect local grids from all ranks
-    local_grids: list[RegularGrid] | None = subdomain.comm.gather(
+    local_grids_by_rank: list[list[RegularGrid]] | None = subdomain.comm.gather(
         subdomain.get_local_grid(), root=0
     )
 
     # Plot domain decomposition
     if subdomain.rank == 0:
-        assert source_groups is not None
-        assert local_grids is not None
+        assert source_groups_by_rank is not None
+        assert local_grids_by_rank is not None
+        source_groups = [group for rank_groups in source_groups_by_rank for group in rank_groups]
+        local_grids = [grid for rank_grids in local_grids_by_rank for grid in rank_grids]
         plot_domain_decomposition(global_grid, source_groups, local_grids)
 
 
