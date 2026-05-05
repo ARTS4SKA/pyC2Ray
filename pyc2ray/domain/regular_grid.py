@@ -63,10 +63,17 @@ class RegularGrid(Grid):
             The field defined on the global grid to map.
         local_field : np.ndarray
             The field defined on the local grid initialized with the corresponding values from the global grid. 
-            This is an I/O parameter.
+            This is an I/O parameter whose size is determined by the local grid.
         """
 
         # TODO: add missing shape checks and generalize to vectorial fields
+        target_shape = (self.num_cells, self.num_cells, self.num_cells)
+        if local_field.shape != target_shape:
+            try:
+                local_field.resize(target_shape)
+            except ValueError:
+                raise ValueError("Unable to resize local_field to match local grid shape.")
+
         local_field.fill(0.0)  # Initialize local field to zero
         global_grid_size = global_field.shape[0]  # Assuming cubic grid
 
@@ -78,8 +85,8 @@ class RegularGrid(Grid):
             gj = (np.arange(self.num_cells, dtype=np.int64) + self.offset[1]) % global_grid_size
             gk = (np.arange(self.num_cells, dtype=np.int64) + self.offset[2]) % global_grid_size
 
-            # Copy field data and optimize memory layout
-            local_field = np.ascontiguousarray(global_field[np.ix_(gi, gj, gk)])
+            # Fill caller-provided local_field in place.
+            local_field[:, :, :] = global_field[np.ix_(gi, gj, gk)]
 
         else:
 
@@ -236,3 +243,6 @@ class RegularGrid(Grid):
                 return int(np.prod((max_indexes_clipped - min_indexes_clipped + 1)))
         else:
             return 0
+
+    def get_total_num_cells(self) -> int:
+        return self.num_cells ** 3
