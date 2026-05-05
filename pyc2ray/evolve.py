@@ -5,12 +5,23 @@ import time
 import numpy as np
 from mpi4py import MPI
 
+
 from .asora_core import is_device_init
 from .load_extensions import libasora, libc2ray
 from .utils import display_time
 from .utils.logutils import disable_newline
 from .utils.sourceutils import FloatArray, IntArray, format_sources
-from .domain.domain_decomposition_utils import Group, Source, Grid, build_groups, assign_groups_to_ranks, log_domain_decomposition_assignments, evaluate_group
+from .domain.domain_decomposition_utils import build_groups, assign_groups_to_ranks, log_domain_decomposition_assignments_old, evaluate_group
+from .domain.domain_decomposition_utils import Source as OldSource
+from .domain.domain_decomposition_utils import Group as OldGroup
+from .domain.domain_decomposition_utils import Grid as OldGrid
+
+
+### New implementation
+from .domain.sources import Source
+from .domain.subdomain import Subdomain
+from .domain.morton_grouping import MortonGroupingParams
+from .domain.regular_grid import RegularGrid
 
 __all__ = ["evolve3D"]
 
@@ -172,6 +183,10 @@ def evolve3D(
     is_domain_decomposition_active = use_mpi and use_gpu and activate_domain_decomposition
     if is_domain_decomposition_active:
 
+        assert libasora is not None
+        is_periodic_mode_active = bool(libasora.is_periodic_mode_active())
+        print(f"Rank {rank} is_periodic_mode_active: {is_periodic_mode_active}.", flush=True)
+
         # Only do source grouping on rank 0, then broadcast the result to the other ranks
         ranks_groups = None
         ranks_costs = 0.0
@@ -180,15 +195,15 @@ def evolve3D(
             logger.info(f"Running on {nprocs} MPI ranks, doing source grouping and domain decomposition...")
             # TODO CB: check radius value, I'm currently reducing it for testing purposes.
             source_groups = build_groups(
-                sources=[Source(i, pos=(np.array(src_pos[:, i], dtype=float) - 0.5) * dr,
+                sources=[OldSource(gid = i, pos=(np.array(src_pos[:, i], dtype=float) - 0.5) * dr,
                                 strength=src_flux[i], radius=R_max_LLS*dr) for i in range(NumSrc)],
-                grid=Grid(num_cells=N, dx=dr),
+                grid=OldGrid(num_cells=N, dx=dr),
                 nsrc_max = 1)
             logger.info(f"Created {len(source_groups)} source groups for domain decomposition.")
             ranks_groups, ranks_costs = assign_groups_to_ranks(source_groups, nranks=nprocs)
 
             # Rank-0 inspection of assignment results before scatter.
-            log_domain_decomposition_assignments(
+            log_domain_decomposition_assignments_old(
                 ranks_groups=ranks_groups,
                 ranks_costs=ranks_costs,
                 dr=dr,
@@ -209,12 +224,21 @@ def evolve3D(
             logger.error(f"Rank {rank} did not receive any group, which is not currently supported.")
             raise NotImplementedError("No group assigned to rank, which is not supported yet.")
 
+        ### New implementation
+        global_grid = RegularGrid(cell_size=dr, num_cells=N, is_periodic_mode_active=is_periodic_mode_active)
+        subdomain = Subdomain(MPI.COMM_WORLD)
+        sources=[Source(id = i, pos=(np.array(src_pos[:, i], dtype=float) - 0.5) * dr,
+                        strength=src_flux[i], radius=R_max_LLS*dr) for i in range(NumSrc)]
+        subdomain.run_decomposition(global_grid, sources, grouping_algorithm="morton",
+                                    grouping_params = MortonGroupingParams(max_num_sources_per_group=2,
+                                                                           max_cost_per_group=1.0,
+                                                                           morton_bits=10))
+
+
     # When using GPU raytracing, data has to be reshaped & reformatted and copied to the device
     if use_gpu:
         # Format input data for the CUDA extension module (flat arrays, C-types,etc)
-        assert libasora is not None
-        is_periodic_mode_active = bool(libasora.is_periodic_mode_active())
-        print(f"Rank {rank} is_periodic_mode_active: {is_periodic_mode_active}.", flush=True)
+
         # If domain_decomposition is active we can limit the grid to be copied to the GPU to the one overlapping with the local groups.
         if is_domain_decomposition_active:
             if local_group is not None:
@@ -282,6 +306,23 @@ def evolve3D(
                 # TODO CB: implement missing handling with no local group
                 raise NotImplementedError(f"No group assigned to rank {rank}, which is not supported yet.")
 
+            ### New implementation
+            xh_local_new = np.array([])
+            ndens_local_new = np.array([])
+
+            # TODO: implement loop over subrigds if multiple groups per rank are allowed.
+            # For now we assume one group per rank, so one local grid per rank.
+            subdomain.global_to_local_map(0, xh_local_new, xh)
+            subdomain.global_to_local_map(0, ndens_local_new, ndens)
+
+            xh_av_flat_new = np.ravel(xh_local_new).astype("float64", copy=True)
+            ndens_flat_new = np.ravel(ndens_local_new).astype("float64", copy=True)
+
+
+            if xh_av_flat_new != xh_av_flat:
+                raise ValueError("Error in global to local mapping: xh_av_flat_new does not match xh_av_flat.")
+            if ndens_flat_new != ndens_flat:
+                raise ValueError("Error in global to local mapping: ndens_flat_new does not match ndens_flat.")
         else:
             # Format input data for the CUDA extension module (flat arrays, C-types,etc)
             xh_av_flat = np.ravel(xh).astype("float64", copy=True)
