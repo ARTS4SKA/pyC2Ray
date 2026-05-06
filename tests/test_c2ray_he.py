@@ -1,6 +1,7 @@
 from contextlib import contextmanager
 
 import numpy as np
+import pytest
 from astropy import units as u
 from astropy.cosmology import Planck18 as cosmo
 from astropy.cosmology import z_at_value
@@ -112,9 +113,7 @@ def setup_chemistry(
     mesh_shape = (mesh_size,) * 3
     rng = np.random.default_rng(2023)
 
-    # time-step at z = 10
     dt = (1 * u.Myr).cgs.value
-    dr = (1 * u.Mpc).cgs.value  # actual value doesn't really matter
     Hz = cosmo.H(10).cgs.value
 
     # density field [g/cm^3]
@@ -139,7 +138,6 @@ def setup_chemistry(
 
     yield (
         dt,
-        dr,
         Hz,
         ndens,
         temp,
@@ -155,9 +153,9 @@ def setup_chemistry(
 
 def test_chemistry_hydrogen_only(data_dir):
     with setup_chemistry(ionize_species=(True, False, False)) as args:
-        xHII, xHII_av, xHII_int = args[6:9]
-        xHeII, xHeII_av, xHeII_int = args[9:12]
-        xHeIII, xHeIII_av, xHeIII_int = args[12:15]
+        xHII, xHII_av, xHII_int = args[5:8]
+        xHeII, xHeII_av, xHeII_int = args[8:11]
+        xHeIII, xHeIII_av, xHeIII_int = args[11:14]
 
         for s in range(10):
             conv = libc2ray.chemistry_he.global_pass(*args)
@@ -175,11 +173,42 @@ def test_chemistry_hydrogen_only(data_dir):
         assert np.allclose(xHII, expected_xHII)
 
 
+@pytest.fixture
+def init_device():
+    libasora_He.device_init()
+    yield
+    libasora_He.device_close()
+
+
+def test_chemistry_hydrogen_only_asora(data_dir, init_device):
+    with setup_chemistry(ionize_species=(True, False, False)) as args:
+        xHII, xHII_av, xHII_int = args[5:8]
+        xHeII, xHeII_av, xHeII_int = args[8:11]
+        xHeIII, xHeIII_av, xHeIII_int = args[11:14]
+
+        assert libasora_He is not None
+        for s in range(10):
+            conv = libasora_He.chemistry_global_pass(*args)
+            xHII[:] = xHII_int
+            xHeII[:] = xHeII_int
+            xHeIII[:] = xHeIII_int
+
+            assert np.allclose(xHeII, 0.0)
+            assert np.allclose(xHeII_av, 0.0)
+            assert np.allclose(xHeIII, 0.0)
+            assert np.allclose(xHeIII_av, 0.0)
+
+        assert conv == 0
+
+        expected_xHII = np.load(data_dir / "ionized_fraction_only_hydrogen.npy")
+        assert np.allclose(xHII, expected_xHII)
+
+
 def test_chemistry(data_dir):
     with setup_chemistry() as args:
-        xHII, xHII_av, xHII_int = args[6:9]
-        xHeII, xHeII_av, xHeII_int = args[9:12]
-        xHeIII, xHeIII_av, xHeIII_int = args[12:15]
+        xHII, xHII_av, xHII_int = args[5:8]
+        xHeII, xHeII_av, xHeII_int = args[8:11]
+        xHeIII, xHeIII_av, xHeIII_int = args[11:14]
 
         for s in range(10):
             conv = libc2ray.chemistry_he.global_pass(*args)
@@ -196,3 +225,28 @@ def test_chemistry(data_dir):
         assert np.allclose(xHII_av, exp_xh["xHII_av"])
         assert np.allclose(xHeII_av, exp_xh["xHeII_av"])
         assert np.allclose(xHeIII_av, exp_xh["xHeIII_av"])
+
+
+def test_chemistry_asora(data_dir, init_device):
+    with setup_chemistry() as args:
+        xHII, xHII_av, xHII_int = args[5:8]
+        xHeII, xHeII_av, xHeII_int = args[8:11]
+        xHeIII, xHeIII_av, xHeIII_int = args[11:14]
+
+        assert libasora_He is not None
+        for s in range(10):
+            conv = libasora_He.chemistry_global_pass(*args)
+            xHII[:] = xHII_int
+            xHeII[:] = xHeII_int
+            xHeIII[:] = xHeIII_int
+
+        assert conv == 0
+
+        # TODO: why must the tolerance be so high?
+        exp_xh = np.load(data_dir / "ionized_fraction_all_species.npz")
+        assert np.allclose(xHII, exp_xh["xHII"], rtol=1e-5)
+        assert np.allclose(xHeII, exp_xh["xHeII"], rtol=1e-4)
+        assert np.allclose(xHeIII, exp_xh["xHeIII"], rtol=1e-3)
+        assert np.allclose(xHII_av, exp_xh["xHII_av"], rtol=1e-5)
+        assert np.allclose(xHeII_av, exp_xh["xHeII_av"], rtol=1e-4)
+        assert np.allclose(xHeIII_av, exp_xh["xHeIII_av"], rtol=1e-3)

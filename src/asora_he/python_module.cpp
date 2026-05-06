@@ -254,6 +254,91 @@ PyObject *asora_chemistry_thermal([[maybe_unused]] PyObject *self, PyObject *arg
     return Py_BuildValue("dd", temp_end, temp_avg);
 }
 
+PyObject *asora_chemistry_global_pass([[maybe_unused]] PyObject *self, PyObject *args) {
+    double dt;
+    double Hz;
+    PyArrayObject *ndens;
+    PyArrayObject *temp;
+    PyArrayObject *temp_av;
+    PyArrayObject *xHII;
+    PyArrayObject *xHII_av;
+    PyArrayObject *xHII_int;
+    PyArrayObject *xHeII;
+    PyArrayObject *xHeII_av;
+    PyArrayObject *xHeII_int;
+    PyArrayObject *xHeIII;
+    PyArrayObject *xHeIII_av;
+    PyArrayObject *xHeIII_int;
+    PyArrayObject *phion_HI;
+    PyArrayObject *phion_HeI;
+    PyArrayObject *phion_HeII;
+    PyArrayObject *pheat_HI;
+    PyArrayObject *pheat_HeI;
+    PyArrayObject *pheat_HeII;
+    PyArrayObject *clump;
+    size_t block_size = 512;
+
+    if (!PyArg_ParseTuple(
+            args, "ddOOOOOOOOOOOOOOOOOOO|k", &dt, &Hz, &ndens, &temp, &temp_av, &xHII,
+            &xHII_av, &xHII_int, &xHeII, &xHeII_av, &xHeII_int, &xHeIII, &xHeIII_av,
+            &xHeIII_int, &phion_HI, &phion_HeI, &phion_HeII, &pheat_HI, &pheat_HeI,
+            &pheat_HeII, &clump, &block_size
+        ))
+        return nullptr;
+
+    // Type checking
+    if (!numpy_check<double>(ndens) || !numpy_check<double>(temp) ||
+        !numpy_check<double>(clump) || !numpy_check<double>(xHII) ||
+        !numpy_check<double>(xHII_av) || !numpy_check<double>(xHII_int) ||
+        !numpy_check<double>(xHeII) || !numpy_check<double>(xHeII_av) ||
+        !numpy_check<double>(xHeII_int) || !numpy_check<double>(xHeIII) ||
+        !numpy_check<double>(xHeIII_av) || !numpy_check<double>(xHeIII_int) ||
+        !numpy_check<double>(phion_HI) || !numpy_check<double>(phion_HeI) ||
+        !numpy_check<double>(phion_HeII) || !numpy_check<double>(pheat_HI) ||
+        !numpy_check<double>(pheat_HeI) || !numpy_check<double>(pheat_HeII))
+        return nullptr;
+
+    // Get Array data
+    auto temp_data = static_cast<double *>(PyArray_DATA(temp));
+    auto ndens_data = static_cast<double *>(PyArray_DATA(ndens));
+
+    auto xHII_data = static_cast<double *>(PyArray_DATA(xHII));
+    auto xHII_av_data = static_cast<double *>(PyArray_DATA(xHII_av));
+    auto xHII_int_data = static_cast<double *>(PyArray_DATA(xHII_int));
+    auto xHeII_data = static_cast<double *>(PyArray_DATA(xHeII));
+    auto xHeII_av_data = static_cast<double *>(PyArray_DATA(xHeII_av));
+    auto xHeII_int_data = static_cast<double *>(PyArray_DATA(xHeII_int));
+    auto xHeIII_data = static_cast<double *>(PyArray_DATA(xHeIII));
+    auto xHeIII_av_data = static_cast<double *>(PyArray_DATA(xHeIII_av));
+    auto xHeIII_int_data = static_cast<double *>(PyArray_DATA(xHeIII_int));
+
+    auto phion_HI_data = static_cast<double *>(PyArray_DATA(phion_HI));
+    auto phion_HeI_data = static_cast<double *>(PyArray_DATA(phion_HeI));
+    auto phion_HeII_data = static_cast<double *>(PyArray_DATA(phion_HeII));
+    auto pheat_HI_data = static_cast<double *>(PyArray_DATA(pheat_HI));
+    auto pheat_HeI_data = static_cast<double *>(PyArray_DATA(pheat_HeI));
+    auto pheat_HeII_data = static_cast<double *>(PyArray_DATA(pheat_HeII));
+
+    auto clump_data = static_cast<double *>(PyArray_DATA(clump));
+    auto n_cells = static_cast<size_t>(PyArray_SIZE(temp));
+
+    try {
+        auto conv_flag = asora::global_pass(
+            dt, Hz, temp_data, ndens_data, {xHII_data, xHeII_data, xHeIII_data},
+            {xHII_av_data, xHeII_av_data, xHeIII_av_data},
+            {xHII_int_data, xHeII_int_data, xHeIII_int_data},
+            {phion_HI_data, phion_HeI_data, phion_HeII_data},
+            {pheat_HI_data, pheat_HeI_data, pheat_HeII_data}, clump_data, {}, n_cells,
+            block_size
+        );
+        return Py_BuildValue("k", conv_flag);
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return nullptr;
+    }
+    return Py_None;
+}
+
 #ifdef __cplusplus
 extern "C" {
 #endif  // __cplusplus
@@ -275,6 +360,8 @@ static PyMethodDef asoraMethods[] = {
     {"source_data_to_device", asora_source_data_to_device, METH_VARARGS,
      "Copy source data to the device"},
     {"chemistry_thermal", asora_chemistry_thermal, METH_VARARGS, "Solve chemistry ODE"},
+    {"chemistry_global_pass", asora_chemistry_global_pass, METH_VARARGS,
+     "Solve chemistry ODE"},
     {NULL, NULL, 0, NULL} /* Sentinel */
 };
 

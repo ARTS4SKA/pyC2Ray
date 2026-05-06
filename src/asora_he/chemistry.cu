@@ -101,27 +101,43 @@ namespace {
     constexpr double minimum_fractional_change = 1.0e-3;
     constexpr double minimum_fraction_of_atoms = 1.0e-8;
 
-    __device__ double recombination_rate(
-        double temp, const cuda::std::array<double, 5>& fit_p
-    ) {
-        // from c1 * pow(c2 / temp, c3) / pow(1.0 + pow(c4 / temp, c5), c6)
-        // with the following conversion:
-        // a = c1 * pow(c2, c3)
-        // b = -c3 + c5 * c6
-        // c = c5
-        // d = pow(c4, c5)
-        // e = c6
-        auto&& [a, b, c, d, e] = fit_p;
-        return a * std::pow(temp, b) / std::pow(std::pow(temp, c) + d, e);
+    // Compute recombination rates for HII, HeII, and HeIII based on their ionization
+    // temperatures.
+    __device__ double2
+    recombination_rates(double temp, double temp0, double aA, double aB) {
+        auto lambda = 2.0 * temp0 / temp;
+        aA *= std::pow(lambda, 1.503) /
+              std::pow(1.0 + std::pow(lambda / 0.522, 0.470), 1.923);
+        aB *= std::pow(lambda, 1.500) /
+              std::pow(1.0 + std::pow(lambda / 2.740, 0.407), 2.242);
+        return {aA, aB};
     }
 
-    __device__ double3
-    compose_solution(const double3& weights, const double2& x2, const double2& x3) {
-        return {
-            weights.x + x2.x * weights.y + x3.x * weights.z,  // HII
-            x2.y * weights.y + x3.y * weights.z,              // HeI
-            weights.y + weights.z                             // HeII
-        };
+    // Create the solution for the chemistry equations: the same structure is used for
+    // both the analytical solution and the time-averaged solution, just with different
+    // weights.
+    __device__ double3 compose_solution(
+        const double3& psol, const double3& weights, const double3& x1,
+        const double3& x2, const double3& x3
+    ) {
+        constexpr double res_tol = 1e-20;
+        auto xHII = psol.x + x1.x * weights.x + x2.x * weights.y + x3.x * weights.z;
+        auto xHeII = psol.y + x1.y * weights.x + x2.y * weights.y + x3.y * weights.z;
+        auto xHeIII = psol.z + x1.z * weights.x + x2.z * weights.y + x3.z * weights.z;
+        auto xHeI = 1.0 - xHeII - xHeIII;
+
+        // Add minimum tolerance to avoid too small components and renormalize helium
+        // part.
+        xHII = max(xHII, res_tol);
+        xHeII = max(xHeII, res_tol);
+        xHeIII = max(xHeIII, res_tol);
+
+        if (auto he_norm = xHeI + xHeII + xHeIII; he_norm > 1.0) {
+            xHeII /= he_norm;
+            xHeIII /= he_norm;
+        }
+
+        return {xHII, xHeII, xHeIII};
     }
 
     __device__ bool check_convergence_local(
@@ -143,34 +159,36 @@ namespace {
         return cond1 && cond2 && cond3;
     }
 
+    // Create the first row of the matrix A in the chemistry equations.
     __device__ double3 make_row1(
         const double2& alpha_HeII, const double2& alpha_HII, const double2& alpha_HeIII,
         double beta_HeIII, double nu, double n_e, double yy, double y2a, double y2b,
-        double zz, const double3& phi, const parameters& p
+        double zz, const double3& phi, const parameters& p, double f_lya
     ) {
         auto rHII_HI = -alpha_HII.y;
-        auto rHeII_HI = p.p_rec * alpha_HeII.x + yy * (alpha_HeIII.x - alpha_HeIII.y);
+        auto rHeII_HI = yy * (alpha_HeII.x - alpha_HeII.y) + p.p_rec * alpha_HeII.y;
         auto rHeIII_HI =
             (1 - y2a - y2b) * (alpha_HeIII.x - alpha_HeIII.y) + beta_HeIII +
-            (nu * (p.l_dec - p.m_dec + p.m_dec * yy) + (1 - nu) * p.f_lya * zz) *
+            (nu * (p.l_dec - p.m_dec + p.m_dec * yy) + (1 - nu) * f_lya * zz) *
                 alpha_HeIII.y;
-        auto mul = (p.abu_he / p.abu_h) * n_e;
+        auto frac = (p.abu_he / p.abu_h) * n_e;
         return {
-            -phi.x + rHII_HI,  // A11
-            mul * rHeII_HI,    // A12
-            mul * rHeIII_HI    // A13
+            -phi.x + rHII_HI * n_e,  // A11
+            frac * rHeII_HI,         // A12
+            frac * rHeIII_HI         // A13
         };
     }
 
+    // Create the second row of the matrix A in the chemistry equations.
     __device__ double3 make_row2(
-        const double2& alpha_HeII, const double2& alpha_HeIII, const double2& alpha_HII,
-        double nu, double n_e, double yy, double y2a, double y2b, double zz,
-        const double3& phi, const parameters& p
+        const double2& alpha_HeII, const double2& alpha_HeIII, double nu, double n_e,
+        double yy, double y2a, double y2b, double zz, const double3& phi,
+        const parameters& p, double f_lya
     ) {
-        auto rHeII_HeI = (1 - yy) * (alpha_HII.x - alpha_HII.y) - alpha_HeII.x;
+        auto rHeII_HeI = (1 - yy) * (alpha_HeII.x - alpha_HeII.y) - alpha_HeII.x;
         auto rHeIII_HeI =
             (y2b - y2a) * (alpha_HeIII.x - alpha_HeIII.y) +
-            (nu * p.m_dec * (1 - yy) + p.f_lya * (1 - nu) * (1 - zz)) * alpha_HeIII.y +
+            (nu * p.m_dec * (1 - yy) + f_lya * (1 - nu) * (1 - zz)) * alpha_HeIII.y +
             alpha_HeIII.x;
         return {
             0.0,                               // A21
@@ -179,6 +197,7 @@ namespace {
         };
     }
 
+    // Create the third row of the matrix A in the chemistry equations.
     __device__ double3
     make_row3(const double2& alpha_HeIII, double n_e, double y2a, const double3& phi) {
         auto rHeIII_HeII = y2a * (alpha_HeIII.x - alpha_HeIII.y) - alpha_HeIII.x;
@@ -194,22 +213,22 @@ namespace {
     ) {
         // Optical depths normalized by dr
         auto tau_H_at_HeI = ndens.x * p.sigma_H_at_HeI;
-        auto tau_HeI_at_ion_freq = ndens.y * p.sigma_HeI_at_ion_freq;
+        auto tau_HeI_at_HeI = ndens.y * p.sigma_HeI_at_HeI;
 
         auto tau_H_at_HeLya = ndens.x * p.sigma_H_at_HeLya;
         auto tau_He_at_HeLya = ndens.y * p.sigma_HeI_at_HeLya;
 
         auto tau_H_at_HeII = ndens.x * p.sigma_H_at_HeII;
         auto tau_HeI_at_HeII = ndens.y * p.sigma_HeI_at_HeII;
-        auto tau_HeII_at_ion_freq = ndens.z * p.sigma_HeII_at_ion_freq;
+        auto tau_HeII_at_HeII = ndens.z * p.sigma_HeII_at_HeII;
 
         return {
-            tau_H_at_HeI / (tau_H_at_HeI + tau_HeI_at_ion_freq),  // yy
+            tau_H_at_HeI / (tau_H_at_HeI + tau_HeI_at_HeI),       // yy
             tau_H_at_HeLya / (tau_H_at_HeLya + tau_He_at_HeLya),  // zz
-            tau_HeII_at_ion_freq /
-                (tau_H_at_HeII + tau_HeI_at_HeII + tau_HeII_at_ion_freq),  // y2a
+            tau_HeII_at_HeII /
+                (tau_H_at_HeII + tau_HeI_at_HeII + tau_HeII_at_HeII),  // y2a
             tau_HeI_at_HeII /
-                (tau_H_at_HeII + tau_HeI_at_HeII + tau_HeII_at_ion_freq)  // y2b
+                (tau_H_at_HeII + tau_HeI_at_HeII + tau_HeII_at_HeII)  // y2b
         };
     }
 
@@ -224,98 +243,92 @@ namespace asora {
      * z -> HeII
      */
 
+    // Numerically stable version of (exp(lambda) - 1) / lambda
+    __device__ double expm1x(double lambda) {
+        constexpr double exp_tol = 1e-50;
+        if (abs(lambda) < exp_tol) return 1.0 + lambda / 2.0;
+        return std::expm1(lambda) / lambda;
+    }
+
     __device__ cuda::std::array<double3, 2> friedrich(
-        double dt, [[maybe_unused]] double dr, double temp, double n_e,
-        const double3& xh, const double3& phion, [[maybe_unused]] const double3& pheat,
-        const double3& ndens, [[maybe_unused]] double clumping, const parameters& p
+        double dt, double temp, double n_e, const double3& xh, const double3& phion,
+        [[maybe_unused]] const double3& pheat, const double3& ndens,
+        [[maybe_unused]] double clumping, const parameters& p
     ) {
+        constexpr double ev2K = 1.0 / 8.617e-05;
+        constexpr double etHI = 13.598;    // eV
+        constexpr double etHeI = 24.587;   // eV
+        constexpr double etHeII = 54.416;  // eV
+        constexpr double tempHI = etHI * ev2K;
+        constexpr double tempHeI = etHeI * ev2K;
+        constexpr double tempHeII = etHeII * ev2K;
+
         // Recombination rate of HII (Eq. 2.12 and 2.13)
-        // NOTE: 1.5 vs 1.503 and 0.47 vs 0.407 are suspicious, but they match the paper
-        double2 alpha_HII = {
-            // alphaA {1.269e-13, 315608.0, 1.503, 604613.0, 0.470, 1.923}
-            recombination_rate(temp, {2.33712e-05, -0.599190, 0.470, 521.548, 1.923}),
-            // alphaB {2.753e-14, 315608.0, 1.500, 115185.0, 0.407, 2.242}
-            recombination_rate(temp, {4.88122e-06, -0.587506, 0.407, 114.812, 2.242})
-        };
+        auto alpha_HII = recombination_rates(temp, tempHI, 1.269e-13, 2.753e-14);
 
         // Recombination rate of HeII (Eq. 2.14-17)
-        double2 alpha_HeII;
-        // double alphaB_HeII;
-        if (temp < 9.0e3) {
+        double2 alpha_HeII = alpha_HII;
+        if (temp >= 9.0e3) {
+            auto dielec = 1.9e-3 * std::pow(temp, -1.5) * std::exp(-4.7e5 / temp) *
+                          (1.0 + 0.3 * std::exp(-9.4e4 / temp));
+            auto lambda = 2.0 * tempHeI / temp;
             alpha_HeII = {
-                // alphaA {1.269e-13, 570662.0, 1.503, 1093222.0, 0.470, 1.923}
-                recombination_rate(
-                    temp, {5.69245e-05, -0.599190, 0.470, 688.958, 1.923}
-                ),
-                // alphaB temp, {2.753e-14, 570662.0, 1.500, 208271.0, 0.407, 2.242}
-                /* this element is unused, but it would be:
-                recombination_rate(temp, {1.18679e-05, -0.587506, 0.407,
-                146.111, 2.242})
-                */
-                0.0
-            };
-        } else {
-            auto alpha = 1.9e-3 * std::pow(temp, -1.5) * std::exp(-4.7e5 / temp) *
-                         (1.0 + 0.3 * std::exp(-9.4e4 / temp));
-            alpha_HeII = {
-                3.0e-14 * std::pow(570662.0 / temp, 0.654) + alpha,
-                /* this element is unused, but it would be:
-                1.26e-14 * std::pow(570662.0 / temp, 0.75) + alpha
-                */
-                0.0
+                3.000e-14 * std::pow(lambda, 0.654) + dielec,
+                1.260e-14 * std::pow(lambda, 0.750) + dielec
             };
         }
 
         // Recombination rate of HeIII (Eq. 2.18-20) [confirmed by Garrelt (13.10.24)]
-        double2 alpha_HeIII = {
-            // alphaA_HeIII {2.538e-13, 1262990.0, 1.503, 2419521.0, 1.923, 1.923}
-            recombination_rate(temp, {0.000375747, 2.19493, 1.923, 1.88761e+12, 1.923}),
-            // alphaB_HeIII {5.506e-14, 1262990.0, 1.500, 460945.0, 0.407, 2.242}
-            recombination_rate(temp, {7.81513e-05, -0.587506, 0.407, 201.886, 2.242})
-        };
+        auto alpha_HeIII = recombination_rates(temp, tempHeII, 2.538e-13, 5.506e-14);
         auto beta_HeIII = 8.54e-11 * std::pow(temp, -0.6);
 
         // Two photons emission from recombination of HeIII
         auto nu = 0.285 * std::pow(temp / 1.0e4, 0.119);
 
+        // Clip f_lya based on neutral fraction
+        auto f_lya = min(max(10.0 * xh.x, p.f_lya_range.first), p.f_lya_range.second);
+
         // Ratios between optical depths
         auto&& [yy, zz, y2a, y2b] = optical_depth_ratios(ndens, p);
 
         // Collisional ionization (Eq. 2.21-23)
+        constexpr double colHI = 1.3e-8 * 0.83 * 1.0 / (etHI * etHI);
+        constexpr double colHeI = 1.3e-8 * 0.63 * 2.0 / (etHeI * etHeI);
+        constexpr double colHeII = 1.3e-8 * 1.30 * 1.0 / (etHeII * etHeII);
         auto sqrtT = std::sqrt(temp);
         double3 col{
-            5.835e-11 * sqrtT * std::exp(-157804.0 / temp),  // cHI
-            2.710e-11 * sqrtT * std::exp(-285331.0 / temp),  // cHeI
-            5.707e-12 * sqrtT * std::exp(-631495.0 / temp)   // cHeII
+            colHI * sqrtT * std::exp(-tempHI / temp),     // cHI
+            colHeI * sqrtT * std::exp(-tempHeI / temp),   // cHeI
+            colHeII * sqrtT * std::exp(-tempHeII / temp)  // cHeII
         };
 
         // Photo-ionization rates (Eq. 2.27-29)
+        constexpr double phi_tol = 1e-200;
         double3 phi{
-            phion.x + col.x * n_e,  // uHI
-            phion.y + col.y * n_e,  // uHeI
-            phion.z + col.z * n_e   // uHeII
+            max(phion.x + col.x * n_e, phi_tol),  // uHI
+            max(phion.y + col.y * n_e, phi_tol),  // uHeI
+            max(phion.z + col.z * n_e, phi_tol)   // uHeII
         };
 
         // Matrix elements with recombination rates (Eq. 2.30-35)
         auto A1 = make_row1(
             alpha_HeII, alpha_HII, alpha_HeIII, beta_HeIII, nu, n_e, yy, y2a, y2b, zz,
-            phi, p
+            phi, p, f_lya
         );
         auto A2 = make_row2(
-            alpha_HeII, alpha_HeIII, alpha_HII, nu, n_e, yy, y2a, y2b, zz, phi, p
+            alpha_HeII, alpha_HeIII, nu, n_e, yy, y2a, y2b, zz, phi, p, f_lya
         );
         auto A3 = make_row3(alpha_HeIII, n_e, y2a, phi);
 
         // Some useful coefficients
-        auto S = std::sqrt(
-            A3.z * A3.z - 2.0 * A3.z * A2.y + A2.y * A2.y + 4.0 * A3.y * A2.z
-        );
+        auto B = A3.z - A2.y;
+        auto S = std::sqrt(B * B + 4.0 * A3.y * A2.z);
         auto K = 1.0 / (A2.z * A3.y - A3.z * A2.y);
-        auto R = 2.0 * A2.z * (A3.z * phi.y * K - xh.y);
+        auto R = 2.0 * A3.y * (A3.z * phi.y * K - xh.y);
         auto T = -A3.y * phi.y * K - xh.z;
 
         // Eigen-values
-        double3 lambda{A1.x, (A3.z - A2.y - S) / 2.0, (A3.z - A2.y + S) / 2.0};
+        double3 lambda{A1.x, (A3.z + A2.y - S) / 2.0, (A3.z + A2.y + S) / 2.0};
 
         // Particular solution
         double3 psol{
@@ -325,54 +338,51 @@ namespace asora {
         };
 
         // Useful eigen vectors components
-        // double2 x1{1.0, 0.0};
-        double2 x2{
-            (-2.0 * A3.y * A1.z + A1.y * (A3.z - A2.y + S)) /
-                (2.0 * A3.y * (A1.x - lambda.y)),
-            (-A3.z + A2.y - S) / (2.0 * A3.y)
+        double3 x1{1.0, 0.0, 0.0};
+        double3 x2{
+            (-2.0 * A3.y * A1.z + A1.y * (B + S)) / (2.0 * A3.y * (A1.x - lambda.y)),
+            (-A3.z + A2.y - S) / (2.0 * A3.y), 1.0
         };
-
-        double2 x3{
-            (-2.0 * A3.y * A1.z + A1.y * (A3.z - A2.y - S)) /
-                (2.0 * A3.y * (A1.x - lambda.z)),
-            (-A3.z + A2.y + S) / (2.0 * A3.y)
+        double3 x3{
+            (-2.0 * A3.y * A1.z + A1.y * (B - S)) / (2.0 * A3.y * (A1.x - lambda.z)),
+            (-A3.z + A2.y + S) / (2.0 * A3.y), 1.0
         };
 
         // Boundary condition coefficients
+        double2 raast = {R + (B - S) * T, R + (B + S) * T};
         double3 coeff{
-            xh.x - psol.x + T * (x3.x + x2.x) / 2 +
-                (R + (A3.z - A2.y) * T) * (x3.x - x2.x) / (2.0 * S),  // c1
-            (R + (A3.z - A2.y - S) * T) / (2.0 * S),                  // c2
-            -(R + (A3.z - A2.y + S) * T) / (2.0 * S)                  // c3
+            xh.x - psol.x - (raast.x * x2.x - raast.y * x3.x) / (2.0 * S),  // c1
+            raast.x / (2.0 * S),                                            // c2
+            -raast.y / (2.0 * S)                                            // c3
         };
+
+        lambda.x *= dt;
+        lambda.y *= dt;
+        lambda.z *= dt;
 
         // Analytical solution
         double3 ws{
-            coeff.x * std::exp(lambda.x * dt),  // HII
-            coeff.y * std::exp(lambda.y * dt),  // HeI
-            coeff.z * std::exp(lambda.z * dt)   // HeII
+            coeff.x * std::exp(lambda.x),  // HII
+            coeff.y * std::exp(lambda.y),  // HeI
+            coeff.z * std::exp(lambda.z)   // HeII
         };
-        auto res = compose_solution(ws, x2, x3);
+        auto res = compose_solution(psol, ws, x1, x2, x3);
 
         // Time average solution
         double3 ws_av{
-            coeff.x / (lambda.x * dt) * std::expm1(lambda.x * dt),  // HII
-            coeff.y / (lambda.y * dt) * std::expm1(lambda.y * dt),  // HeI
-            coeff.z / (lambda.z * dt) * std::expm1(lambda.z * dt)   // HeII
+            coeff.x * expm1x(lambda.x),  // HII
+            coeff.y * expm1x(lambda.y),  // HeI
+            coeff.z * expm1x(lambda.z)   // HeII
         };
-        auto res_av = compose_solution(ws_av, x2, x3);
+        auto res_av = compose_solution(psol, ws_av, x1, x2, x3);
 
-        return {
-            {{res.x + psol.x, res.y + psol.y, res.z + psol.z},
-             {res_av.x, res_av.y, res_av.z}}
-        };
+        return {res, res_av};
     }
 
     __device__ cuda::std::array<double3, 2> do_chemistry(
-        double dt, double dr, double Hz, double temp_start, double ndens,
-        const double3& xh, double3 xh_av, const double3& phi_ion,
-        const double3& phi_heat, double clump, const parameters& p,
-        size_t max_iterations
+        double dt, double Hz, double temp_start, double ndens, const double3& xh,
+        double3 xh_av, const double3& phi_ion, const double3& phi_heat, double clump,
+        const parameters& p, size_t max_iterations
     ) {
         auto temp_end = temp_start;
         auto heating = phi_heat.x + phi_heat.y + phi_heat.z;
@@ -392,8 +402,7 @@ namespace asora {
                 electron_density(ndens, xh_av, p.abu_h, p.abu_he, p.abu_c);
 
             cuda::std::tie(xh_new, xh_av_new) = friedrich(
-                dt, dr, temp_end, ndens_elec, xh, phi_ion, phi_heat, ndens_species,
-                clump, p
+                dt, temp_end, ndens_elec, xh, phi_ion, phi_heat, ndens_species, clump, p
             );
 
             // Update average solution value
@@ -419,43 +428,137 @@ namespace asora {
 
     // Global pass kernel
     __global__ void evolve0D_gpu(
-        double dt, double dr, double Hz, double* __restrict__ temp,
-        double* __restrict__ ndens, double3ptr xh, double3ptr xh_av, double3ptr xh_int,
-        double3ptr phi_ion, double3ptr phi_heat, const double* __restrict__ clump,
-        bool* conv_flag, parameters p, size_t size
+        double dt, double Hz, double* __restrict__ temp, double* __restrict__ ndens,
+        double3ptr xh, double3ptr xh_av, double3ptr xh_int, double3ptr phi_ion,
+        double3ptr phi_heat, const double* __restrict__ clump, bool* conv_flag,
+        parameters p, size_t size
     ) {
         auto idx = threadIdx.x + blockDim.x * blockIdx.x;
 
         // Thread can process more than one cell.
         while (idx < size) {
             // Get average fraction value as a reference: it will be updated later.
-            auto& xHI_p = xh.x[idx];
-            auto& xHeI_p = xh.y[idx];
-            auto& xHeII_p = xh.z[idx];
-            auto& xHI_av_p = xh_av.x[idx];
-            auto& xHeI_av_p = xh_av.y[idx];
-            auto& xHeII_av_p = xh_av.z[idx];
+            auto& xHII_p = xh.x[idx];
+            auto& xHeII_p = xh.y[idx];
+            auto& xHeIII_p = xh.z[idx];
+            auto& xHII_av_p = xh_av.x[idx];
+            auto& xHeII_av_p = xh_av.y[idx];
+            auto& xHeIII_av_p = xh_av.z[idx];
 
             auto&& [xh_int_new, xh_av_new] = do_chemistry(
-                dt, dr, Hz, temp[idx], ndens[idx], {xHI_p, xHeI_p, xHeII_p},
-                {xHI_av_p, xHeI_av_p, xHeII_av_p},
+                dt, Hz, temp[idx], ndens[idx], {xHII_p, xHeII_p, xHeIII_p},
+                {xHII_av_p, xHeII_av_p, xHeIII_av_p},
                 {phi_ion.x[idx], phi_ion.y[idx], phi_ion.z[idx]},
                 {phi_heat.x[idx], phi_heat.y[idx], phi_heat.z[idx]}, clump[idx], p
             );
 
-            conv_flag[idx] = check_convergence_global(xh_av_new.x, xHI_av_p) &&
-                             check_convergence_global(xh_av_new.y, xHeI_av_p) &&
-                             check_convergence_global(xh_av_new.z, xHeII_av_p);
+            conv_flag[idx] = check_convergence_global(xh_av_new.x, xHII_av_p) &&
+                             check_convergence_global(xh_av_new.y, xHeII_av_p) &&
+                             check_convergence_global(xh_av_new.z, xHeIII_av_p);
 
             xh_int.x[idx] = xh_int_new.x;
             xh_int.y[idx] = xh_int_new.y;
             xh_int.z[idx] = xh_int_new.z;
-            xHI_av_p = xh_av_new.x;
-            xHeI_av_p = xh_av_new.y;
-            xHeII_av_p = xh_av_new.z;
+            xHII_av_p = xh_av_new.x;
+            xHeII_av_p = xh_av_new.y;
+            xHeIII_av_p = xh_av_new.z;
 
             idx += blockDim.x * gridDim.x;
         }
+    }
+
+    device_buffer allocate_and_copy(size_t n_cells, const double* src) {
+        auto buf = device_buffer(n_cells * sizeof(double));
+        buf.copyFromHost(src);
+        return buf;
+    }
+
+    // Host function to call global_pass
+    size_t global_pass(
+        double dt, double Hz, const double* __restrict__ temp,
+        const double* __restrict__ ndens, double3ptr xh, double3ptr xh_av,
+        double3ptr xh_int, const double3ptr& phi_ion, const double3ptr& phi_heat,
+        const double* __restrict__ clump, parameters p, size_t n_cells,
+        size_t block_size
+    ) {
+        // Initialize and copy const data.
+        for (auto&& [tag, data] : {
+                 std::pair{buffer_tag::number_density, ndens},
+                 std::pair{buffer_tag::temperature, temp},
+                 std::pair{buffer_tag::clumping_factor, clump},
+                 std::pair{buffer_tag::fraction_HII, xh_av.cx()},
+                 std::pair{buffer_tag::fraction_HeII, xh_av.cy()},
+                 std::pair{buffer_tag::fraction_HeIII, xh_av.cz()},
+                 std::pair{buffer_tag::photo_ionization_HI, phi_ion.cx()},
+                 std::pair{buffer_tag::photo_ionization_HeI, phi_ion.cy()},
+                 std::pair{buffer_tag::photo_ionization_HeII, phi_ion.cz()},
+                 std::pair{buffer_tag::photo_heating_HI, phi_heat.cx()},
+                 std::pair{buffer_tag::photo_heating_HeI, phi_heat.cy()},
+                 std::pair{buffer_tag::photo_heating_HeII, phi_heat.cz()},
+             }) {
+            device::ensure_transfer<double>(tag, data, n_cells);
+        }
+
+        // Initialize and copy non-const data.
+        auto xHII_buf = allocate_and_copy(n_cells, xh.x);
+        auto xHII_int_buf = allocate_and_copy(n_cells, xh_int.x);
+        auto xHeII_buf = allocate_and_copy(n_cells, xh.y);
+        auto xHeII_int_buf = allocate_and_copy(n_cells, xh_int.y);
+        auto xHeIII_buf = allocate_and_copy(n_cells, xh.z);
+        auto xHeIII_int_buf = allocate_and_copy(n_cells, xh_int.z);
+
+        device_buffer conv_flag(n_cells);
+        auto conv_flag_d = conv_flag.view<bool>().data();
+
+        auto temp_d = device::get(buffer_tag::temperature).data<double>();
+        auto ndens_d = device::get(buffer_tag::number_density).data<double>();
+        auto clump_d = device::get(buffer_tag::clumping_factor).data<double>();
+
+        double3ptr xh_d = {
+            xHII_buf.data<double>(), xHeII_buf.data<double>(), xHeIII_buf.data<double>()
+        };
+        double3ptr xh_av_d = {
+            device::get(buffer_tag::fraction_HII).data<double>(),
+            device::get(buffer_tag::fraction_HeII).data<double>(),
+            device::get(buffer_tag::fraction_HeIII).data<double>()
+        };
+        double3ptr xh_int_d = {
+            xHII_int_buf.data<double>(), xHeII_int_buf.data<double>(),
+            xHeIII_int_buf.data<double>()
+        };
+        double3ptr phi_ion_d = {
+            device::get(buffer_tag::photo_ionization_HI).data<double>(),
+            device::get(buffer_tag::photo_ionization_HeI).data<double>(),
+            device::get(buffer_tag::photo_ionization_HeII).data<double>()
+        };
+        double3ptr phi_heat_d = {
+            device::get(buffer_tag::photo_heating_HI).data<double>(),
+            device::get(buffer_tag::photo_heating_HeI).data<double>(),
+            device::get(buffer_tag::photo_heating_HeII).data<double>()
+        };
+
+        // Launch kernel, divide by 2 so that threads do more work.
+        size_t grid_size = std::ceil(static_cast<float>(n_cells) / block_size / 2);
+        evolve0D_gpu<<<grid_size, block_size>>>(
+            dt, Hz, temp_d, ndens_d, xh_d, xh_av_d, xh_int_d, phi_ion_d, phi_heat_d,
+            clump_d, conv_flag_d, p, n_cells
+        );
+
+        // Check for errors.
+        safe_cuda(cudaPeekAtLastError());
+
+        // Reduction kernel to count non-zero elements.
+        auto convergence =
+            thrust::count(thrust::device, conv_flag_d, conv_flag_d + n_cells, true);
+
+        device::get(buffer_tag::fraction_HII).copyToHost(xh_av.x);
+        device::get(buffer_tag::fraction_HeII).copyToHost(xh_av.y);
+        device::get(buffer_tag::fraction_HeIII).copyToHost(xh_av.z);
+        xHII_int_buf.copyToHost(xh_int.x);
+        xHeII_int_buf.copyToHost(xh_int.y);
+        xHeIII_int_buf.copyToHost(xh_int.z);
+
+        return convergence;
     }
 
 }  // namespace asora
