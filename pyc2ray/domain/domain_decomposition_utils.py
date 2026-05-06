@@ -8,7 +8,7 @@ from pyc2ray.domain.utils import get_domain_logger
 logger = get_domain_logger(__name__)
 
 # TODO CB: consolidate or delete
-def log_domain_decomposition_assignments(
+def log_domain_decomposition_assignments_log(
     ranks_groups: List[List[Group]],
     ranks_costs: List[float],
     dr: float = 0.0,
