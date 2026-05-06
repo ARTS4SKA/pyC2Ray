@@ -149,5 +149,9 @@ class MortonSourceGrouping(SourceGrouping):
         if current_group:
             source_groups.append(self._evaluate_group(current_group, grid))
 
+        # Update group IDs
+        for i, g in enumerate(source_groups):
+            g.id = i
+
         return source_groups
 
