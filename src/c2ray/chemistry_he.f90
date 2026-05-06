@@ -43,7 +43,7 @@ contains
    end subroutine thermal
 
    ! TODO: pass the column density to global
-   subroutine global_pass(dt, dr, Hz, ndens, temp, temp_av, &
+   subroutine global_pass(dt, Hz, ndens, temp, temp_av, &
                           xHII, xHII_av, xHII_intermed, &
                           xHeII, xHeII_av, xHeII_intermed, &
                           xHeIII, xHeIII_av, xHeIII_intermed, &
@@ -52,7 +52,6 @@ contains
                           clump, conv_flag, m1, m2, m3)
       ! Subroutine Arguments
       real(kind=real64), intent(in) :: dt                         ! time step
-      real(kind=real64), intent(in) :: dr                         ! cell physical size (cgs)
       real(kind=real64), intent(in) :: Hz                         ! Hubble function at the corresponding redshift (in cgs)
       real(kind=real64), intent(in) :: temp(m1, m2, m3)             ! Temperature field
       real(kind=real64), intent(in) :: temp_av(m1, m2, m3)             ! time-averaged Temperature field
@@ -89,7 +88,7 @@ contains
          do j = 1, m2
             do i = 1, m1
                pos = (/i, j, k/)
-               call evolve0D_global(dt, dr, Hz, pos, ndens, temp, temp_av, &
+               call evolve0D_global(dt, Hz, pos, ndens, temp, temp_av, &
                                     xHII, xHII_av, xHII_intermed, &
                                     xHeII, xHeII_av, xHeII_intermed, &
                                     xHeIII, xHeIII_av, xHeIII_intermed, &
@@ -102,7 +101,7 @@ contains
 
    end subroutine global_pass
 
-   subroutine evolve0D_global(dt, dr, Hz, pos, ndens, temp, temp_av, &
+   subroutine evolve0D_global(dt, Hz, pos, ndens, temp, temp_av, &
                               xHII, xHII_av, xHII_intermed, &
                               xHeII, xHeII_av, xHeII_intermed, &
                               xHeIII, xHeIII_av, xHeIII_intermed, &
@@ -111,7 +110,6 @@ contains
                               clump, conv_flag, m1, m2, m3)
       ! Subroutine Arguments
       real(kind=real64), intent(in) :: dt                         ! time step
-      real(kind=real64), intent(in) :: dr                         ! cell physical size (cgs)
       real(kind=real64), intent(in) :: Hz                         ! Hubble function at the corresponding redshift (in cgs)
       integer, dimension(3), intent(in) :: pos                      ! cell position
       real(kind=real64), intent(in) :: temp(m1, m2, m3)             ! Temperature field
@@ -174,7 +172,7 @@ contains
       xHeIII_intermed_p = xHeIII_intermed(pos(1), pos(2), pos(3))
       !yh_av_p = 1.0 - xHII_av_p
 
-      call do_chemistry(dt, dr, Hz, ndens_p, temperature_start, &
+      call do_chemistry(dt, Hz, ndens_p, temperature_start, &
                         xHII_p, xHII_av_p, xHII_intermed_p, &
                         xHeII_p, xHeII_av_p, xHeII_intermed_p, &
                         xHeIII_p, xHeIII_av_p, xHeIII_intermed_p, &
@@ -224,7 +222,7 @@ contains
    ! Original: G. Mellema (2005)
    ! This version: P. Hirling (2023)
    ! ===============================================================================================
-   subroutine do_chemistry(dt, dr, Hz, ndens_p, temperature_start, &
+   subroutine do_chemistry(dt, Hz, ndens_p, temperature_start, &
                            xHII_p, xHII_av_p, xHII_intermed_p, &
                            xHeII_p, xHeII_av_p, xHeII_intermed_p, &
                            xHeIII_p, xHeIII_av_p, xHeIII_intermed_p, &
@@ -233,7 +231,6 @@ contains
                            clump_p)
       ! Subroutine Arguments
       real(kind=real64), intent(in) :: dt                    ! time step
-      real(kind=real64), intent(in) :: dr                    ! cell physical size (cgs)
       real(kind=real64), intent(in) :: Hz                    ! Hubble function at the corresponding redshift (in cgs)
       real(kind=real64), intent(in) :: temperature_start    ! Local starting temperature
       real(kind=real64), intent(in) :: ndens_p              ! Local gas number density (cgs)
@@ -285,7 +282,7 @@ contains
 
          ! Calculate the new and mean ionization states
          ! TODO: the intermediate need in the python evolve.py for global convergence. Keep it and bring it back.
-         call friedrich(dt, dr, temperature_previous_iteration, de, &
+         call friedrich(dt, temperature_previous_iteration, de, &
                         xHII_p, xHeII_p, xHeIII_p, &
                         phi_HI_ion_p, phi_HeI_ion_p, phi_HeII_ion_p, &
                         heat_HI_ion_p, heat_HeI_ion_p, heat_HeII_ion_p, &
@@ -346,7 +343,7 @@ contains
    ! Adapted version of Friderich+ (2012) method as an extension to the Altay+ (2008) analytical solution.
    ! I employed Kai Yan Lee PhD thesis as reference. The naming of variables changed a bit compared to Martina's code and istead I adopted the naming system of the equations in Kai's thesis. However, be carefull because Kai Yan Lee's thesis has a mistake in equation (2.61) when compared to Friderich+ (2012) equation (B8). In that case I followed the latter.
    ! ===============================================================================================
-   subroutine friedrich(dt, dr, temp_p, n_e, &
+   subroutine friedrich(dt, temp_p, n_e, &
                         xHII_old, xHeII_old, xHeIII_old, &
                         phi_HI, phi_HeI, phi_HeII, heat_HI, heat_HeI, heat_HeII, &
                         nHI_p, nHeI_p, nHeII_p, clumping, &
@@ -354,7 +351,7 @@ contains
                         xHII_av, xHeII_av, xHeIII_av)
 
       ! Input & output arguments
-      real(kind=real64), intent(in) :: dt, dr                             ! time step and cell size (cgs)
+      real(kind=real64), intent(in) :: dt                                 ! time step and cell size (cgs)
       real(kind=real64), intent(in) :: xHII_old, xHeII_old, xHeIII_old    ! previous ionized fractions
       real(kind=real64), intent(in) :: temp_p, n_e                        ! local temperature and electron number density
       real(kind=real64), intent(in) :: phi_HI, phi_HeI, phi_HeII          ! photo-ionization rates for the three species

@@ -21,13 +21,13 @@ namespace asora {
         // HI cross-section at HeI Lya frequency (h\nu = 40.8 eV)
         double sigma_H_at_HeLya = 9.907e-22;
         // HeI cross section at its ionzing frequency
-        double sigma_HeI_at_ion_freq = 7.430e-18;
+        double sigma_HeI_at_HeI = 7.430e-18;
         // HeI cross-section at HeII ionization threshold
         double sigma_HeI_at_HeII = 1.690780687052975e-18;
         // HeI cross-section at HeI Lya frequency (h\nu = 40.8 eV)
         double sigma_HeI_at_HeLya = 1.301e-20;
         // HeII cross section at its ionzing frequency
-        double sigma_HeII_at_ion_freq = 1.589e-18;
+        double sigma_HeII_at_HeII = 1.589e-18;
 
         // Fraction of photons from recombination of HeII that ionize HeI
         // (p. 32 of Kai Yan Lee's thesis)
@@ -37,8 +37,8 @@ namespace asora {
         // Fraction of photons from 2-photon decay, energetic enough to ionize neutral
         // helium
         double m_dec = 0.737;
-        // Escape fraction of Ly α photons, it depends on the neutral fraction
-        double f_lya = 1.0;
+        // Escape fraction range of Ly α photons, it depends on the neutral fraction
+        std::pair<double, double> f_lya_range = {0.01, 1.0};
 
         // Cosmological abundances
         double abu_he = 0.074;
@@ -79,7 +79,6 @@ namespace asora {
     /* @brief Chemistry solution.
      *
      * @param dt Timestep size
-     * @param dr Cell size (currently unused)
      * @param temp Gas temperature
      * @param n_e Electron number density
      * @param xh Current ionization fractions
@@ -92,15 +91,14 @@ namespace asora {
      * @return {ionization fractions, average ionization fractions}
      */
     __device__ cuda::std::array<double3, 2> friedrich(
-        double dt, [[maybe_unused]] double dr, double temp, double n_e,
-        const double3& xh, const double3& phion, [[maybe_unused]] const double3& pheat,
-        const double3& ndens, [[maybe_unused]] double clumping, const parameters& p = {}
+        double dt, double temp, double n_e, const double3& xh, const double3& phion,
+        [[maybe_unused]] const double3& pheat, const double3& ndens,
+        [[maybe_unused]] double clumping, const parameters& p = {}
     );
 
     /* @brief Chemistry and temperature evolution on a single cell.
      *
      * @param dt Timestep size
-     * @param dr Co-moving dimension of one grid cell
      * @param Hz Hubble parameter
      * @param temp_start Temperature at the beginning of the step
      * @param ndens Hydrogen number density for the cell
@@ -116,10 +114,9 @@ namespace asora {
      */
 
     __device__ cuda::std::array<double3, 2> do_chemistry(
-        double dt, double dr, double Hz, double temp_start, double ndens,
-        const double3& xh, double3 xh_av, const double3& phi_ion,
-        const double3& phi_heat, double clump, const parameters& p = {},
-        size_t max_iterations = 400
+        double dt, double Hz, double temp_start, double ndens, const double3& xh,
+        double3 xh_av, const double3& phi_ion, const double3& phi_heat, double clump,
+        const parameters& p = {}, size_t max_iterations = 400
     );
 
     /* @brief Convenience structure holding 3 component-wise pointers.
@@ -131,12 +128,16 @@ namespace asora {
         double* __restrict__ x;
         double* __restrict__ y;
         double* __restrict__ z;
+
+        /// Const-corrected accessor methods for the component pointers.
+        const double* cx() const { return x; }
+        const double* cy() const { return y; }
+        const double* cz() const { return z; }
     };
 
     /* @brief CUDA kernel: evolve chemistry/thermal state independently per cell.
      *
      * @param dt Timestep size
-     * @param dr Co-moving dimension of one grid cell
      * @param Hz Hubble parameter
      * @param temp Temperature array
      * @param ndens Number density array
@@ -151,10 +152,18 @@ namespace asora {
      * @param size Number of cells
      */
     __global__ void evolve0D_gpu(
-        double dt, double dr, double Hz, double* __restrict__ temp,
-        double* __restrict__ ndens, double3ptr xh, double3ptr xh_av, double3ptr xh_int,
-        double3ptr phi_ion, double3ptr phi_heat, const double* __restrict__ clump,
-        bool* conv_flag, parameters p, size_t size
+        double dt, double Hz, const double* __restrict__ temp,
+        const double* __restrict__ ndens, double3ptr xh, double3ptr xh_av,
+        double3ptr xh_int, double3ptr phi_ion, double3ptr phi_heat,
+        const double* __restrict__ clump, bool* conv_flag, parameters p, size_t size
+    );
+
+    size_t global_pass(
+        double dt, double Hz, const double* __restrict__ temp,
+        const double* __restrict__ ndens, double3ptr xh, double3ptr xh_av,
+        double3ptr xh_int, const double3ptr& phi_ion, const double3ptr& phi_heat,
+        const double* __restrict__ clump, parameters p, size_t n_cells,
+        size_t block_size
     );
 
 }  // namespace asora

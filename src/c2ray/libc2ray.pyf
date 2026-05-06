@@ -263,9 +263,8 @@ python module libc2ray ! in
                 real(kind=real64) intent(in) :: heat
                 real(kind=real64) intent(in) :: hz
             end subroutine thermal
-            subroutine global_pass(dt,dr,hz,ndens,temp,temp_av,xhii,xhii_av,xhii_intermed,xheii,xheii_av,xheii_intermed,xheiii,xheiii_av,xheiii_intermed,phi_hi_ion,phi_hei_ion,phi_heii_ion,heat_hi_ion,heat_hei_ion,heat_heii_ion,clump,conv_flag,m1,m2,m3) ! in :libc2ray:../src/c2ray/chemistry_he.f90:chemistry_he
+            subroutine global_pass(dt,hz,ndens,temp,temp_av,xhii,xhii_av,xhii_intermed,xheii,xheii_av,xheii_intermed,xheiii,xheiii_av,xheiii_intermed,phi_hi_ion,phi_hei_ion,phi_heii_ion,heat_hi_ion,heat_hei_ion,heat_heii_ion,clump,conv_flag,m1,m2,m3) ! in :libc2ray:../src/c2ray/chemistry_he.f90:chemistry_he
                 real(kind=real64) intent(in) :: dt
-                real(kind=real64) intent(in) :: dr
                 real(kind=real64) intent(in) :: hz
                 real(kind=real64) dimension(m1,m2,m3),intent(in) :: ndens
                 real(kind=real64) dimension(m1,m2,m3),intent(in),depend(m2,m3,m1) :: temp
@@ -291,9 +290,8 @@ python module libc2ray ! in
                 integer, optional,intent(in),check(shape(ndens, 1) == m2),depend(ndens) :: m2=shape(ndens, 1)
                 integer, optional,intent(in),check(shape(ndens, 2) == m3),depend(ndens) :: m3=shape(ndens, 2)
             end subroutine global_pass
-            subroutine evolve0d_global(dt,dr,hz,pos,ndens,temp,temp_av,xhii,xhii_av,xhii_intermed,xheii,xheii_av,xheii_intermed,xheiii,xheiii_av,xheiii_intermed,phi_hi_ion,phi_hei_ion,phi_heii_ion,heat_hi_ion,heat_hei_ion,heat_heii_ion,clump,conv_flag,m1,m2,m3) ! in :libc2ray:../src/c2ray/chemistry_he.f90:chemistry_he
+            subroutine evolve0d_global(dt,hz,pos,ndens,temp,temp_av,xhii,xhii_av,xhii_intermed,xheii,xheii_av,xheii_intermed,xheiii,xheiii_av,xheiii_intermed,phi_hi_ion,phi_hei_ion,phi_heii_ion,heat_hi_ion,heat_hei_ion,heat_heii_ion,clump,conv_flag,m1,m2,m3) ! in :libc2ray:../src/c2ray/chemistry_he.f90:chemistry_he
                 real(kind=real64) intent(in) :: dt
-                real(kind=real64) intent(in) :: dr
                 real(kind=real64) intent(in) :: hz
                 integer dimension(3),intent(in) :: pos
                 real(kind=real64) dimension(m1,m2,m3),intent(in) :: ndens
@@ -320,9 +318,8 @@ python module libc2ray ! in
                 integer, optional,intent(in),check(shape(ndens, 1) == m2),depend(ndens) :: m2=shape(ndens, 1)
                 integer, optional,intent(in),check(shape(ndens, 2) == m3),depend(ndens) :: m3=shape(ndens, 2)
             end subroutine evolve0d_global
-            subroutine do_chemistry(dt,dr,hz,ndens_p,temperature_start,xhii_p,xhii_av_p,xhii_intermed_p,xheii_p,xheii_av_p,xheii_intermed_p,xheiii_p,xheiii_av_p,xheiii_intermed_p,phi_hi_ion_p,phi_hei_ion_p,phi_heii_ion_p,heat_hi_ion_p,heat_hei_ion_p,heat_heii_ion_p,clump_p) ! in :libc2ray:../src/c2ray/chemistry_he.f90:chemistry_he
+            subroutine do_chemistry(dt,hz,ndens_p,temperature_start,xhii_p,xhii_av_p,xhii_intermed_p,xheii_p,xheii_av_p,xheii_intermed_p,xheiii_p,xheiii_av_p,xheiii_intermed_p,phi_hi_ion_p,phi_hei_ion_p,phi_heii_ion_p,heat_hi_ion_p,heat_hei_ion_p,heat_heii_ion_p,clump_p) ! in :libc2ray:../src/c2ray/chemistry_he.f90:chemistry_he
                 real(kind=real64) intent(in) :: dt
-                real(kind=real64) intent(in) :: dr
                 real(kind=real64) intent(in) :: hz
                 real(kind=real64) intent(in) :: ndens_p
                 real(kind=real64) intent(in) :: temperature_start
@@ -343,9 +340,8 @@ python module libc2ray ! in
                 real(kind=real64) intent(in) :: heat_heii_ion_p
                 real(kind=real64) intent(in) :: clump_p
             end subroutine do_chemistry
-            subroutine friedrich(dt,dr,temp_p,n_e,xhii_old,xheii_old,xheiii_old,phi_hi,phi_hei,phi_heii,heat_hi,heat_hei,heat_heii,nhi_p,nhei_p,nheii_p,clumping,xhii,xheii,xheiii,xhii_av,xheii_av,xheiii_av) ! in :libc2ray:../src/c2ray/chemistry_he.f90:chemistry_he
+            subroutine friedrich(dt,temp_p,n_e,xhii_old,xheii_old,xheiii_old,phi_hi,phi_hei,phi_heii,heat_hi,heat_hei,heat_heii,nhi_p,nhei_p,nheii_p,clumping,xhii,xheii,xheiii,xhii_av,xheii_av,xheiii_av) ! in :libc2ray:../src/c2ray/chemistry_he.f90:chemistry_he
                 real(kind=real64) intent(in) :: dt
-                real(kind=real64) intent(in) :: dr
                 real(kind=real64) intent(in) :: temp_p
                 real(kind=real64) intent(in) :: n_e
                 real(kind=real64) intent(in) :: xhii_old
