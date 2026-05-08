@@ -244,5 +244,41 @@ class RegularGrid(Grid):
         else:
             return 0
 
-    def get_total_num_cells(self) -> int:
-        return self.num_cells ** 3
+    def global_to_local_index_map(self, global_index: np.ndarray) -> np.ndarray:
+        """Map a global grid index to the corresponding local grid index.
+
+        Parameters
+        ----------
+        global_index : np.ndarray
+            The global grid index to map (shape `(3,)`).
+
+        Returns
+        -------
+        np.ndarray
+            The corresponding local grid index (shape `(3,)`).
+        """
+        local_index = global_index - self.offset
+        print("local offset:", self.offset)
+        print("Input global_index:", global_index)
+        print("Computed local_index from global_index:", local_index)
+        if np.any(local_index < 0) or np.any(local_index >= self.num_cells):
+            raise ValueError("Global index is outside the local grid.")
+        return local_index
+
+    def global_to_local_position_map(self, global_position: np.ndarray) -> np.ndarray:
+        """Map a global position in domain coordinates to the corresponding local subdomain coordinates.
+
+        Parameters
+        ----------
+        global_position : np.ndarray
+            The global position in domain coordinates to map (shape `(3,)`).
+
+        Returns
+        -------
+        np.ndarray
+            The corresponding local grid index (shape `(3,)`).
+        """
+        print("global_to_local_position_map called with global_position:", global_position)
+        global_index = np.floor(global_position / self.cell_size).astype(int)
+        print("Computed global_index from global_position:", global_index)
+        return self.global_to_local_index_map(global_index)
