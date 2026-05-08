@@ -112,7 +112,7 @@ class Subdomain:
 
         return rank_groups, rank_costs
 
-    def get_local_grid(self) -> List[Grid]:
+    def get_local_grids(self) -> List[Grid]:
         """ Get the local grids corresponding to the groups assigned to this rank.
 
         Returns
@@ -124,19 +124,6 @@ class Subdomain:
             raise ValueError("No source groups assigned to rank, cannot get local grids.")
 
         return self.local_grids
-
-    def get_source_group(self) -> List[SourceGroup]:
-        """ Get the groups of sources assigned to this rank.
-
-        Returns
-        -------
-        List[SourceGroup]
-            The groups of sources assigned to this rank.
-        """
-        if self.source_groups is None:
-            raise ValueError("No source groups assigned to rank, cannot get source groups.")
-
-        return self.source_groups
 
     def run_decomposition(self, global_grid: Grid, sources: List[Source], grouping_algorithm: str = "morton", 
                           grouping_params: GroupingParams = MortonGroupingParams()) -> None:
@@ -223,3 +210,61 @@ class Subdomain:
             raise ValueError(f"Subgrid index {subgrid_index} out of range for local grids assigned to rank.")
 
         self.local_grids[subgrid_index].local_to_global_map(local_field, global_field)
+
+    def get_source_group(self, subdomain_index: int) -> SourceGroup:
+        """Get the source group corresponding to the given subdomain index.
+
+        Parameters
+        ----------
+        subdomain_index : int
+            The index of the subdomain for which to get the corresponding source group.
+
+        Returns
+        -------
+        SourceGroup
+            The source group corresponding to the given subdomain index.
+        """
+        if self.source_groups is None:
+            raise ValueError("No source groups assigned to rank, cannot get source group.")
+
+        if subdomain_index >= len(self.source_groups):
+            raise ValueError(f"Subdomain index {subdomain_index} out of range for source groups assigned to rank.")
+
+        return self.source_groups[subdomain_index]
+
+    # TODO: this function implicitly assumes that the local grid is a subset of the global grid, which is the case for regular grids but may not be the case for more general grid types.
+    # We may need to rethink this interface if we want to support more general grid types in the future.
+    def get_local_sources_positions(self, subdomain_index: int) -> np.ndarray:
+        """Get the positions (indexes) of the sources corresponding to the given subdomain index.
+
+        The indexes returned by this functions refers to the local grid.
+
+        Parameters
+        ----------
+        subdomain_index : int
+            The index of the subdomain for which to get the corresponding source positions.
+
+        Returns
+        -------
+        np.ndarray
+            The positions (indexes) of the sources corresponding to the given subdomain index.
+        """
+        source_group = self.get_source_group(subdomain_index)
+        local_grid = self.get_local_grids()[subdomain_index]
+        return np.array([[local_grid.global_to_local_position_map(s.pos)[i] for s in source_group.sources] for i in range(3)])
+
+    def get_local_sources_strengths(self, subdomain_index: int) -> np.ndarray:
+        """Get the strengths of the sources corresponding to the given subdomain index.
+
+        Parameters
+        ----------
+        subdomain_index : int
+            The index of the subdomain for which to get the corresponding source strengths.
+
+        Returns
+        -------
+        np.ndarray
+            The strengths of the sources corresponding to the given subdomain index.
+        """
+        source_group = self.get_source_group(subdomain_index)
+        return np.array([s.strength for s in source_group.sources])
