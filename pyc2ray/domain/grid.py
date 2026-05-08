@@ -77,6 +77,44 @@ class Grid:
         """
         raise NotImplementedError("Call to local_to_global_map abstract method.")
     
+    # TODO: design issue: this function implicitly assumes that the local grid
+    # is a subset of the global grid, which is the case for regular grids but
+    # may not be the case for more general grid types.
+    # We may need to rethink this interface if we want to support more general
+    # grid types in the future.
+    @abstractmethod
+    def global_to_local_index_map(self, global_index: np.ndarray) -> np.ndarray:
+        """Map a global grid index to the corresponding local grid index.
+
+        Parameters
+        ----------
+        global_index : np.ndarray
+            The global grid index to map (shape `(3,)`).
+
+        Returns
+        -------
+        np.ndarray
+            The corresponding local grid index (shape `(3,)`).
+        """
+        raise NotImplementedError("Call to global_to_local_index_map abstract method.")
+
+    @abstractmethod
+    def global_to_local_position_map(self, global_position: np.ndarray) -> np.ndarray:
+        """Map a global position in domain coordinates to the corresponding local subdomain coordinates.
+
+        Parameters
+        ----------
+        global_position : np.ndarray
+            The global position in domain coordinates to map (shape `(3,)`).
+
+        Returns
+        -------
+        np.ndarray
+            The corresponding local grid index (shape `(3,)`).
+        """
+        raise NotImplementedError("Call to global_to_local_index_map abstract method.")
+
+
     @abstractmethod
     def get_local_grid(self, source_group: SourceGroup) -> Grid:
         """Get the local grid corresponding to the region of influence of the source group of the subdomain.
