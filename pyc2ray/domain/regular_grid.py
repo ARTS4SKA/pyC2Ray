@@ -74,9 +74,10 @@ class RegularGrid(Grid):
             except ValueError:
                 raise ValueError("Unable to resize local_field to match local grid shape.")
 
-        local_field.fill(0.0)  # Initialize local field to zero
+        local_field.fill(0.0)  # Default initialize local field before mapping
         global_grid_size = global_field.shape[0]  # Assuming cubic grid
 
+        # TODO: add check, are we touching all the local grid cells in the assignements below?
         if self.is_periodic_mode_active:
 
             # Build periodic index vectors for the full local cube. This handles
@@ -89,6 +90,10 @@ class RegularGrid(Grid):
             local_field[:, :, :] = global_field[np.ix_(gi, gj, gk)]
 
         else:
+            # TODO: this is probably not needed anymore (check raytracing code) and should not be
+            # here anyway, since it cretates a strong coupling between the mapping
+            # and the specific value used to represent "no data" in the external code.
+            local_field.fill(-1.0)
 
             clipped_min = np.maximum(0, self.offset)
             clipped_max = np.minimum(self.offset + self.num_cells - 1, global_grid_size - 1)
@@ -205,10 +210,10 @@ class RegularGrid(Grid):
             # This calculation already accounts for the fact that the box may be partially outside the grid domain
             min_indexes = np.floor(source_group.bbox_min / self.cell_size).astype(int)
             max_indexes = np.ceil(source_group.bbox_max / self.cell_size).astype(int) - 1
-            # Compute the effective volume contained in the grid domain
-            # min_indexes_clipped = np.maximum(min_indexes, 0)
-            # max_indexes_clipped = np.minimum(max_indexes, self.num_cells - 1)
-            return RegularGrid(self.cell_size, max_indexes[0] - min_indexes[0] + 1, min_indexes, self.is_periodic_mode_active)
+            side_lengths = max_indexes - min_indexes + 1
+            # Conservative rounding policy: one extra cell is fine, one missing cell is not.
+            num_cells = int(np.max(side_lengths))
+            return RegularGrid(self.cell_size, num_cells, min_indexes, self.is_periodic_mode_active)
         else:
             # The box is completely outside the grid domain, return an empty grid
             return RegularGrid(self.cell_size, 0, np.array([0, 0, 0], dtype=np.int64), self.is_periodic_mode_active)
