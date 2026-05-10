@@ -127,7 +127,7 @@ class MortonSourceGrouping(SourceGrouping):
         def valid(g: SourceGroup) -> bool:
             return (
                 len(g.sources) <= grouping_params.max_num_sources_per_group
-                and g.cost <= grouping_params.max_cost_per_group
+                # and g.cost <= grouping_params.max_cost_per_group
             )
 
         source_groups: List[SourceGroup] = []
