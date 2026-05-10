@@ -185,7 +185,7 @@ class Grid:
             # Compute the effective volume contained in the grid domain
             min_indexes_clipped = np.maximum(min_indexes, 0)
             max_indexes_clipped = np.minimum(max_indexes, self.num_cells - 1)
-            effective_volume = np.prod((max_indexes_clipped - min_indexes_clipped + 1))*(self.dx ** 3)
+            effective_volume = np.prod((max_indexes_clipped - min_indexes_clipped + 1))
             return (min_indexes, max_indexes, min_indexes_clipped, max_indexes_clipped, effective_volume)
 
         return (np.zeros(3, dtype=int), np.zeros(3, dtype=int), np.zeros(3, dtype=int), np.zeros(3, dtype=int), 0)
