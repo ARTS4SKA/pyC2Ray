@@ -1,6 +1,8 @@
 from __future__ import annotations
 from abc import abstractmethod
+
 import numpy as np
+
 from pyc2ray.domain.sources import SourceGroup
 
 # ==========================================================================
@@ -148,3 +150,14 @@ class Grid:
             The number of cells in the box defined by the minimum and maximum corners.
         """
         raise NotImplementedError("Call to find_num_cells_in_box abstract method.")
+
+    @abstractmethod
+    def resize_local_field(self, local_field: np.ndarray) -> None:
+        """Resize a local field to match the size of the local grid.
+
+        Parameters
+        ----------
+        local_field : np.ndarray
+            The local field to resize (IO parameter).
+        """
+        raise NotImplementedError("Call to resize_local_field abstract method.")
