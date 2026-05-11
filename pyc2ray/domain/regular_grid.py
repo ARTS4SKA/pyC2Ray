@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 import numpy as np
+
 from pyc2ray.domain.grid import Grid
 from pyc2ray.domain.sources import SourceGroup
 
@@ -67,12 +69,7 @@ class RegularGrid(Grid):
         """
 
         # TODO: add missing shape checks and generalize to vectorial fields
-        target_shape = (self.num_cells, self.num_cells, self.num_cells)
-        if local_field.shape != target_shape:
-            try:
-                local_field.resize(target_shape)
-            except ValueError:
-                raise ValueError("Unable to resize local_field to match local grid shape.")
+        self.resize_local_field(local_field)
 
         local_field.fill(0.0)  # Default initialize local field before mapping
         global_grid_size = global_field.shape[0]  # Assuming cubic grid
@@ -263,9 +260,6 @@ class RegularGrid(Grid):
             The corresponding local grid index (shape `(3,)`).
         """
         local_index = global_index - self.offset
-        print("local offset:", self.offset)
-        print("Input global_index:", global_index)
-        print("Computed local_index from global_index:", local_index)
         if np.any(local_index < 0) or np.any(local_index >= self.num_cells):
             raise ValueError("Global index is outside the local grid.")
         return local_index
@@ -283,7 +277,20 @@ class RegularGrid(Grid):
         np.ndarray
             The corresponding local grid index (shape `(3,)`).
         """
-        print("global_to_local_position_map called with global_position:", global_position)
         global_index = np.floor(global_position / self.cell_size).astype(int)
-        print("Computed global_index from global_position:", global_index)
         return self.global_to_local_index_map(global_index)
+
+    def resize_local_field(self, local_field: np.ndarray) -> None:
+        """Resize a local field to match the size of the local grid.
+
+        Parameters
+        ----------
+        local_field : np.ndarray
+            The local field to resize (IO parameter).
+        """
+        target_shape = (self.num_cells, self.num_cells, self.num_cells)
+        if local_field.shape != target_shape:
+            try:
+                local_field.resize(target_shape)
+            except ValueError:
+                raise ValueError("Unable to resize local_field to match local grid shape.")
