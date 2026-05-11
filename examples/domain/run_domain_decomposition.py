@@ -10,6 +10,7 @@ from pyc2ray.domain.regular_grid import RegularGrid
 from pyc2ray.domain.sources import Source, SourceGroup
 from pyc2ray.domain.subdomain import Subdomain
 from pyc2ray.domain.utils import get_domain_logger
+from pyc2ray.visualization.domain_decomposition import plot_domain_decomposition
 
 logger = get_domain_logger(__name__)
 
@@ -59,7 +60,6 @@ def main():
     #     source_groups = [group for rank_groups in source_groups_by_rank for group in rank_groups]
     #     local_grids = [grid for rank_grids in local_grids_by_rank for grid in rank_grids]
     #     plot_domain_decomposition(global_grid, source_groups, local_grids)
-
 
     MPI.Finalize()
 
