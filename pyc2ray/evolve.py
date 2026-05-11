@@ -5,23 +5,15 @@ import time
 import numpy as np
 from mpi4py import MPI
 
-
 from .asora_core import is_device_init
-from .load_extensions import libasora, libc2ray
-from .utils import display_time
-from .utils.logutils import disable_newline
-from .utils.sourceutils import FloatArray, IntArray, format_sources
-from .domain.domain_decomposition_utils import build_groups, assign_groups_to_ranks, log_domain_decomposition_assignments_old, evaluate_group
-from .domain.domain_decomposition_utils import Source as OldSource
-from .domain.domain_decomposition_utils import Group as OldGroup
-from .domain.domain_decomposition_utils import Grid as OldGrid
-
-
-### New implementation
 from .domain.sources import Source
 from .domain.subdomain import Subdomain
 from .domain.morton_grouping import MortonGroupingParams
 from .domain.regular_grid import RegularGrid
+from .load_extensions import libasora, libc2ray
+from .utils import display_time
+from .utils.logutils import disable_newline
+from .utils.sourceutils import FloatArray, IntArray, format_sources
 
 __all__ = ["evolve3D"]
 
@@ -179,150 +171,42 @@ def evolve3D(
     xh_av = np.copy(xh)
     xh_intermed = np.copy(xh)
 
-    # Run source grouping and domain decomposition
     is_domain_decomposition_active = use_mpi and use_gpu and activate_domain_decomposition
     if is_domain_decomposition_active:
 
+        logger.info("Domain decomposition is active.")
+
+        # Retrieve boundary conditions type
         assert libasora is not None
         is_periodic_mode_active = bool(libasora.is_periodic_mode_active())
-        print(f"Rank {rank} is_periodic_mode_active: {is_periodic_mode_active}.", flush=True)
 
-        # Only do source grouping on rank 0, then broadcast the result to the other ranks
-        ranks_groups = None
-        ranks_costs = 0.0
-        if rank == 0:
-            # TODO CB: avoid conversion into physical units and back.
-            logger.info(f"Running on {nprocs} MPI ranks, doing source grouping and domain decomposition...")
-            # TODO CB: check radius value, I'm currently reducing it for testing purposes.
-            source_groups = build_groups(
-                sources=[OldSource(gid = i, pos=(np.array(src_pos[:, i], dtype=float) - 0.5) * dr,
-                                strength=src_flux[i], radius=R_max_LLS*dr) for i in range(NumSrc)],
-                grid=OldGrid(num_cells=N, dx=dr),
-                nsrc_max = 1)
-            logger.info(f"Created {len(source_groups)} source groups for domain decomposition.")
-            ranks_groups, ranks_costs = assign_groups_to_ranks(source_groups, nranks=nprocs)
-
-            # Rank-0 inspection of assignment results before scatter.
-            log_domain_decomposition_assignments_old(
-                ranks_groups=ranks_groups,
-                ranks_costs=ranks_costs,
-                dr=dr,
-            )
-
-        # Broadcast source groups to other ranks
-        # TODO CB: barrier not needed
-        MPI.COMM_WORLD.Barrier() # make sure rank 0 has finished building the groups before other ranks try to receive them
-        local_groups = MPI.COMM_WORLD.scatter(ranks_groups, root=0)
-
-        local_group = None
-        if len(local_groups) == 1:
-            local_group = local_groups[0]
-        elif len(local_groups) > 1:
-            logger.error(f"Rank {rank} received more than one group, which is not currently supported.")
-            raise NotImplementedError("Multiple groups per rank not supported yet.")
-        else:
-            logger.error(f"Rank {rank} did not receive any group, which is not currently supported.")
-            raise NotImplementedError("No group assigned to rank, which is not supported yet.")
-
-        ### New implementation
+        # Run source grouping and domain decomposition
         global_grid = RegularGrid(cell_size=dr, num_cells=N, is_periodic_mode_active=is_periodic_mode_active)
         subdomain = Subdomain(MPI.COMM_WORLD)
         sources=[Source(id = i, pos=(np.array(src_pos[:, i], dtype=float) - 0.5) * dr,
                         strength=src_flux[i], radius=R_max_LLS*dr) for i in range(NumSrc)]
         subdomain.run_decomposition(global_grid, sources, grouping_algorithm="morton",
-                                    grouping_params = MortonGroupingParams(max_num_sources_per_group=2,
+                                    grouping_params = MortonGroupingParams(max_num_sources_per_group=3,
                                                                            max_cost_per_group=1.0,
                                                                            morton_bits=10))
-
 
     # When using GPU raytracing, data has to be reshaped & reformatted and copied to the device
     if use_gpu:
         # Format input data for the CUDA extension module (flat arrays, C-types,etc)
 
-        # If domain_decomposition is active we can limit the grid to be copied to the GPU to the one overlapping with the local groups.
         if is_domain_decomposition_active:
-            if local_group is not None:
-                # Get total number of cells per side for the full bounding box of the local group, including the part outside the grid domain.
-                # TODO CB: if we don't want to modify ASORA code we need to include out-of-domain cells in the subdomain and fill them with zeros
-                sub_mesh_size = local_group.get_full_num_cells_per_side()
-
-                # local_group.cells = (full_min, full_max, clipped_min, clipped_max, volume), where max indexes are inclusive.
-                full_min = np.asarray(local_group.cells[0], dtype=int)
-
-                xh_local = np.empty((sub_mesh_size, sub_mesh_size, sub_mesh_size), dtype=np.float64)
-                ndens_local = np.empty((sub_mesh_size, sub_mesh_size, sub_mesh_size), dtype=np.float64)
-
-                if is_periodic_mode_active:
-
-                    # Build periodic index vectors for the full local cube. This handles
-                    # cells outside the global box by wrapping to the opposite side.
-                    gi = (np.arange(sub_mesh_size, dtype=np.int64) + full_min[0]) % N
-                    gj = (np.arange(sub_mesh_size, dtype=np.int64) + full_min[1]) % N
-                    gk = (np.arange(sub_mesh_size, dtype=np.int64) + full_min[2]) % N
-
-                    # Optimize memory layout
-                    xh_local = np.ascontiguousarray(
-                        xh[np.ix_(gi, gj, gk)], dtype=np.float64
-                    )
-                    ndens_local = np.ascontiguousarray(
-                        ndens[np.ix_(gi, gj, gk)], dtype=np.float64
-                    )
-
-                else:
-
-                    # TODO CB: unify with case above
-                    clipped_min = np.asarray(local_group.cells[2], dtype=int)
-                    clipped_max = np.asarray(local_group.cells[3], dtype=int)
-
-                    local_offset = clipped_min - full_min
-                    clipped_shape = clipped_max - clipped_min + 1
-
-                    xh_local.fill(-1.0)
-                    ndens_local.fill(-1.0)
-
-                    xh_local[
-                        local_offset[0]:local_offset[0] + clipped_shape[0],
-                        local_offset[1]:local_offset[1] + clipped_shape[1],
-                        local_offset[2]:local_offset[2] + clipped_shape[2],
-                    ] = xh[
-                        clipped_min[0]:clipped_max[0] + 1,
-                        clipped_min[1]:clipped_max[1] + 1,
-                        clipped_min[2]:clipped_max[2] + 1,
-                    ]
-
-                    ndens_local[
-                        local_offset[0]:local_offset[0] + clipped_shape[0],
-                        local_offset[1]:local_offset[1] + clipped_shape[1],
-                        local_offset[2]:local_offset[2] + clipped_shape[2],
-                    ] = ndens[
-                        clipped_min[0]:clipped_max[0] + 1,
-                        clipped_min[1]:clipped_max[1] + 1,
-                        clipped_min[2]:clipped_max[2] + 1,
-                    ]
-
-                xh_av_flat = np.ravel(xh_local).astype("float64", copy=True)
-                ndens_flat = np.ravel(ndens_local).astype("float64", copy=True)
-            else:
-                # TODO CB: implement missing handling with no local group
-                raise NotImplementedError(f"No group assigned to rank {rank}, which is not supported yet.")
-
-            ### New implementation
-            xh_local_new = np.array([])
-            ndens_local_new = np.array([])
-
+            # If domain_decomposition is active we can limit the grid to be copied to the GPU to
+            # the one overlapping with the local groups.
             # TODO: implement loop over subrigds if multiple groups per rank are allowed.
-            # For now we assume one group per rank, so one local grid per rank.
-            subdomain.global_to_local_map(0, xh_local_new, xh)
-            subdomain.global_to_local_map(0, ndens_local_new, ndens)
+            # For the time being we assume one group per rank, so one local grid per rank.
+            xh_local = np.array([], dtype=np.float64)
+            ndens_local = np.array([], dtype=np.float64)
+            subdomain.global_to_local_map(0, xh, xh_local)
+            subdomain.global_to_local_map(0, ndens, ndens_local)
+            # Format input data for the CUDA extension module (flat arrays, C-types,etc)
+            xh_av_flat = np.ravel(xh_local).astype("float64", copy=True)
+            ndens_flat = np.ravel(ndens_local).astype("float64", copy=True)
 
-            xh_av_flat_new = np.ravel(xh_local_new).astype("float64", copy=True)
-            ndens_flat_new = np.ravel(ndens_local_new).astype("float64", copy=True)
-
-
-            if xh_av_flat_new != xh_av_flat:
-                raise ValueError("Error in global to local mapping: xh_av_flat_new does not match xh_av_flat.")
-            if ndens_flat_new != ndens_flat:
-                raise ValueError("Error in global to local mapping: ndens_flat_new does not match ndens_flat.")
         else:
             # Format input data for the CUDA extension module (flat arrays, C-types,etc)
             xh_av_flat = np.ravel(xh).astype("float64", copy=True)
@@ -330,17 +214,15 @@ def evolve3D(
 
         if use_mpi:
             if is_domain_decomposition_active:
-                if local_group is not None:
-                    local_source_ids = local_group.get_source_ids()
-                    NumSrc = len(local_group.sources)
-                    srcpos_flat, normflux_flat = format_sources(
-                        # Source position in subdomain already respects ASORA convention for Fortran indexing
-                        src_pos[:, local_source_ids] - full_min[:, None],
-                        src_flux[local_source_ids]
+                # If domain_decomposition is active retrieve the local source positions and strengths from the
+                # current subdomain 
+                local_src_pos = subdomain.get_local_sources_positions(subdomain_index=0)
+                # Shift all source coordinates to Fortran-style 1-based indexing.
+                local_src_pos_fortran = local_src_pos + 1
+                srcpos_flat, normflux_flat = format_sources(
+                        local_src_pos_fortran,
+                        subdomain.get_local_sources_strengths(subdomain_index=0)
                     )
-                else:
-                    raise NotImplementedError(f"No group assigned to rank {rank}, which is not supported yet.")
-
             else:
                 # TODO:       #if(NumSrc > nprocs):
                 perrank = NumSrc // nprocs
@@ -360,8 +242,6 @@ def evolve3D(
             srcpos_flat, normflux_flat = format_sources(src_pos, src_flux)
 
         # Copy positions & fluxes of sources to the GPU in advance
-        # TODO CB: in principle, we don't need to copy the sources in every timestep
-        # since they don't change position or strength, right?
         MPI.COMM_WORLD.Barrier()
         libasora.source_data_to_device(srcpos_flat, normflux_flat)
 
@@ -369,7 +249,8 @@ def evolve3D(
         # These are used to store the output of the raytracing module.
         # TODO CB: find a way to save memory
         if is_domain_decomposition_active:
-            sub_phi_ion_flat = np.ravel(np.zeros((sub_mesh_size, sub_mesh_size, sub_mesh_size), dtype="float64"))
+            sub_phi_ion_flat = np.array([], dtype=np.float64)
+            subdomain.resize_local_field(0, sub_phi_ion_flat)
         phi_ion_flat = np.ravel(np.zeros((N, N, N), dtype="float64"))
 
         # Copy density field to GPU once at the beginning of timestep (!! do_all_sources assumes this !!)
@@ -417,25 +298,12 @@ Convergence Criterion (Number of points): {conv_criterion: n}
                 # If this is not first iteration then we need to find subdomain xh_av_flat from the global one received from rank 0 after the broadcast. 
                 # If this is the first iteration, xh_av_flat is already correctly initialized to the subdomain values.
                 if niter > 1:
+                    print("Niter > 1, reshaping xh_av_flat to global grid for subdomain extraction...")
                     tmp_xh_av = np.reshape(xh_av_flat, (N, N, N))
-                    if is_periodic_mode_active:
-                        xh_local = np.ascontiguousarray(
-                            tmp_xh_av[np.ix_(gi, gj, gk)], dtype=np.float64
-                        )
-                    else:
-                        xh_local = np.empty((sub_mesh_size, sub_mesh_size, sub_mesh_size), dtype=np.float64)
-                        xh_local.fill(-1.0)
-                        xh_local[
-                            local_offset[0]:local_offset[0] + clipped_shape[0],
-                            local_offset[1]:local_offset[1] + clipped_shape[1],
-                            local_offset[2]:local_offset[2] + clipped_shape[2],
-                        ] = tmp_xh_av[
-                            clipped_min[0]:clipped_max[0] + 1,
-                            clipped_min[1]:clipped_max[1] + 1,
-                            clipped_min[2]:clipped_max[2] + 1,
-                        ]
+                    xh_local = np.array([], dtype=np.float64)
+                    subdomain.global_to_local_map(0, tmp_xh_av, xh_local)
                     xh_av_flat = np.ravel(xh_local).astype("float64", copy=True)
-                    MPI.COMM_WORLD.Barrier()
+                sub_mesh_size = sub_phi_ion_flat.shape[0] # assuming cubic subdomains
 
                 # TODO CB: avoid call duplication here.
                 MPI.COMM_WORLD.Barrier()
@@ -520,32 +388,8 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             # Copy the subbox result to the full phi_ion array, taking into account the position of the local group in the full grid.
             if is_domain_decomposition_active:
                 sub_phi_ion = np.reshape(sub_phi_ion_flat, (sub_mesh_size, sub_mesh_size, sub_mesh_size))
+                subdomain.local_to_global_map(0, sub_phi_ion, phi_ion)
 
-                if is_periodic_mode_active:
-                    # In periodic mode, the local group can wrap around the edges of the global grid, 
-                    # so we need to use the periodic index vectors to copy the data to the correct 
-                    # positions in the global phi_ion array.
-                    # TODO CB: optimize
-                    for i_local in range(sub_mesh_size):
-                        for j_local in range(sub_mesh_size):
-                            for k_local in range(sub_mesh_size):
-                                i_global = (full_min[0] + i_local) % N
-                                j_global = (full_min[1] + j_local) % N
-                                k_global = (full_min[2] + k_local) % N
-                                # TODO CB:
-                                # += is needed when more groups are assigned to the same rank or 
-                                # if subdomain is larger than the global domain (which should not happen in practice)
-                                phi_ion[i_global, j_global, k_global] += sub_phi_ion[i_local, j_local, k_local]
-                else:
-                    phi_ion[
-                        clipped_min[0]:clipped_max[0] + 1,
-                        clipped_min[1]:clipped_max[1] + 1,
-                        clipped_min[2]:clipped_max[2] + 1,
-                    ] = sub_phi_ion[
-                        local_offset[0]:local_offset[0] + clipped_shape[0],
-                        local_offset[1]:local_offset[1] + clipped_shape[1],
-                        local_offset[2]:local_offset[2] + clipped_shape[2],
-                    ]
             MPI.COMM_WORLD.Barrier()
             # Collect results from the different MPI processors
             MPI.COMM_WORLD.Allreduce(MPI.IN_PLACE, [phi_ion, MPI.DOUBLE], op=MPI.SUM)
@@ -608,7 +452,6 @@ Convergence Criterion (Number of points): {conv_criterion: n}
                 (rel_change_xh1 < convergence_fraction)
                 and (rel_change_xh0 < convergence_fraction)
             )
-            # converged = True # TODO CB: re-enable convergence check after testing
             # increase the convergence iteration counter
             n_count += 1
 
