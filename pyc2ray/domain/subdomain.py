@@ -1,6 +1,9 @@
+
 from mpi4py import MPI
 import numpy as np
+
 from typing import List, Tuple
+
 from pyc2ray.domain.grid import Grid
 from pyc2ray.domain.morton_grouping import MortonSourceGrouping, MortonGroupingParams
 from pyc2ray.domain.source_grouping import GroupingParams
@@ -268,3 +271,27 @@ class Subdomain:
         """
         source_group = self.get_source_group(subdomain_index)
         return np.array([s.strength for s in source_group.sources])
+
+    def resize_local_field(self, subdomain_index: int, local_field: np.ndarray) -> None:
+        """Resize a field defined on the global grid to the corresponding field on the local grid.
+
+        Parameters
+        ----------
+        subdomain_index : int
+            The index of the subdomain for which to resize the field.
+        local_field : np.ndarray
+            The field defined on the global grid to resize.
+
+        Returns
+        -------
+        np.ndarray
+            The resized field defined on the local grid.
+        """
+        if self.local_grids is None:
+            raise ValueError("No source groups assigned to rank, cannot perform field resizing.")
+
+        if subdomain_index >= len(self.local_grids):
+            raise ValueError(f"Subdomain index {subdomain_index} out of range for local grids assigned to rank.")
+
+        local_grid = self.local_grids[subdomain_index]
+        return local_grid.resize_local_field(local_field)
