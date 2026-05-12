@@ -1,179 +1,168 @@
-from contextlib import contextmanager
+from pathlib import Path
 
-import astropy.constants as cst
-import astropy.units as u
 import numpy as np
 import pytest
+from numpy.typing import NDArray
 
 from pyc2ray.load_extensions import libasora
-from pyc2ray.radiation.blackbody import BlackBodySource
-from pyc2ray.radiation.common import make_tau_table
 
-if libasora is None:
-    pytest.skip("libasora.so missing, skipping tests", allow_module_level=True)
-
-
-@pytest.fixture
-def init_device():
-    libasora.device_init()
-    yield
-    libasora.device_close()
+try:
+    import pyc2ray.lib.libasoratest as libasoratest
+except ImportError:
+    libasoratest = None
 
 
-def test_device_init(init_device):
-    libasora.is_device_init()
+@pytest.mark.skipif(libasora is None, reason="libasora.so missing, skipping tests")
+class TestLibasoraTest:
+    def test_path_in_cell(self) -> None:
+        def create_path_in_cell_data(N: int) -> NDArray:
+            """Return the length of the ray intersecting cell at pos emitted from pos0"""
+            N2 = N // 2
+            di, dj, dk = np.mgrid[-N2 : N2 + 1, -N2 : N2 + 1, -N2 : N2 + 1]
+
+            di2 = di * di
+            dj2 = dj * dj
+            dk2 = dk * dk
+            delta_max = np.maximum(di2, np.maximum(dj2, dk2))
+
+            paths = np.sqrt((di2 + dj2 + dk2) / delta_max)
+            paths[N2, N2, N2] = 0.5
+            return paths
+
+        N = 11
+        path = libasoratest.path_in_cell((N, N, N))
+        expected = create_path_in_cell_data(N)
+
+        assert np.allclose(path, expected)
+
+    def test_geometric_factors(self) -> None:
+        def create_geometric_factors_data(N: int) -> NDArray:
+            """Return the geometric interpolation factors (weights) for the 4 adjacent cells"""
+            N2 = N // 2
+            grid = np.mgrid[-N2 : N2 + 1, -N2 : N2 + 1, -N2 : N2 + 1]
+            indices = np.abs(grid).argsort(axis=0)
+            di, dj, dk = np.take_along_axis(grid, indices, axis=0)
+
+            dx = np.abs(np.copysign(1, di) - di / np.abs(dk))
+            dy = np.abs(np.copysign(1, dj) - dj / np.abs(dk))
+
+            w1 = (1 - dx) * (1 - dy)
+            w2 = (1 - dy) * dx
+            w3 = (1 - dx) * dy
+            w4 = dx * dy
+
+            facts = np.stack((w1, w2, w3, w4), axis=-1)
+            facts[dk == 0] = 0.0
+            return facts
+
+        N = 11
+        facts = libasoratest.geometric_factors((N, N, N))
+        expected = create_geometric_factors_data(N)
+
+        assert np.allclose(facts, expected)
+
+    def test_cell_interpolator(self, data_dir: Path) -> None:
+        rng = np.random.default_rng(seed=42)
+        N = 11
+        dens = rng.random((N, N, N), dtype=np.float64)
+
+        cdens = libasoratest.cell_interpolator(dens)
+        expected_output = np.load(data_dir / "cell_interpolator_output.npy")
+
+        assert np.allclose(cdens, expected_output)
+
+    Q_MAX = 100
+
+    def test_cells_in_shell(self) -> None:
+        assert libasoratest.cells_in_shell(0) == 1
+        for q in range(1, self.Q_MAX):
+            assert libasoratest.cells_in_shell(q) == 4 * q**2 + 2
+
+    def test_cells_to_shell(self) -> None:
+        q_tot = 1
+        assert libasoratest.cells_to_shell(0) == q_tot
+        for q in range(1, self.Q_MAX):
+            q_tot += 4 * q**2 + 2
+            assert libasoratest.cells_to_shell(q) == q_tot
+
+    @pytest.mark.parametrize("q", range(0, Q_MAX))
+    def test_shell_mapping(self, q: int) -> None:
+        cells: set[tuple[int, int, int]] = set()
+        q_max = 4 * q**2 + 2 if q > 0 else 1
+        for s in range(q_max):
+            # Check value makes sense
+            ijk = libasoratest.linthrd2cart(q, s)
+            assert q == sum(abs(x) for x in ijk)
+
+            # Check it's unique
+            assert ijk not in cells
+            cells.add(ijk)
+
+            # Check inverse function
+            assert (q, s) == libasoratest.cart2linthrd(*ijk)
 
 
-def test_density_to_device(init_device):
-    # One argument required
-    with pytest.raises(TypeError):
-        libasora.density_to_device()
+@pytest.mark.skipif(libasora is None, reason="libasora.so missing, skipping tests")
+class TestLibasora:
+    def test_device_init(self, init_device):
+        libasora.is_device_init()
 
-    # np.float64 array required
-    with pytest.raises(TypeError):
-        libasora.density_to_device(np.ones(10, dtype=np.int32))
+    def test_density_to_device(self, init_device):
+        # One argument required
+        with pytest.raises(TypeError):
+            libasora.density_to_device()
 
-    def create_density_data(mesh_size: int) -> np.ndarray:
-        dens = np.full(mesh_size**3, 0.5, dtype=np.float64)
-        return dens
+        # np.float64 array required
+        with pytest.raises(TypeError):
+            libasora.density_to_device(np.ones(10, dtype=np.int32))
 
-    assert libasora is not None
-    libasora.density_to_device(create_density_data(16))
-    libasora.density_to_device(create_density_data(64))
-    libasora.density_to_device(create_density_data(32))
+        def create_density_data(mesh_size: int) -> np.ndarray:
+            dens = np.full(mesh_size**3, 0.5, dtype=np.float64)
+            return dens
 
+        assert libasora is not None
+        libasora.density_to_device(create_density_data(16))
+        libasora.density_to_device(create_density_data(64))
+        libasora.density_to_device(create_density_data(32))
 
-def test_photo_table_to_device(init_device):
-    # Two arguments required
-    with pytest.raises(TypeError):
-        libasora.photo_table_to_device(np.array([]))
+    def test_photo_table_to_device(self, init_device):
+        # Two arguments required
+        with pytest.raises(TypeError):
+            libasora.photo_table_to_device(np.array([]))
 
-    # Both arguments must be np.float64 arrays
-    with pytest.raises(TypeError):
-        libasora.photo_table_to_device(
-            np.ones(10, dtype=np.float32), np.zeros(10, dtype=np.float64)
-        )
+        # Both arguments must be np.float64 arrays
+        with pytest.raises(TypeError):
+            libasora.photo_table_to_device(
+                np.ones(10, dtype=np.float32), np.zeros(10, dtype=np.float64)
+            )
 
-    def create_photo_table_data(num_tau: int) -> tuple[np.ndarray, np.ndarray]:
-        thin = np.linspace(-20, 4, num_tau + 1, dtype=np.float64)
-        thick = np.linspace(-20, 4, num_tau + 1, dtype=np.float64)
-        return thin, thick
+        def create_photo_table_data(num_tau: int) -> tuple[np.ndarray, np.ndarray]:
+            thin = np.linspace(-20, 4, num_tau + 1, dtype=np.float64)
+            thick = np.linspace(-20, 4, num_tau + 1, dtype=np.float64)
+            return thin, thick
 
-    assert libasora is not None
-    libasora.photo_table_to_device(*create_photo_table_data(80))
-    libasora.photo_table_to_device(*create_photo_table_data(100))
-    libasora.photo_table_to_device(*create_photo_table_data(90))
+        assert libasora is not None
+        libasora.photo_table_to_device(*create_photo_table_data(80))
+        libasora.photo_table_to_device(*create_photo_table_data(100))
+        libasora.photo_table_to_device(*create_photo_table_data(90))
 
+    def test_source_data_to_device(self, init_device):
+        # Two arguments required
+        with pytest.raises(TypeError):
+            libasora.source_data_to_device(np.array([]))
 
-def test_source_data_to_device(init_device):
-    # Two arguments required
-    with pytest.raises(TypeError):
-        libasora.source_data_to_device(np.array([]))
+        # First argument is array np.int32, second argument is array np.float64
+        with pytest.raises(TypeError):
+            libasora.source_data_to_device(
+                np.ones(10, dtype=np.float64), np.ones(10, dtype=np.float64)
+            )
 
-    # First argument is array np.int32, second argument is array np.float64
-    with pytest.raises(TypeError):
-        libasora.source_data_to_device(
-            np.ones(10, dtype=np.float64), np.ones(10, dtype=np.float64)
-        )
+        def create_source_data(num_sources: int) -> tuple[np.ndarray, np.ndarray]:
+            src_pos = np.arange(0, 3 * num_sources, dtype=np.int32)
+            norm_flux = np.ones(num_sources, dtype=np.float64)
+            return src_pos, norm_flux
 
-    def create_source_data(num_sources: int) -> tuple[np.ndarray, np.ndarray]:
-        src_pos = np.arange(0, 3 * num_sources, dtype=np.int32)
-        norm_flux = np.ones(num_sources, dtype=np.float64)
-        return src_pos, norm_flux
-
-    assert libasora is not None
-    libasora.source_data_to_device(*create_source_data(50))
-    libasora.source_data_to_device(*create_source_data(100))
-    libasora.source_data_to_device(*create_source_data(80))
-
-
-@contextmanager
-def setup_do_all_sources(
-    num_sources: int = 10,
-    mesh_size: int = 50,
-    batch_size: int = 8,
-    block_size: int = 256,
-    radius: float = 15.0,
-):
-    # Calculate the table
-    minlog_tau, maxlog_tau, num_tau = -20.0, 4.0, 20000
-    tau, dlogtau = make_tau_table(minlog_tau, maxlog_tau, num_tau)
-
-    # HI cross section at its ionzing frequency (weighted by freq_factor)
-    sigma_HI_at_ion_freq = np.float64(6.30e-18)
-
-    # Min and max frequency of the integral
-    freq_min, freq_max = (
-        (13.598 * u.eV / cst.h).to("Hz").value,
-        (54.416 * u.eV / cst.h).to("Hz").value,
-    )
-    radsource = BlackBodySource(1e5, False, freq_min, sigma_HI_at_ion_freq)
-    photo_thin_table, photo_thick_table = radsource.make_photo_table(
-        tau, freq_min, freq_max, 1e48
-    )
-
-    # Allocate tables to GPU device
-    assert libasora is not None
-    libasora.photo_table_to_device(photo_thin_table, photo_thick_table)
-
-    size = mesh_size**3
-    phi_ion = np.empty(size, dtype=np.float64)
-    ndens = np.full(size, 1e-3, dtype=np.float64)
-    xHII = np.full(size, 1e-4, dtype=np.float64)
-
-    # Copy density field to GPU device
-    libasora.density_to_device(ndens)
-
-    # Efficiency factor (converting mass to photons)
-    f_gamma = 100.0
-
-    # Define some random sources
-    rng = np.random.default_rng(918)
-    src_pos = rng.integers(0, mesh_size, size=(3 * num_sources), dtype=np.int32)
-    norm_flux = rng.uniform(1e10, 1e14, size=num_sources).astype(np.float64)
-    norm_flux *= f_gamma / 1e48
-
-    # Copy source list to GPU device
-    libasora.source_data_to_device(src_pos, norm_flux)
-
-    # Size of a cell
-    box = 50.0 * u.pc
-    dr = (box / mesh_size).cgs.value
-
-    yield (
-        radius,
-        sigma_HI_at_ion_freq,
-        dr,
-        xHII,
-        phi_ion,
-        num_sources,
-        mesh_size,
-        minlog_tau,
-        dlogtau,
-        num_tau,
-        batch_size,
-        block_size,
-    )
-
-
-def test_do_all_sources(data_dir, init_device):
-    with setup_do_all_sources() as args:
-        libasora.do_all_sources(*args)
-
-        expected_phi_ion = np.load(data_dir / "photo_ionization_rate.npy")
-
-        phi_ion = args[4] * 1e40
-        expected_phi_ion *= 1e40
-
-        assert np.allclose(phi_ion, expected_phi_ion)
-
-
-@pytest.mark.parametrize("mesh_size", [32, 64, 128])
-@pytest.mark.parametrize("batch_size", [8, 16, 32])
-@pytest.mark.parametrize("block_size", [128, 256, 512])
-@pytest.mark.benchmark(warmup=True, warmup_iterations=1)
-def test_benchmark_do_all_sources(
-    benchmark, init_device, mesh_size, batch_size, block_size
-):
-    with setup_do_all_sources(10000, mesh_size, batch_size, block_size) as args:
-        benchmark(libasora.do_all_sources, *args)
+        assert libasora is not None
+        libasora.source_data_to_device(*create_source_data(50))
+        libasora.source_data_to_device(*create_source_data(100))
+        libasora.source_data_to_device(*create_source_data(80))
