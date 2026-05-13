@@ -114,17 +114,17 @@ def test_chemistry_asora(data_dir, init_device):
         assert np.allclose(xh, expected_xh)
 
 
-def test_benchmark_chemistry(benchmark, data_dir):
+def test_benchmark_chemistry(benchmark):
     with setup_chemistry(200) as args:
         benchmark(libc2ray.chemistry.global_pass, *args)
 
 
-def test_benchmark_chemistry_python(benchmark, data_dir):
+def test_benchmark_chemistry_python(benchmark):
     with setup_chemistry(200) as args:
         benchmark(pysolver.chemistry.global_pass, *args)
 
 
 @pytest.mark.parametrize("block_size", [512, 640, 768, 896])
-def test_benchmark_chemistry_asora(benchmark, data_dir, init_device, block_size):
+def test_benchmark_chemistry_asora(benchmark, init_device, block_size):
     with setup_chemistry(200) as args:
         benchmark(libasora.chemistry_global_pass, *args, block_size)
