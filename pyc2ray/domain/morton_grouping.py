@@ -113,6 +113,8 @@ class MortonSourceGrouping(SourceGrouping):
             comp_cost=comp_cost
         )
 
+    # TODO: check source ordering influence on group creation: ideally, the order of sources in the input list should not influence the final groups,
+    # which should only depend on their spatial distribution and on the cost model.
     def build_groups(self, sources: List[Source], grid: Grid, grouping_params: GroupingParams, cost_model: CostModel) -> List[SourceGroup]:
         """Build the groups of sources to be assigned to the ranks using Morton ordering.
 
