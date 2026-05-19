@@ -4,12 +4,18 @@
 #include <exception>
 #include <format>
 #include <iostream>
+#include <ranges>
 
 namespace {
 
     __host__ __device__ cuda::std::array<int, 2> divmod(int x, int y) {
         return {x / y, x % y};
     }
+
+    constexpr size_t LUT_SIZE = 256;
+
+    __device__ __constant__ size_t cells_in_shell_cache[LUT_SIZE];
+    __device__ __constant__ size_t cells_to_shell_cache[LUT_SIZE];
 
 }  // namespace
 
@@ -45,8 +51,9 @@ namespace asora {
         auto qh = q - t;
 
         /* These formulae are derived from purely geometric considerations, by rotating
-         * the (i, j) plane by 45 degrees and then applying divmod to determine the
-         * position within the shell. Using the example in utils.cuh (q = 3, k >= 0):
+         * the (i, j) plane by 45 degrees counterclockwise and then applying divmod to
+         * determine the position within the shell. Using the example in utils.cuh (q =
+         * 3, k >= 0):
          *
          *
          *         n = 0   1   2   3
@@ -87,16 +94,45 @@ namespace asora {
         return {q, s};
     }
 
+    void setup_luts() {
+        // Cells in shell
+        std::array<size_t, LUT_SIZE> cells_in_shell_host;
+        std::ranges::copy(
+            std::views::iota(0ul, LUT_SIZE) | std::views::transform(cells_in_shell),
+            cells_in_shell_host.begin()
+        );
+        safe_cuda(cudaMemcpyToSymbol(
+            cells_in_shell_cache, cells_in_shell_host.data(), LUT_SIZE * sizeof(size_t)
+        ));
+
+        // Cells to shell
+        std::array<size_t, LUT_SIZE> cells_to_shell_host;
+        std::ranges::copy(
+            std::views::iota(0ul, LUT_SIZE) | std::views::transform(cells_to_shell),
+            cells_to_shell_host.begin()
+        );
+        safe_cuda(cudaMemcpyToSymbol(
+            cells_to_shell_cache, cells_to_shell_host.data(), LUT_SIZE * sizeof(size_t)
+        ));
+    }
+
     __host__ __device__ size_t cells_in_shell(int q) {
         // Defined also for negative q to avoid bound checking.
         if (q < 0) return 0;
+#ifdef __CUDA_ARCH__
+        if (static_cast<size_t>(q) < LUT_SIZE) return cells_in_shell_cache[q];
+#else
         if (q == 0) return 1;
+#endif
         return 4 * q * q + 2;
     }
 
     __host__ __device__ size_t cells_to_shell(int q) {
         // This formula comes from the series sum of cells_in_shell(p) for p = 0 to q.
         if (q < 0) return 0;
+#ifdef __CUDA_ARCH__
+        if (static_cast<size_t>(q) < LUT_SIZE) return cells_to_shell_cache[q];
+#endif
         return (1 + 2 * q) * (3 + 2 * q * (1 + q)) / 3;
     }
 
