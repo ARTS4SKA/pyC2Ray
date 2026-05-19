@@ -1,4 +1,5 @@
 import logging
+import math
 import numpy as np
 
 from typing import Sequence, Tuple
@@ -75,6 +76,32 @@ def find_enclosing_sphere(centers: np.ndarray, radii: np.ndarray, max_iter: int 
     R = np.max(np.linalg.norm(centers - c[None, :], axis=1) + radii)
     return c, float(R)
 
+def evaluate_sphere_intersection(center_a: np.ndarray, radius_a: float, center_b: np.ndarray, radius_b: float) -> bool:
+    """
+    Check if the two spheres intersect.
+
+    Parameters
+    ----------
+    center_a : np.ndarray
+        Center of the first sphere.
+    radius_a : float
+        Radius of the first sphere.
+    center_b : np.ndarray
+        Center of the second sphere.
+    radius_b : float
+        Radius of the second sphere.
+
+    Returns
+    -------
+    bool    True if the two spheres intersect, False otherwise.
+    """
+    d = np.linalg.norm(center_a - center_b)
+    if d < radius_a + radius_b:
+        return True
+
+    return False
+
+
 logger = get_domain_logger(__name__)
 
 def log_domain_decomposition_assignments(
@@ -102,6 +129,8 @@ def log_domain_decomposition_assignments(
                 logger.info(
                     (
                         "Local group index=%d cost=%.3e num sources=%d "
+                        "computational_cost=%.3e "
+                        "memory_cost=%.3e MB "
                         "center=(%.2f, %.2f, %.2f) "
                         "center in cell units=(%.2f, %.2f, %.2f) "
                         "radius=%.2f radius in cell units=(%.2f) "
@@ -111,6 +140,8 @@ def log_domain_decomposition_assignments(
                     group.id,
                     rank_cost,
                     group.get_num_sources(),
+                    group.comp_cost,
+                    group.mem_cost / 1e6,
                     group.center[0],
                     group.center[1],
                     group.center[2],
@@ -130,6 +161,8 @@ def log_domain_decomposition_assignments(
                 logger.info(
                     (
                         "Local group index=%d cost=%.3e num sources=%d "
+                        "computational_cost=%.3e "
+                        "memory_cost=%.3e MB "
                         "center=(%.2f, %.2f, %.2f) "
                         "bounding_box_min=(%.2f, %.2f, %.2f) "
                         "bounding_box_max=(%.2f, %.2f, %.2f)"
@@ -137,6 +170,8 @@ def log_domain_decomposition_assignments(
                     group.id,
                     rank_cost,
                     group.get_num_sources(),
+                    group.comp_cost,
+                    group.mem_cost / 1e6,
                     group.center[0],
                     group.center[1],
                     group.center[2],
