@@ -6,6 +6,7 @@ import numpy as np
 from mpi4py import MPI
 
 from .asora_core import is_device_init
+from .domain.cost_model import pyC2RayCostModel
 from .domain.sources import Source
 from .domain.subdomain import Subdomain
 from .domain.morton_grouping import MortonGroupingParams
@@ -185,9 +186,16 @@ def evolve3D(
         subdomain = Subdomain(MPI.COMM_WORLD)
         sources=[Source(id = i, pos=(np.array(src_pos[:, i], dtype=float) - 0.5) * dr,
                         strength=src_flux[i], radius=R_max_LLS*dr) for i in range(NumSrc)]
-        subdomain.run_decomposition(global_grid, sources, grouping_algorithm="morton",
+        # TODO: make these a parameter
+        alps_memory_per_GPU = 96e9 # 96 GB
+        ranks_per_GPU = 1
+        subdomain.run_decomposition(global_grid, sources,
+                                    cost_model = pyC2RayCostModel(max_memory_cost_per_group=alps_memory_per_GPU/ranks_per_GPU,
+                                                                  source_batch_size=src_batch_size,
+                                                                  is_periodic_mode_active=is_periodic_mode_active,
+                                                                  photo_ion_table_size=NumTau),
+                                    grouping_algorithm="morton",
                                     grouping_params = MortonGroupingParams(max_num_sources_per_group=3,
-                                                                           max_cost_per_group=1.0,
                                                                            morton_bits=10))
 
     # When using GPU raytracing, data has to be reshaped & reformatted and copied to the device
