@@ -175,6 +175,9 @@ class Subdomain:
         else:
             self.local_grids = []
 
+        # Update the cost of the subdomain with the cost of the assigned groups
+        self.cost = sum(g.comp_cost for g in self.source_groups) if self.source_groups is not None else 0.0
+
     def global_to_local_map(self, subgrid_index: int, global_field: np.ndarray, local_field: np.ndarray) -> None:
         """Map a field defined on the global grid to the corresponding field on the local grid.
 
