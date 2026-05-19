@@ -16,6 +16,8 @@ pyc2ray_sources = [
     'raytracing.py',
     'sinks_model.py',
     'source_model.py',
+    'domain/__init__.py',
+    'domain/cost_model.py',
     'domain/grid.py',
     'domain/morton_grouping.py',
     'domain/regular_grid.py',
