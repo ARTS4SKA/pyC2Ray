@@ -2,10 +2,11 @@ from dataclasses import dataclass
 from typing import List
 import numpy as np
 
+from pyc2ray.domain.cost_model import CostModel
 from pyc2ray.domain.source_grouping import GroupingParams, SourceGrouping
 from pyc2ray.domain.grid import Grid
 from pyc2ray.domain.sources import Source, SourceGroup
-from pyc2ray.domain.utils import find_enclosing_sphere
+from pyc2ray.domain.utils import find_enclosing_sphere, evaluate_sphere_intersection
 
 # ================================================================================
 # This file contains the MortonGroupingParams and MortonSourceGrouping classes,
@@ -17,11 +18,12 @@ from pyc2ray.domain.utils import find_enclosing_sphere
 class MortonGroupingParams(GroupingParams):
     """Parameters specific to the Morton grouping algorithm.
     """
-    def __init__(self, max_num_sources_per_group: int = 10, max_cost_per_group: float = 1.0,
-                 morton_bits: int = 10) -> None:
-        super().__init__(max_num_sources_per_group, max_cost_per_group)
+    def __init__(self, max_num_sources_per_group: int = 10, morton_bits: int = 10) -> None:
+        super().__init__(max_num_sources_per_group)
         self.morton_bits: int = morton_bits
 
+# TODO: split geometric ordeding (Morton-like key) from the actual grouping logic,
+# which is more related to the cost model and to the constraints on the groups.
 class MortonSourceGrouping(SourceGrouping):
     """Morton ordering-based grouping algorithm.
     """
@@ -60,7 +62,8 @@ class MortonSourceGrouping(SourceGrouping):
 
         return split_by_3(int_position[0]) | (split_by_3(int_position[1]) << 1) | (split_by_3(int_position[2]) << 2)
 
-    def _evaluate_group(self, group_sources: List[Source], grid: Grid) -> SourceGroup:
+
+    def _build_group(self, group_sources: List[Source], grid: Grid, cost_model: CostModel) -> SourceGroup:
         """
         Build a group of sources and compute its geometric and cost properties.
 
@@ -80,12 +83,24 @@ class MortonSourceGrouping(SourceGrouping):
 
         # Find group enclosing sphere and bounding box. The enclosing sphere is used for the radius constraint,
         # while the bounding box is used to estimate the local cell count for cost evaluation.
-        c, R = find_enclosing_sphere(centers, radii)
+        if len(group_sources) == 1:
+            c = centers[0]
+            R = radii[0]
+        else:
+            c, R = find_enclosing_sphere(centers, radii)
         bbox_min = c - R
         bbox_max = c + R
         # Basic cost evaluation: number of sources times local cell count
-        # TODO: this is a very rough estimate. A more accurate cost model could be implemented.
-        cost = len(group_sources) * grid.find_num_cells_in_box(bbox_min, bbox_max)
+        # TODO: this is a very rough estimate. A more accurate cost model could be implemented
+        # for example by evaluating the actual raytracing cost for a representative source in the group.
+        # TODO: this estimate of n_cells_per_side is not correct in case of non periodic conditions
+        n_cells_in_box = grid.find_num_cells_in_box(bbox_min, bbox_max)
+        n_cells_per_side = max(1, int(np.ceil(n_cells_in_box ** (1.0 / 3.0))))
+        mem_cost, comp_cost = cost_model.compute_group_costs(
+            group_sources[0].radius,
+            n_cells_per_side,
+            len(group_sources),
+        )
 
         return SourceGroup(
             id=-1,  # ID will be assigned later
@@ -94,10 +109,11 @@ class MortonSourceGrouping(SourceGrouping):
             radius=R,
             bbox_min=bbox_min,
             bbox_max=bbox_max,
-            cost=cost,
+            mem_cost=mem_cost,
+            comp_cost=comp_cost
         )
 
-    def build_groups(self, sources: List[Source], grid: Grid, grouping_params: GroupingParams) -> List[SourceGroup]:
+    def build_groups(self, sources: List[Source], grid: Grid, grouping_params: GroupingParams, cost_model: CostModel) -> List[SourceGroup]:
         """Build the groups of sources to be assigned to the ranks using Morton ordering.
 
         Parameters
@@ -109,6 +125,8 @@ class MortonSourceGrouping(SourceGrouping):
         grouping_params : GroupingParams
             The parameters for the Morton grouping algorithm. Must be an
             instance of MortonGroupingParams.
+        cost_model : CostModel
+            The cost model to use for the evaluation of the cost of processing a group of sources.
 
         Returns
         -------
@@ -127,27 +145,41 @@ class MortonSourceGrouping(SourceGrouping):
         def valid(g: SourceGroup) -> bool:
             return (
                 len(g.sources) <= grouping_params.max_num_sources_per_group
-                # and g.cost <= grouping_params.max_cost_per_group
+                and g.mem_cost <= cost_model.max_memory_cost_per_group
             )
 
+        # TODO: optimize the loop below.
+        # For example: avoid rebuilding the same single source group at loop end when gtrial already matches current_group
+        # (last-source rejection/non-intersection path).
         source_groups: List[SourceGroup] = []
         current_group: List[Source] = []
         for s in ordered_sources:
             if not current_group:
                 current_group = [s]
+                gtrial = self._build_group(current_group, grid, cost_model)
                 continue
 
+            # Check if the new source intersects with the current group. If not, we can start a new group.
+            if not evaluate_sphere_intersection(gtrial.center, gtrial.radius, s.pos, s.radius):
+                source_groups.append(gtrial)
+                current_group = [s]
+                gtrial = self._build_group(current_group, grid, cost_model)
+                continue
+
+            # If the new source intersects with the current group
+            # we try to add it to the group and check if it's still valid.
             trial = current_group + [s]
-            gtrial = self._evaluate_group(trial, grid)
+            gtrial = self._build_group(trial, grid, cost_model)
 
             if valid(gtrial):
                 current_group = trial
             else:
-                source_groups.append(self._evaluate_group(current_group, grid))
+                source_groups.append(self._build_group(current_group, grid, cost_model))
                 current_group = [s]
+                gtrial = self._build_group(current_group, grid, cost_model)
 
         if current_group:
-            source_groups.append(self._evaluate_group(current_group, grid))
+            source_groups.append(self._build_group(current_group, grid, cost_model))
 
         # Update group IDs
         for i, g in enumerate(source_groups):
