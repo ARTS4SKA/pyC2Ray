@@ -4,6 +4,7 @@ import numpy as np
 
 from typing import List, Tuple
 
+from pyc2ray.domain.cost_model import CostModel, pyC2RayCostModel
 from pyc2ray.domain.grid import Grid
 from pyc2ray.domain.morton_grouping import MortonSourceGrouping, MortonGroupingParams
 from pyc2ray.domain.source_grouping import GroupingParams
@@ -62,8 +63,8 @@ class Subdomain:
         self.local_grids : List[Grid] | None = None
         self.cost = 0.0
 
-    def _build_groups(self, global_grid: Grid, sources: List[Source], grouping_algorithm: str = "morton", 
-                      grouping_params: GroupingParams = MortonGroupingParams()) -> List[SourceGroup]:
+    def _build_groups(self, global_grid: Grid, sources: List[Source], cost_model: CostModel,
+                      grouping_algorithm: str = "morton", grouping_params: GroupingParams = MortonGroupingParams()) -> List[SourceGroup]:
         """ Build the groups of sources to be assigned to the ranks.
 
         Parameters
@@ -72,6 +73,8 @@ class Subdomain:
             The full grid of the simulation.
         sources : List[Source]
             The full list of sources in the simulation.
+        cost_model : CostModel
+            The cost model to use for the evaluation of the cost of processing a group of sources.
         grouping_algorithm : str
             The algorithm to use for source grouping/domain decomposition.
         grouping_params : GroupingParams
@@ -83,7 +86,7 @@ class Subdomain:
             The list of source groups to be assigned to the ranks.
         """
         if grouping_algorithm == "morton":
-            return MortonSourceGrouping().build_groups(sources, global_grid, grouping_params)
+            return MortonSourceGrouping().build_groups(sources, global_grid, grouping_params, cost_model)
         else:
             raise NotImplementedError(f"Grouping algorithm {grouping_algorithm} not implemented yet.")
 
@@ -108,10 +111,10 @@ class Subdomain:
 
         # TODO: this is a basic assignment. More sophisticated algorithms 
         # should be used for better load balancing.
-        for g in sorted(groups, key=lambda x: x.cost, reverse=True):
+        for g in sorted(groups, key=lambda x: x.comp_cost, reverse=True):
             r = int(np.argmin(rank_costs))
             rank_groups[r].append(g)
-            rank_costs[r] += g.cost
+            rank_costs[r] += g.comp_cost
 
         return rank_groups, rank_costs
 
@@ -128,8 +131,10 @@ class Subdomain:
 
         return self.local_grids
 
-    def run_decomposition(self, global_grid: Grid, sources: List[Source], grouping_algorithm: str = "morton", 
-                          grouping_params: GroupingParams = MortonGroupingParams()) -> None:
+    def run_decomposition(self, global_grid: Grid, sources: List[Source], cost_model: CostModel,
+                          grouping_algorithm: str = "morton",
+                          grouping_params: GroupingParams = MortonGroupingParams(),
+                          ) -> None:
         """ Run the domain decomposition, which consists in building the groups 
         of sources and the corresponding grid subvolumes that belong together, 
         and assigning them to the ranks.
@@ -140,6 +145,8 @@ class Subdomain:
             The full grid of the simulation.
         sources : List[Source]
             The full list of sources in the simulation.
+        cost_model : CostModel
+            The cost model to use for the evaluation of the cost of processing a group of sources.
         grouping_algorithm : str
             The algorithm to use for source grouping/domain decomposition.
         grouping_params : GroupingParams
@@ -148,8 +155,8 @@ class Subdomain:
         self.global_grid = global_grid
         if self.rank == 0:
             # Build the groups of sources to be assigned to the ranks
-            groups = self._build_groups(global_grid, sources, grouping_algorithm=grouping_algorithm, 
-                                        grouping_params=grouping_params)
+            groups = self._build_groups(global_grid, sources, cost_model=cost_model,
+                                        grouping_algorithm=grouping_algorithm, grouping_params=grouping_params)
 
             # Assign the groups to the ranks
             ranks_groups, ranks_costs = self._assign_groups_to_ranks(groups)
