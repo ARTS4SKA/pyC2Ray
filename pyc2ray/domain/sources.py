@@ -61,7 +61,10 @@ class SourceGroup:
         Minimum corner of the cubic axis-aligned bounding box around the group.
     bbox_max : np.ndarray
         Maximum corner of the cubic axis-aligned bounding box around the group.
-    cost : float
+    mem_cost : float
+        Estimated memory cost for this group.
+    comp_cost : float
+        # TODO: to be correcly estimated
         Estimated computational cost for this group.
     """
     def __init__(
@@ -72,7 +75,8 @@ class SourceGroup:
         radius: float,
         bbox_min: np.ndarray,
         bbox_max: np.ndarray,
-        cost: float,
+        mem_cost: float,
+        comp_cost: float
     ) -> None:
         self.id = id
         self.sources = sources
@@ -80,7 +84,8 @@ class SourceGroup:
         self.radius = radius
         self.bbox_min = bbox_min.copy()
         self.bbox_max = bbox_max.copy()
-        self.cost = cost
+        self.mem_cost = mem_cost
+        self.comp_cost = comp_cost
 
     def get_source_ids(self) -> List[int]:
         """Return the list of source global IDs in this group."""
