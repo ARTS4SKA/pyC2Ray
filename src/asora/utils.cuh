@@ -46,6 +46,9 @@ namespace asora {
 
     }  // namespace c
 
+    /// Initialize lookup tables for octahedral indexing.
+    void setup_luts();
+
     /* @brief Fortran/Python-style modulo operation (always non-negative).
      *
      * Reminder: "%" in C is the remainder operator which preserves sign.
