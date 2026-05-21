@@ -1,4 +1,6 @@
+import math
 from contextlib import contextmanager
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -7,95 +9,177 @@ from astropy.cosmology import Planck18 as cosmo
 from astropy.cosmology import z_at_value
 
 from pyc2ray.load_extensions import libasora_He, libc2ray
-from pyc2ray.solver.helium import thermal
+from pyc2ray.solver.helium import (
+    CoolingTables,
+    cooling_rate,
+    cosmo_cooling_rate,
+    get_energy,
+    get_temperature,
+    thermal,
+)
 
 
-def test_thermal_evolution_only_cosmic_expansion_python(data_dir) -> None:
-    ti = cosmo.age(40).cgs.value
-    tf = cosmo.age(2).cgs.value
-    times = np.linspace(ti, tf, 200, endpoint=False)
+def test_get_temperature_and_energy():
+    temp = 1e4  # K
+    ndens = 1e-7  # cm^-3
+    energy = get_energy(temp, ndens)
+    temp_calculated = get_temperature(energy, ndens)
+    assert math.isclose(temp, temp_calculated)
+
+
+def test_cooling_tables(data_dir) -> None:
+    with pytest.raises(FileNotFoundError):
+        CoolingTables.from_dir(data_dir)
+    with pytest.raises(FileNotFoundError):
+        CoolingTables.from_dir(data_dir / "non_existent_directory")
+
+    cool_tables = CoolingTables.from_dir()
+    assert "tables" in Path(cool_tables.tables_directory).parts
+    assert "cooling" in Path(cool_tables.tables_directory).parts
+
+    assert cool_tables.logtemp == (1.0, 0.01, 800)
+    assert len(cool_tables.HI) == 801
+    assert max(cool_tables.HI) < 1.0
+    assert len(cool_tables.HII) == 801
+    assert max(cool_tables.HII) < 1.0
+    assert len(cool_tables.HeI) == 801
+    assert max(cool_tables.HeI) < 1.0
+    assert len(cool_tables.HeII) == 801
+    assert max(cool_tables.HeII) < 1.0
+    assert len(cool_tables.HeIII) == 801
+    assert max(cool_tables.HeIII) < 1.0
+
+
+def test_cooling_rate() -> None:
+    xHI, xHeI, xHeII = 0.9, 0.7, 0.2
+    n_a = 1e-8
+    n_e = n_a * ((1 - xHI) + xHeII + 2 * (1 - xHeI - xHeII))
+    cool_tables = CoolingTables.from_dir()
+
+    rate = cooling_rate(
+        n_a, n_e, xHI, xHeI, xHeII, 1e5, cool_tables, abu_h=0.76, abu_he=0.24
+    )
+    assert math.isclose(rate, 5.79021913e-36)
+
+
+def test_cosmo_cooling_rate() -> None:
+    assert math.isclose(cosmo_cooling_rate(0.2, 0.1), 0.04)
+
+
+# TODO: promote to fixture
+def gen_times(
+    zi: float = 40, zf: float = 2, nt: int = 200
+) -> tuple[np.ndarray, np.ndarray]:
+    ti = cosmo.age(zi).cgs.value
+    tf = cosmo.age(zf).cgs.value
+    times = np.linspace(ti, tf, nt, endpoint=False)
     zreds = z_at_value(cosmo.age, times * u.s).value
-
-    T0 = cosmo.Tcmb(zreds[0]).cgs.value
-
-    # Get analytical solution for the temperature evolution
-    temps_anal = T0 * np.pow(times / times[0], -4 / 3)
-
-    # Get numerical solution using the thermal function
-    dts = np.diff(times)
-    temps_num = np.full_like(temps_anal, T0)
-    for i, (zi, dt) in enumerate(zip(zreds[:-1], dts), 1):
-        Hz = cosmo.H(zi).cgs.value
-        # These combinations of parameters disables heating and cooling rates:
-        # the temperature evolution is only due to cosmic expansion
-        T0, _ = thermal(dt, T0, 1.0, 0.0, 0.0, Hz)
-        temps_num[i] = T0
-
-    # TODO: change this tests once we can update H during the evolution.
-    assert (np.abs(temps_num - temps_anal) / temps_anal < 0.75).all()
-
-    expected_temps = np.load(data_dir / "thermal_cosmic_evolution.npy")
-    assert np.allclose(temps_num, expected_temps)
+    return times, zreds
 
 
-def test_thermal_evolution_only_cosmic_expansion_fortran(data_dir) -> None:
-    ti = cosmo.age(40).cgs.value
-    tf = cosmo.age(2).cgs.value
-    times = np.linspace(ti, tf, 200, endpoint=False)
-    zreds = z_at_value(cosmo.age, times * u.s).value
+class TestThermalEvolution:
+    expected_temps_cosmo_only = "thermal_evolution_cosmo_only.npy"
+    expected_temps = "thermal_evolution.npy"
 
-    T_start = cosmo.Tcmb(zreds[0]).cgs.value
-    T0 = np.array(T_start, dtype=np.float64)
-    TA = T0.copy()
+    def test_cosmo_only_python(self, data_dir) -> None:
+        times, zreds = gen_times()
 
-    # Get analytical solution for the temperature evolution
-    temps_anal = T0 * np.pow(times / times[0], -4 / 3)
+        T0 = cosmo.Tcmb(zreds[0]).cgs.value
 
-    # Get numerical solution using the thermal function
-    dts = np.diff(times)
-    temps_num = np.full_like(temps_anal, T0)
-    for i, (zi, dt) in enumerate(zip(zreds[:-1], dts), 1):
-        Hz = cosmo.H(zi).cgs.value
-        # These combinations of parameters disables heating and cooling rates:
-        # the temperature evolution is only due to cosmic expansion
-        libc2ray.chemistry_he.thermal(dt, T0, TA, 1.0, 0.0, 0.0, Hz)
-        temps_num[i] = T0
+        # Get analytical solution for the temperature evolution
+        temps_anal = T0 * np.pow(times / times[0], -4 / 3)
 
-    # TODO: change this tests once we can update H during the evolution.
-    assert (np.abs(temps_num - temps_anal) / temps_anal < 0.75).all()
+        # Get numerical solution using the thermal function
+        dts = np.diff(times)
+        temps_num = np.full_like(temps_anal, T0)
+        for i, (zi, dt) in enumerate(zip(zreds[:-1], dts), 1):
+            Hz = cosmo.H(zi).cgs.value
+            T0, _ = thermal(dt, T0, 1.0, 0.0, 0.0, Hz, cosmo_only=True)
+            temps_num[i] = T0
 
-    expected_temps = np.load(data_dir / "thermal_cosmic_evolution.npy")
-    assert np.allclose(temps_num, expected_temps)
+        # TODO: change this tests once we can update H during the evolution.
+        assert (np.abs(temps_num - temps_anal) / temps_anal < 0.75).all()
 
+        exp_temps = np.load(data_dir / TestThermalEvolution.expected_temps_cosmo_only)
+        assert np.allclose(temps_num, exp_temps)
 
-def test_thermal_evolution_only_cosmic_expansion_cuda(data_dir) -> None:
-    ti = cosmo.age(40).cgs.value
-    tf = cosmo.age(2).cgs.value
-    times = np.linspace(ti, tf, 200, endpoint=False)
-    zreds = z_at_value(cosmo.age, times * u.s).value
+    def test_cosmo_only_fortran(self, data_dir) -> None:
+        times, zreds = gen_times()
 
-    T_start = cosmo.Tcmb(zreds[0]).cgs.value
-    T0 = np.array(T_start, dtype=np.float64)
+        T_start = cosmo.Tcmb(zreds[0]).cgs.value
+        T0 = np.array(T_start, dtype=np.float64)
+        TA = T0.copy()
 
-    # Get analytical solution for the temperature evolution
-    temps_anal = T0 * np.pow(times / times[0], -4 / 3)
+        # Get analytical solution for the temperature evolution
+        temps_anal = T0 * np.pow(times / times[0], -4 / 3)
 
-    # Get numerical solution using the thermal function
-    dts = np.diff(times)
-    temps_num = np.full_like(temps_anal, T0)
-    for i, (zi, dt) in enumerate(zip(zreds[:-1], dts), 1):
-        Hz = cosmo.H(zi).cgs.value
-        # These combinations of parameters disables heating and cooling rates:
-        # the temperature evolution is only due to cosmic expansion
-        assert libasora_He is not None
-        T0, _ = libasora_He.chemistry_thermal(dt, T0, 1.0, 0.0, 0.0, Hz)
-        temps_num[i] = T0
+        # Get numerical solution using the thermal function
+        dts = np.diff(times)
+        temps_num = np.full_like(temps_anal, T0)
+        for i, (zi, dt) in enumerate(zip(zreds[:-1], dts), 1):
+            Hz = cosmo.H(zi).cgs.value
+            # These combinations of parameters disables heating and cooling rates:
+            # the temperature evolution is only due to cosmic expansion
+            libc2ray.chemistry_he.thermal(dt, T0, TA, 1.0, 0.0, 0.0, Hz)
+            temps_num[i] = T0
 
-    # TODO: change this tests once we can update H during the evolution.
-    assert (np.abs(temps_num - temps_anal) / temps_anal < 0.75).all()
+        # TODO: change this tests once we can update H during the evolution.
+        assert (np.abs(temps_num - temps_anal) / temps_anal < 0.75).all()
 
-    expected_temps = np.load(data_dir / "thermal_cosmic_evolution.npy")
-    assert np.allclose(temps_num, expected_temps)
+        exp_temps = np.load(data_dir / TestThermalEvolution.expected_temps_cosmo_only)
+        assert np.allclose(temps_num, exp_temps)
+
+    def test_cosmo_only_cuda(self, data_dir) -> None:
+        times, zreds = gen_times()
+
+        T_start = cosmo.Tcmb(zreds[0]).cgs.value
+        T0 = np.array(T_start, dtype=np.float64)
+
+        # Get analytical solution for the temperature evolution
+        temps_anal = T0 * np.pow(times / times[0], -4 / 3)
+
+        # Get numerical solution using the thermal function
+        dts = np.diff(times)
+        temps_num = np.full_like(temps_anal, T0)
+        for i, (zi, dt) in enumerate(zip(zreds[:-1], dts), 1):
+            Hz = cosmo.H(zi).cgs.value
+            # These combinations of parameters disables heating and cooling rates:
+            # the temperature evolution is only due to cosmic expansion
+            assert libasora_He is not None
+            T0, _ = libasora_He.chemistry_thermal(dt, T0, 1.0, 0.0, 0.0, Hz)
+            temps_num[i] = T0
+
+        # TODO: change this tests once we can update H during the evolution.
+        assert (np.abs(temps_num - temps_anal) / temps_anal < 0.75).all()
+
+        exp_temps = np.load(data_dir / TestThermalEvolution.expected_temps_cosmo_only)
+        assert np.allclose(temps_num, exp_temps)
+
+    def test_python_fail(self, data_dir) -> None:
+        with pytest.raises(ValueError):
+            thermal(1, 1e4, 1.0, 0.0, 0.0, 1.0)
+        with pytest.raises(ValueError):
+            thermal(1, 1e4, 1.0, 0.0, 0.0, 1.0, (1e-7, 1e-8, 1e-9))
+
+    def test_python(self, data_dir) -> None:
+        times, zreds = gen_times()
+        T0 = cosmo.Tcmb(zreds[0]).cgs.value
+
+        cool_tables = CoolingTables.from_dir()
+        xh = (0.9, 0.7, 0.2)
+        n_a = 1e-8
+        n_e = n_a * ((1 - xh[0]) + xh[2] + 2 * (1 - xh[1] - xh[2]))
+
+        # Get numerical solution using the thermal function
+        dts = np.diff(times)
+        temps = np.full_like(times, T0)
+        for i, (zi, dt) in enumerate(zip(zreds[:-1], dts), 1):
+            Hz = cosmo.H(zi).cgs.value
+            T0, _ = thermal(dt, T0, n_e, n_a, 0.0, Hz, xh, cool_tables)
+            temps[i] = T0
+
+        exp_temps = np.load(data_dir / TestThermalEvolution.expected_temps)
+        assert np.allclose(temps, exp_temps)
 
 
 @contextmanager
