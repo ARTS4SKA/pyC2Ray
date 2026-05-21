@@ -65,7 +65,7 @@ class Grid:
 
 
     @abstractmethod
-    def local_to_global_map(self, local_field: np.ndarray, global_field: np.ndarray) -> None:
+    def local_to_global_map(self, local_field: np.ndarray, global_field: np.ndarray, add: bool = False) -> None:
         """Map a field defined on the local grid to the corresponding field on the global grid.
         
         Parameters
@@ -76,6 +76,9 @@ class Grid:
             The field defined on the global grid to update with the local field values.
             This is an I/O parameter, which is updated in place with the values of the local field 
             corresponding to the grid elements included in the current grid.
+        add : bool
+            If True, the local field values are added to the global field values. If False, the local
+            field values are set to the global field values.
         """
         raise NotImplementedError("Call to local_to_global_map abstract method.")
     

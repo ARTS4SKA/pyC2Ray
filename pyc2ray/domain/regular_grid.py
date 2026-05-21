@@ -110,7 +110,7 @@ class RegularGrid(Grid):
                 clipped_min[2]:clipped_max[2] + 1,
             ]
 
-    def local_to_global_map(self, local_field: np.ndarray, global_field: np.ndarray) -> None:
+    def local_to_global_map(self, local_field: np.ndarray, global_field: np.ndarray, add: bool = False) -> None:
         """Map a field defined on the local grid to the corresponding field on the global grid
         and update the global field by adding the local field values.
 
@@ -124,6 +124,9 @@ class RegularGrid(Grid):
             The field defined on the global grid to update with the local field values.
             This is an I/O parameter, which is updated in place with the values of the local field 
             corresponding to the grid elements included in the current grid.
+        add : bool
+            If True, the local field values are added to the global field values. If False, the local
+            field values are set to the global field values.
         """
         # TODO: add missing shape checks and generalize to vectorial fields
         global_grid_size = global_field.shape[0]  # Assuming cubic grid
@@ -135,10 +138,10 @@ class RegularGrid(Grid):
                         i_global = (self.offset[0] + i_local) % global_grid_size
                         j_global = (self.offset[1] + j_local) % global_grid_size
                         k_global = (self.offset[2] + k_local) % global_grid_size
-                        # TODO: make this behavior configurable
-                        # += is needed when more groups are assigned to the same rank or 
-                        # if subdomain is larger than the global domain (which should not happen in practice)
-                        global_field[i_global, j_global, k_global] += local_field[i_local, j_local, k_local]
+                        if add:
+                            global_field[i_global, j_global, k_global] += local_field[i_local, j_local, k_local]
+                        else:
+                            global_field[i_global, j_global, k_global] = local_field[i_local, j_local, k_local]
 
         else:
             clipped_min = np.maximum(0, self.offset)
@@ -149,15 +152,26 @@ class RegularGrid(Grid):
             local_offset = clipped_min - self.offset
             clipped_shape = clipped_max - clipped_min + 1
 
-            global_field[
-                clipped_min[0]:clipped_max[0] + 1,
-                clipped_min[1]:clipped_max[1] + 1,
-                clipped_min[2]:clipped_max[2] + 1,
-            ] = local_field[
-                local_offset[0]:local_offset[0] + clipped_shape[0],
-                local_offset[1]:local_offset[1] + clipped_shape[1],
-                local_offset[2]:local_offset[2] + clipped_shape[2],
-            ]
+            if add:
+                global_field[
+                    clipped_min[0]:clipped_max[0] + 1,
+                    clipped_min[1]:clipped_max[1] + 1,
+                    clipped_min[2]:clipped_max[2] + 1,
+                ] += local_field[
+                    local_offset[0]:local_offset[0] + clipped_shape[0],
+                    local_offset[1]:local_offset[1] + clipped_shape[1],
+                    local_offset[2]:local_offset[2] + clipped_shape[2],
+                ]
+            else:
+                global_field[
+                    clipped_min[0]:clipped_max[0] + 1,
+                    clipped_min[1]:clipped_max[1] + 1,
+                    clipped_min[2]:clipped_max[2] + 1,
+                ] = local_field[
+                    local_offset[0]:local_offset[0] + clipped_shape[0],
+                    local_offset[1]:local_offset[1] + clipped_shape[1],
+                    local_offset[2]:local_offset[2] + clipped_shape[2],
+                ]
 
 
     def _overlap_volume(self, box_min, box_max) -> float:

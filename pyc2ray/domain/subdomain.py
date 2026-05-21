@@ -199,7 +199,7 @@ class Subdomain:
 
         self.local_grids[subgrid_index].global_to_local_map(global_field, local_field)
 
-    def local_to_global_map(self, subgrid_index: int, local_field: np.ndarray, global_field: np.ndarray) -> None:
+    def local_to_global_map(self, subgrid_index: int, local_field: np.ndarray, global_field: np.ndarray, add: bool = False) -> None:
         """Map a field defined on the local grid to the corresponding field on the global grid
         and update the global field by adding the local field values.
 
@@ -215,6 +215,9 @@ class Subdomain:
             The field defined on the global grid to update with the local field values.
             This is an I/O parameter, which is updated in place with the values of the local field
             corresponding to the grid elements included in the current grid.
+        add : bool
+            If True, the local field values are added to the global field values. If False, the local
+            field values are set to the global field values.
         """
         if self.local_grids is None:
             raise ValueError("No source groups assigned to rank, cannot perform local to global mapping.")
@@ -222,7 +225,7 @@ class Subdomain:
         if subgrid_index >= len(self.local_grids):
             raise ValueError(f"Subgrid index {subgrid_index} out of range for local grids assigned to rank.")
 
-        self.local_grids[subgrid_index].local_to_global_map(local_field, global_field)
+        self.local_grids[subgrid_index].local_to_global_map(local_field, global_field, add)
 
     def get_source_group(self, subdomain_index: int) -> SourceGroup:
         """Get the source group corresponding to the given subdomain index.
