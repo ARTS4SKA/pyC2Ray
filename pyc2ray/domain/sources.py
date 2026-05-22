@@ -55,12 +55,16 @@ class SourceGroup:
         Sources that belong to this group.
     center : np.ndarray
         Center of the enclosing sphere of grouped source spheres.
+        (in physical coordinates).
     radius : float
+        (in physical coordinates).
         Radius of the enclosing sphere.
     bbox_min : np.ndarray
-        Minimum corner of the cubic axis-aligned bounding box around the group.
+        Minimum corner of the cubic axis-aligned bounding box around the group
+        (in physical coordinates).
     bbox_max : np.ndarray
-        Maximum corner of the cubic axis-aligned bounding box around the group.
+        Maximum corner of the cubic axis-aligned bounding box around the group
+        (in physical coordinates).
     mem_cost : float
         Estimated memory cost for this group.
     comp_cost : float
