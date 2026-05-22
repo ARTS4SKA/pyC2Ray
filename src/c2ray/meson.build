@@ -42,6 +42,11 @@ incdir_f2py = run_command(
 ).stdout().strip()
 inc_f2py = include_directories(incdir_f2py)
 
+fortran_flags = ['-DUSE_SUBBOX']
+if get_option('buildtype') in ['debug', 'debugoptimized']
+  fortran_flags += ['-g', '-fbacktrace']
+endif
+
 # Build C2Ray extension module
 py.extension_module(
     'libc2ray',
@@ -52,6 +57,6 @@ py.extension_module(
     dependencies: [py_dep, np_dep],
     install: true,
     subdir: 'pyc2ray/lib',
-    fortran_args: ['-DUSE_SUBBOX'],
+    fortran_args: fortran_flags,
     override_options: {'warning_level': '0'}
 )

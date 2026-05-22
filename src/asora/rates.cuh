@@ -1,6 +1,7 @@
 #pragma once
 
 #include <concepts>
+#include <cuda/std/tuple>
 
 /* @file rates.cuh
  * @brief Photoionization rate calculations for radiative transfer on GPU
@@ -21,13 +22,13 @@ namespace asora {
     template <std::floating_point T>
     struct linspace {
         /// Starting value of the linear space
-        T start;
+        T start = 0;
 
         /// Step size between consecutive points
-        T step;
+        T step = 1;
 
         /// Number of points in the linear space
-        size_t num;
+        size_t num = 1;
 
         /// Calculate the end value of the linear space.
         __host__ __device__ T stop() const { return start + num * step; }
@@ -49,19 +50,34 @@ namespace asora {
         const double *__restrict__ thick;
     };
 
+    // Utility function to perform interpolation between data points of a log-scale
+    // lookup table.
+    __host__ __device__ cuda::std::tuple<size_t, size_t, double> log_table_index(
+        double x, const asora::linspace<double> &logscale
+    );
+
+    // Utility function to read the value of a log-scale table by doing linear
+    // interpolation between data points.
+    __host__ __device__ double log_table_lookup(
+        double x, const double *table, const asora::linspace<double> &logscale
+    );
+
     // Photoionization rate from tables
 
     /* @brief Compute photoionization rate from optical depths using lookup tables.
      *
      * Calculates the photoionization rate for a ray segment through a cell by
      * interpolating pre-computed tables. The method automatically selects between
-     * optically thin and thick approximations based on the optical depth difference:
+     * optically thin and thick approximations based on the optical depth
+     * difference:
      * - Thin regime (|τ_out - τ_in| ≤ 10^-7): Uses linear approximation
-     * - Thick regime (|τ_out - τ_in| > 10^-7): Uses difference of cumulative integrals
+     * - Thick regime (|τ_out - τ_in| > 10^-7): Uses difference of cumulative
+     * integrals
      *
      * @param[in] tau_in   Optical depth at ray entry into the cell
      * @param[in] tau_out  Optical depth at ray exit from the cell
-     * @param[in] tables   Structure containing pointers to thin and thick lookup tables
+     * @param[in] tables   Structure containing pointers to thin and thick lookup
+     * tables
      * @param[in] logtau   Linear space specification for the logarithmic τ-grid
      *
      * @return Photoionization rate for this cell segment
@@ -78,8 +94,8 @@ namespace asora {
     /* @brief Analytical photoionization rate for grey-opacity test cases.
      *
      * Computes photoionization rate using an analytical formula that assumes
-     * monochromatic radiation. This version bypasses lookup tables and is used for code
-     * validation and testing
+     * monochromatic radiation. This version bypasses lookup tables and is used for
+     * code validation and testing
      *
      * @param[in] tau_in   Optical depth at ray entry into the cell
      * @param[in] tau_out  Optical depth at ray exit from the cell

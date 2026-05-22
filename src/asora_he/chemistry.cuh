@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../asora/rates.cuh"
+
 #include <cuda/std/array>
 
 /* @file chemistry.cuh
@@ -41,14 +43,30 @@ namespace asora {
         std::pair<double, double> f_lya_range = {0.01, 1.0};
 
         // Cosmological abundances
-        double abu_he = 0.074;
         double abu_h = 0.926;
+        double abu_he = 0.074;
         double abu_c = 7.1e-7;
 
         // Relative energy change threshold controlling iteration/convergence
         double relative_denergy = 0.1;
         // Adiabatic index
         double gamma = 5. / 3.;
+
+        // Flag to enable/disable non-cosmological cooling in the thermal solver.
+        bool cosmo_only = false;
+    };
+
+    /* @brief Container for cooling rate lookup tables.
+     *
+     * Holds pointers to data-fitted tables for cooling rates of different gas species.
+     * Both tables must be allocated in device memory before use.
+     */
+    struct cooling_tables {
+        const double* __restrict__ HI = nullptr;
+        const double* __restrict__ HII = nullptr;
+        const double* __restrict__ HeI = nullptr;
+        const double* __restrict__ HeII = nullptr;
+        const double* __restrict__ HeIII = nullptr;
     };
 
     /* @brief Integrate thermal evolution over a timestep.
@@ -64,16 +82,15 @@ namespace asora {
      * @param Hz Hubble parameter in cgs
      * @param p Parameter set (cross sections, abundances, etc.)
      * @param min_temp Floor temperature (default: 1.0)
-     * @param relative_denergy Relative energy change threshold controlling
-     * iteration/convergence
      * @param max_iterations Maximum number of iterations allowed
      *
      * @return {end temperature, average temperature}
      */
     __host__ __device__ cuda::std::array<double, 2> thermal(
         double dt, double temp_start, double ndens_elec, double ndens_atom,
-        double heating, double Hz, const parameters& p = {}, double min_temp = 1.0,
-        size_t max_iterations = 10'000
+        double heating, double Hz, const cuda::std::array<double, 3>& xh,
+        const cooling_tables& rates, const linspace<double>& logscale,
+        const parameters& p = {}, double min_temp = 1.0, size_t max_iterations = 10'000
     );
 
     /* @brief Chemistry solution.
@@ -162,7 +179,7 @@ namespace asora {
         double dt, double Hz, const double* __restrict__ temp,
         const double* __restrict__ ndens, double3ptr xh, double3ptr xh_av,
         double3ptr xh_int, const double3ptr& phi_ion, const double3ptr& phi_heat,
-        const double* __restrict__ clump, parameters p, size_t n_cells,
+        const double* __restrict__ clump, const parameters& p, size_t n_cells,
         size_t block_size
     );
 

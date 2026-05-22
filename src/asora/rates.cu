@@ -1,22 +1,18 @@
 #include "rates.cuh"
 
-namespace {
+namespace asora {
 
-    // Utility function to look up the integral value corresponding to an
-    // optical depth τ by doing linear interpolation.
-    // Recall that tau(0) = 0 and tau(1:num_tau) ~ logspace(minlogtau,maxlogtau)
-    // (so in reality the table has size num_tau+1)
-    __device__ double photo_lookuptable(
-        const double *table, double tau, const asora::linspace<double> &logtau
+    __host__ __device__ cuda::std::tuple<size_t, size_t, double> log_table_index(
+        double x, const asora::linspace<double> &logscale
     ) {
         // Clamp the log(tau) to be within the table range
         // (tau values below the minimum are set to the minimum)
-        auto ltau = max(logtau.start, log10(tau));
+        auto lx = max(logscale.start, log10(x));
 
-        // Map ltau to its position in the table
+        // Map lx to its position in the table
         auto interp =
-            min(static_cast<double>(logtau.num),
-                1.0 + (ltau - logtau.start) / logtau.step);
+            min(static_cast<double>(logscale.num),
+                1.0 + (lx - logscale.start) / logscale.step);
 
         // Split the continuous index into integer and fractional parts
         // integral = floor of the index, used for table lookup
@@ -27,14 +23,17 @@ namespace {
         // Determine the two table indices for linear interpolation and perform the
         // interpolation
         auto i0 = static_cast<size_t>(integral);
-        auto i1 = min(logtau.num, i0 + 1);
+        auto i1 = min(logscale.num, i0 + 1);
 
-        return (1 - residual) * table[i0] + residual * table[i1];
+        return {i0, i1, residual};
     }
 
-}  // namespace
-
-namespace asora {
+    __host__ __device__ double log_table_lookup(
+        double x, const double *table, const asora::linspace<double> &logscale
+    ) {
+        auto &&[i0, i1, p] = log_table_index(x, logscale);
+        return (1 - p) * table[i0] + p * table[i1];
+    }
 
     // Compute photoionization rate from in/out column density by looking up
     // values of the integral ∫L_v*e^(-τ_v)/hv in precalculated tables.
@@ -44,11 +43,11 @@ namespace asora {
     ) {
         // Check if the cell is optically thin - simplified calculation
         if (abs(tau_out - tau_in) <= tau_photo_limit)
-            return (tau_out - tau_in) * photo_lookuptable(tables.thin, tau_out, logtau);
+            return (tau_out - tau_in) * log_table_lookup(tau_out, tables.thin, logtau);
 
         // Cell is optically thick - use both tables
-        auto phi_photo_in = photo_lookuptable(tables.thick, tau_in, logtau);
-        auto phi_photo_out = photo_lookuptable(tables.thick, tau_out, logtau);
+        auto phi_photo_in = log_table_lookup(tau_in, tables.thick, logtau);
+        auto phi_photo_out = log_table_lookup(tau_out, tables.thick, logtau);
         return phi_photo_in - phi_photo_out;
     }
 

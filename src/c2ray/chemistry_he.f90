@@ -34,12 +34,13 @@ module chemistry_he
 
 contains
 
-   subroutine thermal(dt, end_temper, avg_temper, ndens_el, ndens_atom, heat, Hz)
+   subroutine thermal(dt, end_temper, avg_temper, ndens_el, ndens_atom, heat, Hz, cosmo_only)
       ! This is the wrapper that appears in chemistry_he
       real(real64), intent(in)    :: dt, ndens_el, ndens_atom, heat, Hz
       real(real64), intent(inout) :: end_temper, avg_temper
+      logical(kind=4), intent(in) :: cosmo_only
 
-      call thermal_impl(dt, end_temper, avg_temper, ndens_el, ndens_atom, heat, Hz)
+      call thermal_impl(dt, end_temper, avg_temper, ndens_el, ndens_atom, heat, Hz, cosmo_only)
    end subroutine thermal
 
    ! TODO: pass the column density to global
@@ -49,7 +50,7 @@ contains
                           xHeIII, xHeIII_av, xHeIII_intermed, &
                           phi_HI_ion, phi_HeI_ion, phi_HeII_ion, &
                           heat_HI_ion, heat_HeI_ion, heat_HeII_ion, &
-                          clump, conv_flag, m1, m2, m3)
+                          clump, cosmo_only, conv_flag, m1, m2, m3)
       ! Subroutine Arguments
       real(kind=real64), intent(in) :: dt                         ! time step
       real(kind=real64), intent(in) :: Hz                         ! Hubble function at the corresponding redshift (in cgs)
@@ -72,6 +73,8 @@ contains
       real(kind=real64), intent(in) :: heat_HeI_ion(m1, m2, m3)        ! HeI Photo-heating rate for the whole grid
       real(kind=real64), intent(in) :: heat_HeII_ion(m1, m2, m3)       ! HeII Photo-heating rate for the whole grid
       real(kind=real64), intent(in) :: clump(m1, m2, m3)            ! Clumping factor field (even if it's just a constant it has to be a 3D cube)
+      logical(kind=4), intent(in) :: cosmo_only    ! Whether to only include cosmological cooling
+
       integer, intent(in) :: m1                                   ! mesh size x (hidden by f2py)
       integer, intent(in) :: m2                                   ! mesh size y (hidden by f2py)
       integer, intent(in) :: m3                                   ! mesh size z (hidden by f2py)
@@ -94,7 +97,7 @@ contains
                                     xHeIII, xHeIII_av, xHeIII_intermed, &
                                     phi_HI_ion, phi_HeI_ion, phi_HeII_ion, &
                                     heat_HI_ion, heat_HeI_ion, heat_HeII_ion, &
-                                    clump, conv_flag, m1, m2, m3)
+                                    clump, cosmo_only, conv_flag, m1, m2, m3)
             end do
          end do
       end do
@@ -107,7 +110,7 @@ contains
                               xHeIII, xHeIII_av, xHeIII_intermed, &
                               phi_HI_ion, phi_HeI_ion, phi_HeII_ion, &
                               heat_HI_ion, heat_HeI_ion, heat_HeII_ion, &
-                              clump, conv_flag, m1, m2, m3)
+                              clump, cosmo_only, conv_flag, m1, m2, m3)
       ! Subroutine Arguments
       real(kind=real64), intent(in) :: dt                         ! time step
       real(kind=real64), intent(in) :: Hz                         ! Hubble function at the corresponding redshift (in cgs)
@@ -131,6 +134,8 @@ contains
       real(kind=real64), intent(in) :: heat_HeI_ion(m1, m2, m3)         ! HeI Photo-heating rate for the whole grid
       real(kind=real64), intent(in) :: heat_HeII_ion(m1, m2, m3)        ! HeII Photo-heating rate for the whole grid
       real(kind=real64), intent(in) :: clump(m1, m2, m3)             ! Clumping factor field (even if it's just a constant it has to be a 3D cube)
+      logical(kind=4), intent(in) :: cosmo_only   ! Whether to only include cosmological cooling
+
       integer, intent(inout) :: conv_flag                          ! convergence counter
       integer, intent(in) :: m1                                   ! mesh size x (hidden by f2py)
       integer, intent(in) :: m2                                   ! mesh size y (hidden by f2py)
@@ -178,7 +183,7 @@ contains
                         xHeIII_p, xHeIII_av_p, xHeIII_intermed_p, &
                         phi_HI_ion_p, phi_HeI_ion_p, phi_HeII_ion_p, &
                         heat_HI_ion_p, heat_HeI_ion_p, heat_HeII_ion_p, &
-                        clump_p)
+                        clump_p, cosmo_only)
 
       ! Check for convergence (global flag). In original, convergence is tested using neutral fraction, but testing with ionized fraction should be equivalent.
       ! TODO: add temperature convergence criterion when non-isothermal mode is added later on.
@@ -228,7 +233,7 @@ contains
                            xHeIII_p, xHeIII_av_p, xHeIII_intermed_p, &
                            phi_HI_ion_p, phi_HeI_ion_p, phi_HeII_ion_p, &
                            heat_HI_ion_p, heat_HeI_ion_p, heat_HeII_ion_p, &
-                           clump_p)
+                           clump_p, cosmo_only)
       ! Subroutine Arguments
       real(kind=real64), intent(in) :: dt                    ! time step
       real(kind=real64), intent(in) :: Hz                    ! Hubble function at the corresponding redshift (in cgs)
@@ -241,6 +246,7 @@ contains
       real(kind=real64), intent(in) :: heat_HI_ion_p, heat_HeI_ion_p, heat_HeII_ion_p     ! Photo-heating rate for the whole grid
       real(kind=real64), intent(in) :: clump_p             ! Local clumping factor
       !real(kind=real64), intent(in) :: abu_c                 ! Carbon abundance
+      logical(kind=4), intent(in) :: cosmo_only    ! Whether to only include cosmological cooling
 
       ! Local quantities
       real(kind=real64) :: nHI_p, nHeI_p, nHeII_p            ! HI, HeI, and HeII number density
@@ -294,7 +300,7 @@ contains
          de = electrondens(ndens_p, xHII_av_p, xHeII_av_p, xHeIII_av_p, abu_h, abu_he, abu_c)
 
          ! TODO: Call for thermal evolution. It takes the old values and outputs new values without overwriting the old values.
-         call thermal(dt, temperature_end, temperature_avg, de, ndens_p, heating, Hz)
+         call thermal(dt, temperature_end, temperature_avg, de, ndens_p, heating, Hz, cosmo_only)
 
          ! TODO: multiphase is necessary to correctly calculate the differantial brightness. Hannah's works is on github with helium: https://github.com/garrelt/C2-Ray3Dm1D_Helium/blob/multiphase/code/files_for_3D/evolve_data.F90#L37-L39
 

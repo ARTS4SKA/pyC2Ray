@@ -24,11 +24,26 @@ namespace {
         return energy * (gamma - 1.0) / (c::k_B<> * ndens);
     }
 
-    [[deprecated("Must be replaced with correct cooling rate tables.")]]
     __host__ __device__ double cooling_rate(
-        double temp, double ndens_atom, double ndens_elec
+        double temp, double ndens_atom, double ndens_elec,
+        const cuda::std::array<double, 3>& xh, const cooling_tables& rates,
+        const linspace<double>& logscale, double abu_h, double abu_he
     ) {
-        return ndens_atom * ndens_elec * temp;
+        auto&& [i0, i1, p] = log_table_index(temp, logscale);
+        auto q = 1 - p;
+
+        auto& [xHI, xHeI, xHeII] = xh;
+        auto xHII = 1.0 - xHI;
+        auto xHeIII = 1.0 - xHeI - xHeII;
+
+        auto rHI = xHI * (rates.HI[i0] * q + rates.HI[i1] * p);
+        auto rHII = xHII * (rates.HII[i0] * q + rates.HII[i1] * p);
+        auto rHeI = xHeI * (rates.HeI[i0] * q + rates.HeI[i1] * p);
+        auto rHeII = xHeII * (rates.HeII[i0] * q + rates.HeII[i1] * p);
+        auto rHeIII = xHeIII * (rates.HeIII[i0] * q + rates.HeIII[i1] * p);
+
+        return ndens_atom * ndens_elec *
+               ((rHI + rHII) * abu_h + (rHeI + rHeII + rHeIII) * abu_he);
     }
 
     __host__ __device__ double cosmo_cooling_rate(double energy, double Hz) {
@@ -47,8 +62,9 @@ namespace asora {
 
     __host__ __device__ cuda::std::array<double, 2> thermal(
         double dt, double temp_start, double ndens_elec, double ndens_atom,
-        double heating, double Hz, const parameters& p, double min_temp,
-        size_t max_iterations
+        double heating, double Hz, const cuda::std::array<double, 3>& xh,
+        const cooling_tables& rates, const linspace<double>& logscale,
+        const parameters& p, double min_temp, size_t max_iterations
     ) {
         // Thermal process only if temperature > min_temp
         if (temp_start <= min_temp) return {temp_start, temp_start};
@@ -66,8 +82,12 @@ namespace asora {
         while (max_iterations > 0 && tot_time < dt * (1.0 - 1e-6)) {
             --max_iterations;
 
-            auto rate = heating - cooling_rate(temp_end, ndens_atom, ndens_elec) -
-                        cosmo_cooling_rate(ui, Hz);
+            auto rate = heating - cosmo_cooling_rate(ui, Hz);
+            if (!p.cosmo_only)
+                rate -= cooling_rate(
+                    temp_end, ndens_atom, ndens_elec, xh, rates, logscale, p.abu_h,
+                    p.abu_he
+                );
 
             // Thermal time scale. Limit energy change to fraction relative_denergy
             // Don't integrate longer than remaining time.
@@ -409,8 +429,13 @@ namespace asora {
             ndens_elec = electron_density(ndens, xh_av_new, p.abu_h, p.abu_he, p.abu_c);
 
             // Update temperature
-            cuda::std::tie(temp_end, cuda::std::ignore) =
-                thermal(dt, temp_end, ndens_elec, ndens, heating, Hz, p);
+            // NOTE: Force only Cosmo cooling for now
+            auto ploc = p;
+            ploc.cosmo_only = true;
+            cuda::std::tie(temp_end, cuda::std::ignore) = thermal(
+                dt, temp_end, ndens_elec, ndens, heating, Hz,
+                {xh_av_new.x, xh_av_new.y, xh_av_new.z}, {}, {}, ploc
+            );
 
             if (check_convergence_local(xh_av_new, xh_av, temp_end, temp_prev))
                 max_iterations = 0;
@@ -478,7 +503,7 @@ namespace asora {
         double dt, double Hz, const double* __restrict__ temp,
         const double* __restrict__ ndens, double3ptr xh, double3ptr xh_av,
         double3ptr xh_int, const double3ptr& phi_ion, const double3ptr& phi_heat,
-        const double* __restrict__ clump, parameters p, size_t n_cells,
+        const double* __restrict__ clump, const parameters& p, size_t n_cells,
         size_t block_size
     ) {
         // Initialize and copy const data.

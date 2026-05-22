@@ -94,12 +94,12 @@ static PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject 
     size_t block_size = 256;
 
     if (!PyArg_ParseTuple(
-            args, "dOOOkkkkdOOOOOOOOOkkddik|k", &R, &sig_HI, &sig_HeI, &sig_HeII,
+            args, "dOOOkkkkdOOOOOOOOOkkddkk|k", &R, &sig_HI, &sig_HeI, &sig_HeII,
             &nbin1, &nbin2, &nbin3, &num_freq, &dr, &xHII_av, &xHeII_av, &xHeIII_av,
             &phion_HI, &phion_HeI, &phion_HeII, &pheat_HI, &pheat_HeI, &pheat_HeII,
             &num_src, &m1, &minlogtau, &dlogtau, &num_tau, &grid_size, &block_size
         ))
-        return NULL;
+        return nullptr;
 
     // Type checking
     if (!numpy_check<double>(sig_HI) || !numpy_check<double>(sig_HeI) ||
@@ -235,21 +235,68 @@ PyObject *asora_source_data_to_device([[maybe_unused]] PyObject *self, PyObject 
                : nullptr;
 }
 
-PyObject *asora_chemistry_thermal([[maybe_unused]] PyObject *self, PyObject *args) {
+PyObject *asora_chemistry_thermal(
+    [[maybe_unused]] PyObject *self, PyObject *args, PyObject *kwargs
+) {
     double dt;
     double temp_start;
     double ndens_elec;
     double ndens_atom;
     double heating;
     double Hz;
+    // Not mandatory parameters if cosmo_only is true
+    double xHI = 0.0;
+    double xHeI = 0.0;
+    double xHeII = 0.0;
+    PyArrayObject *HI_table = nullptr;
+    PyArrayObject *HII_table = nullptr;
+    PyArrayObject *HeI_table = nullptr;
+    PyArrayObject *HeII_table = nullptr;
+    PyArrayObject *HeIII_table = nullptr;
+    double t_start = 0.0;
+    double t_step = 1.0;
+    size_t t_num = 1;
+    double abu_h = 0.926;
+    double abu_he = 0.074;
+    int cosmo_only = false;
 
-    if (!PyArg_ParseTuple(
-            args, "dddddd", &dt, &temp_start, &ndens_elec, &ndens_atom, &heating, &Hz
+    static const char *kwlist[] = {"",       "",      "",      "",       "",
+                                   "",       "",      "",      "",       "",
+                                   "",       "",      "",      "",       "t_start",
+                                   "t_step", "t_num", "abu_h", "abu_he", "cosmo_only",
+                                   NULL};
+
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwargs, "dddddd|dddOOOOOddkddp", const_cast<char **>(kwlist), &dt,
+            &temp_start, &ndens_elec, &ndens_atom, &heating, &Hz, &xHI, &xHeI, &xHeII,
+            &HI_table, &HII_table, &HeI_table, &HeII_table, &HeIII_table, &t_start,
+            &t_step, &t_num, &abu_h, &abu_he, &cosmo_only
         ))
-        return NULL;
+        return nullptr;
 
-    auto &&[temp_end, temp_avg] =
-        asora::thermal(dt, temp_start, ndens_elec, ndens_atom, heating, Hz);
+    asora::cooling_tables tables{};
+    if (!cosmo_only) {
+        // Type checking for cooling tables
+        if (!numpy_check<double>(HI_table) || !numpy_check<double>(HII_table) ||
+            !numpy_check<double>(HeI_table) || !numpy_check<double>(HeII_table) ||
+            !numpy_check<double>(HeIII_table))
+            return nullptr;
+        tables = {
+            static_cast<double *>(PyArray_DATA(HI_table)),
+            static_cast<double *>(PyArray_DATA(HII_table)),
+            static_cast<double *>(PyArray_DATA(HeI_table)),
+            static_cast<double *>(PyArray_DATA(HeII_table)),
+            static_cast<double *>(PyArray_DATA(HeIII_table)),
+        };
+    }
+
+    // This is the host version of thermal, so the cooling tables do not need to
+    // reside in device memory.
+    auto &&[temp_end, temp_avg] = asora::thermal(
+        dt, temp_start, ndens_elec, ndens_atom, heating, Hz, {xHI, xHeI, xHeII}, tables,
+        {t_start, t_step, t_num},
+        {.abu_h = abu_h, .abu_he = abu_he, .cosmo_only = static_cast<bool>(cosmo_only)}
+    );
 
     return Py_BuildValue("dd", temp_end, temp_avg);
 }
@@ -276,13 +323,14 @@ PyObject *asora_chemistry_global_pass([[maybe_unused]] PyObject *self, PyObject 
     PyArrayObject *pheat_HeI;
     PyArrayObject *pheat_HeII;
     PyArrayObject *clump;
+    int cosmo_only = false;
     size_t block_size = 512;
 
     if (!PyArg_ParseTuple(
-            args, "ddOOOOOOOOOOOOOOOOOOO|k", &dt, &Hz, &ndens, &temp, &temp_av, &xHII,
+            args, "ddOOOOOOOOOOOOOOOOOOO|pk", &dt, &Hz, &ndens, &temp, &temp_av, &xHII,
             &xHII_av, &xHII_int, &xHeII, &xHeII_av, &xHeII_int, &xHeIII, &xHeIII_av,
             &xHeIII_int, &phion_HI, &phion_HeI, &phion_HeII, &pheat_HI, &pheat_HeI,
-            &pheat_HeII, &clump, &block_size
+            &pheat_HeII, &clump, &cosmo_only, &block_size
         ))
         return nullptr;
 
@@ -328,8 +376,8 @@ PyObject *asora_chemistry_global_pass([[maybe_unused]] PyObject *self, PyObject 
             {xHII_av_data, xHeII_av_data, xHeIII_av_data},
             {xHII_int_data, xHeII_int_data, xHeIII_int_data},
             {phion_HI_data, phion_HeI_data, phion_HeII_data},
-            {pheat_HI_data, pheat_HeI_data, pheat_HeII_data}, clump_data, {}, n_cells,
-            block_size
+            {pheat_HI_data, pheat_HeI_data, pheat_HeII_data}, clump_data,
+            {.cosmo_only = static_cast<bool>(cosmo_only)}, n_cells, block_size
         );
         return Py_BuildValue("k", conv_flag);
     } catch (const std::exception &e) {
@@ -343,9 +391,6 @@ PyObject *asora_chemistry_global_pass([[maybe_unused]] PyObject *self, PyObject 
 extern "C" {
 #endif  // __cplusplus
 
-// ========================================================================
-// Define module functions and initialization function
-// ========================================================================
 static PyMethodDef asoraMethods[] = {
     {"do_all_sources", asora_do_all_sources, METH_VARARGS, "Do OCTA raytracing (GPU)"},
     {"device_init", asora_device_init, METH_VARARGS,
@@ -359,7 +404,8 @@ static PyMethodDef asoraMethods[] = {
      "Copy radiation tables to the device"},
     {"source_data_to_device", asora_source_data_to_device, METH_VARARGS,
      "Copy source data to the device"},
-    {"chemistry_thermal", asora_chemistry_thermal, METH_VARARGS, "Solve chemistry ODE"},
+    {"chemistry_thermal", (PyCFunction)asora_chemistry_thermal,
+     METH_VARARGS | METH_KEYWORDS, "Solve chemistry ODE"},
     {"chemistry_global_pass", asora_chemistry_global_pass, METH_VARARGS,
      "Solve chemistry ODE"},
     {NULL, NULL, 0, NULL} /* Sentinel */
