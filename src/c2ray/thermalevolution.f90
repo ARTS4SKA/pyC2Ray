@@ -17,7 +17,7 @@ module thermalevolution
 
 contains
    ! calculates the thermal evolution of one grid point
-   subroutine thermal(dt, end_temper, avg_temper, ndens_el, ndens_atom, heat, Hz)
+   subroutine thermal(dt, end_temper, avg_temper, ndens_el, ndens_atom, heat, Hz, cosmo_only)
 
       ! The time step
       real(kind=real64), intent(in) :: dt
@@ -33,6 +33,8 @@ contains
       real(kind=real64), intent(in) :: heat
       ! Hubble function at the corresponding redshift (in cgs)
       real(kind=real64), intent(in) :: Hz
+      ! Whether to only include cosmological cooling
+      logical(kind=4), intent(in) :: cosmo_only
 
       ! initial temperature
       real(kind=real64) :: initial_temp
@@ -77,11 +79,14 @@ contains
       niter = 0
 
       ! thermal process loop begins
-      do while (niter < 10000 .and. cumulative_time < dt*(1.0 + 1e-6))
+      do while (niter < 10000 .and. cumulative_time < dt*(1.0 - 1e-6))
 
          ! update cooling rate from cooling tables and add adeabatic cooling (cosmological expansion)
          ! TODO: check that cosmo_cool_rate is not to be updated at each step
-         cooling = cooling_rate(ndens_atom, ndens_el, end_temper) + cosmo_cool(internal_energy, Hz)
+         cooling = cosmo_cool(internal_energy, Hz)
+         if (.not. cosmo_only) then
+            cooling = cooling + cooling_rate(ndens_atom, ndens_el, end_temper)
+         end if
          rate = heating - cooling
 
          ! Find total energy change rate
