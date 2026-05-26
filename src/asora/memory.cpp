@@ -58,6 +58,7 @@ namespace asora {
         safe_cuda(cudaGetDeviceCount(&device_count));
         self._gpu_id = rank % device_count;
         safe_cuda(cudaSetDevice(self._gpu_id));
+        setup_luts();
         return self;
     }
 
