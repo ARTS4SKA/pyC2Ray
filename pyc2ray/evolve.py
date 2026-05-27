@@ -1,47 +1,47 @@
-import array
+"""This file contains the main time-evolution subroutine, which updates
+the ionization state of the whole grid over one timestep, using the
+C2Ray method.
+
+The raytracing step can use either the sequential (subbox, cubic)
+technique which runs in Fortran on the CPU or the accelerated technique,
+which runs using the ASORA library on the GPU.
+
+When using the latter, some notes apply:
+For performance reasons, the program minimizes the frequency at which
+data is moved between the CPU and the GPU (this is a big bottleneck).
+In particular, the radiation tables, which in principle shouldn't change
+over the run of a simulation, need to be copied separately to the GPU
+using the photo_table_to_device() method of the module. This is done
+automatically when using the C2Ray subclasses but must be done manually
+if for some reason you are calling the evolve3D routine directly without
+using the C2Ray subclasses.
+
+This file defines two variants of evolve3D: The reference, single-gpu
+version, and a MPI version which enables usage on multiple GPU nodes.
+"""
+
 import logging
 import time
 
 import numpy as np
 from mpi4py import MPI
 
-from .asora_core import is_device_init
-from .domain.cost_model import pyC2RayCostModel
-from .domain.sources import Source
-from .domain.subdomain import Subdomain
-from .domain.morton_grouping import MortonGroupingParams
-from .domain.regular_grid import RegularGrid
-from .load_extensions import libasora, libc2ray
-from .utils import display_time
-from .utils.logutils import disable_newline
-from .utils.sourceutils import FloatArray, IntArray, format_sources
+from pyc2ray.asora_core import is_device_init
+from pyc2ray.load_extensions import libasora, libc2ray
+from pyc2ray.utils.logutils import allow_rank_logging
+from pyc2ray.utils.other_utils import display_seconds, distribute_jobs
+from pyc2ray.utils.sourceutils import FloatArray, IntArray, format_sources
+
+from pyc2ray.domain.cost_model import pyC2RayCostModel
+from pyc2ray.domain.sources import Source
+from pyc2ray.domain.subdomain import Subdomain
+from pyc2ray.domain.morton_grouping import MortonGroupingParams
+from pyc2ray.domain.regular_grid import RegularGrid
+
 
 __all__ = ["evolve3D"]
 
 logger = logging.getLogger(__name__)
-
-# =========================================================================
-# This file contains the main time-evolution subroutine, which updates
-# the ionization state of the whole grid over one timestep, using the
-# C2Ray method.
-#
-# The raytracing step can use either the sequential (subbox, cubic)
-# technique which runs in Fortran on the CPU or the accelerated technique,
-# which runs using the ASORA library on the GPU.
-#
-# When using the latter, some notes apply:
-# For performance reasons, the program minimizes the frequency at which
-# data is moved between the CPU and the GPU (this is a big bottleneck).
-# In particular, the radiation tables, which in principle shouldn't change
-# over the run of a simulation, need to be copied separately to the GPU
-# using the photo_table_to_device() method of the module. This is done
-# automatically when using the C2Ray subclasses but must be done manually
-# if for some reason you are calling the evolve3D routine directly without
-# using the C2Ray subclasses.
-#
-# This file defines two variants of evolve3D: The reference, single-gpu
-# version, and a MPI version which enables usage on multiple GPU nodes.
-# =========================================================================
 
 
 def evolve3D(
@@ -77,12 +77,12 @@ def evolve3D(
 ) -> tuple[FloatArray, FloatArray]:
     """Evolves the ionization fraction over one timestep for the whole grid
 
-    Warning: Calling this function with use_gpu = True assumes that the radiation
-    tables have previously been copied to the GPU using photo_table_to_device()
+    Warning: Calling this function with use_gpu = True assumes that the radiation tables have previously been
+    copied to the GPU using photo_table_to_device()
 
     Parameters
     ----------
-    dt : float
+    dt
         Timestep in seconds
     dr : float
         Cell dimension in each direction in cm
@@ -96,81 +96,82 @@ def evolve3D(
         Whether or not compute evolution by using source grouping and domain decomposition.
     use_gpu : bool
         Whether or not to use the GPU-accelerated ASORA library for raytracing.
-    max_subbox : int
-        Maximum subbox to raytrace when using CPU cubic raytracing. Has no effect when use_gpu is true
-    subboxsize : int
+    max_subbox
+        Maximum subbox to raytrace when using CPU cubic raytracing. Has no effect when use_gpu is true.
+    subboxsize
         ...
-    loss_fraction : float
-        Fraction of remaining photons below we stop ray-tracing (subbox technique). Has no effect when use_gpu is true
-    temp : 3D-array
-        The initial temperature of each cell in K
-    ndens : 3D-array
-        The hydrogen number density of each cell in cm^-3
-    xh : 3D-array
-        The initial ionized fraction of each cell
-    photo_thin_table : 1D-array
+    loss_fraction
+        Fraction of remaining photons below we stop ray-tracing (subbox technique). Has no effect when use_gpu is true.
+    temp
+        The initial temperature of each cell in K.
+    ndens
+        The hydrogen number density of each cell in cm^-3.
+    xh
+        The initial ionized fraction of each cell.
+    photo_thin_table
         Tabulated values of the integral ∫L_v*e^(-τ_v)/hv. When using GPU, this table needs to have been copied to the GPU
-        in a separate (previous) step, using photo_table_to_device()
-    minlogtau : float
-        Base 10 log of the minimum value of the table in τ (excluding τ = 0)
-    dlogtau : float
-        Step size of the logτ-table
-    R_max_LLS : float
+        in a separate (previous) step, using photo_table_to_device().
+    minlogtau
+        Base 10 log of the minimum value of the table in τ (excluding τ = 0).
+    dlogtau
+        Step size of the logτ-table.
+    R_max_LLS
         Value of maximum comoving distance for photons from source (type 3 LLS in original C2Ray). This value is
-        given in cell units, but doesn't need to be an integer
-    convergence_fraction : float
-        Which fraction of the cells can be left unconverged to improve performance (usually ~ 1e-4)
-    sig : float
-        Constant photoionization cross-section of hydrogen in cm^2. TODO: replace by general (frequency-dependent)
-        case.
-    bh00 : float
-        Hydrogen recombination parameter at 10^4 K in the case B OTS approximation
-    albpow : float
-        Power-law index for the H recombination parameter
-    colh0 : float
-        Hydrogen collisional ionization parameter
-    temph0 : float
-        Hydrogen ionization energy expressed in K
-    abu_c : float
-        Carbon abundance
+        given in cell units, but doesn't need to be an integer.
+    convergence_fraction
+        Which fraction of the cells can be left unconverged to improve performance (usually ~ 1e-4).
+    sig
+        Constant photoionization cross-section of hydrogen in cm^2.
+    bh00
+        Hydrogen recombination parameter at 10^4 K in the case B OTS approximation.
+    albpow
+        Power-law index for the H recombination parameter.
+    colh0
+        Hydrogen collisional ionization parameter.
+    temph0
+        Hydrogen ionization energy expressed in K.
+    abu_c
+        Carbon abundance.
 
     Returns
     -------
-    xh_new : 3D-array
-        The updated ionization fraction of each cell at the end of the timestep
-    phi_ion : 3D-array
-        Photoionization rate of each cell due to all sources
+    xh_int : 3D-array of dtype float
+        The updated ionization fraction of each cell at the end of the timestep.
+    phi_ion : 3D-array of dtype float
+        Photoionization rate of each cell due to all sources.
     """
+    rank_prefix = f"[Rank={rank}] " if use_mpi else ""
 
-    # Allow a call with GPU only if
-    # 1. the asora library is present and
-    # 2. the GPU memory has been allocated using device_init()
     if use_gpu and not is_device_init():
         raise RuntimeError(
             "GPU not initialized. Please initialize it by calling device_init(N)"
         )
 
-    # Set some constant sizes
-    NumSrc = src_flux.shape[0]  # Number of sources
+    # Problem dimensions
     N = temp.shape[0]  # Mesh size
-    NumCells = N * N * N  # Number of cells/points
-    conv_flag = NumCells  # Flag that counts the number of non-converged cells (initialized to non-convergence)
-    NumTau = photo_thin_table.shape[0]
+    num_cells = N * N * N  # Number of cells/points
+    num_src = src_flux.shape[0]  # Number of sources
+    num_tau = photo_thin_table.shape[0]
 
     # Convergence Criteria
-    conv_criterion = min(int(convergence_fraction * NumCells), (NumSrc - 1) / 3)
+    conv_criterion = min(int(convergence_fraction * num_cells), (num_src - 1) / 3)
 
     # Initialize convergence metrics
-    prev_sum_xh1_int: float = 2 * NumCells
-    prev_sum_xh0_int: float = 2 * NumCells
+    prev_sum_xh1: float = 2 * num_cells
+    prev_sum_xh0: float = 2 * num_cells
     converged = False
-    if rank != 0:
-        xh_new = np.empty_like(xh)
-    niter = 0
 
     # initialize average and intermediate results to values at beginning of timestep
     xh_av = np.copy(xh)
-    xh_intermed = np.copy(xh)
+    xh_int = np.copy(xh)
+
+    logger.info(f"""Calling evolve3D...
+dr [Mpc]: {dr / 3.086e24:.3e}
+dt [years]: {dt / 3.15576e07:.3e}
+Running on {num_src:n} source(s), total normalized ionizing flux: {src_flux.sum():.2e}
+Mean density (cgs): {ndens.mean():.3e}, Mean ionized fraction: {xh.mean():.3e}
+Convergence Criterion (Number of points): {conv_criterion: n}
+""")
 
     is_domain_decomposition_active = use_mpi and use_gpu and activate_domain_decomposition
     if is_domain_decomposition_active:
@@ -379,16 +380,10 @@ def evolve3D(
 
             # Broadcast the updated ionization fraction field to all ranks for the next iteration of raytracing.
             MPI.COMM_WORLD.Bcast([xh_av_flat, MPI.DOUBLE], root=0)
-            MPI.COMM_WORLD.Bcast([xh_intermed, MPI.DOUBLE], root=0)
+            MPI.COMM_WORLD.Bcast([xh_int, MPI.DOUBLE], root=0)
 
-            # convert the bool variable to bit
-            # converged_array = array.array("i", [converged])
-            converged_array = array.array("i", [int(converged)])
-
-            # braodcast convergence to the other ranks
-            MPI.COMM_WORLD.Bcast(converged_array, root=0)
-            if rank != 0:
-                converged = bool(converged_array[0])
+            # broadcast convergence
+            converged = MPI.COMM_WORLD.bcast(converged, root=0)
 
         if rank == 0:
             # When converged, return the updated ionization fractions at the end of the timestep

@@ -33,7 +33,7 @@ namespace asora {
     }
 
     void device_buffer::copyFromHost(const void *src, size_t nbytes) {
-        if (size() != nbytes)
+        if (size() < nbytes)
             throw std::invalid_argument(std::format(
                 "copyFromHost size mismatch: device buffer has {} bytes, requested {} bytes",
                 size(), nbytes
@@ -42,7 +42,7 @@ namespace asora {
     }
 
     void device_buffer::copyToHost(void *dst, size_t nbytes) const {
-        if (size() != nbytes)
+        if (size() < nbytes)
             throw std::invalid_argument(std::format(
                 "copyToHost size mismatch: device buffer has {} bytes, requested {} bytes",
                 size(), nbytes
@@ -60,6 +60,7 @@ namespace asora {
         safe_cuda(cudaGetDeviceCount(&device_count));
         self._gpu_id = rank % device_count;
         safe_cuda(cudaSetDevice(self._gpu_id));
+        setup_luts();
         return self;
     }
 
@@ -103,13 +104,13 @@ namespace asora {
         auto &&[it, success] = _memory_pool.try_emplace(tag, nbytes);
 
         // Reallocate if existing buffer is too small
-        if (ensure && it->second.size() < nbytes) {
-            it->second = device_buffer(nbytes);
-            success = true;
-        }
+        if (ensure && it->second.size() < nbytes) it->second = device_buffer(nbytes);
 
         // Throw if tag exists but no copy requested, otherwise copy data
-        if (!success && !src) throw std::runtime_error("tag already in use");
+        if (!success && !ensure && !src)
+            throw std::runtime_error(
+                std::format("tag {} already in use", static_cast<int>(tag))
+            );
         if (src) it->second.copyFromHost(src, nbytes);
     }
 

@@ -28,13 +28,17 @@ compute_cap = '-arch=sm_' + compute_cap
 
 nvcc_flags = [
     compute_cap,
-    '-rdc',
-    'true',
+    '-rdc=true',
     '-DPERIODIC',
     '-DLOCALRATES',
     '-use_fast_math',
 ]
 nvlink_flags = [compute_cap]
+
+if get_option('buildtype') in ['release', 'minsize']
+  nvcc_flags += ['-dlto']
+  nvlink_flags += ['-dlto']
+endif
 
 # CUDA sources for ASORA
 asora_sources = ['memory.cpp', 'rates.cu', 'raytracing.cu', 'utils.cu', 'chemistry.cu']

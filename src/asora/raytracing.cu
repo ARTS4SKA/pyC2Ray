@@ -13,9 +13,9 @@ namespace asora {
         /// Partition the column density array into 3 shared memory banks for easier
         /// interpolation
         shared_cdens = {
-            column_density + asora::cells_to_shell(q - 2),
-            column_density + asora::cells_to_shell(q - 3),
-            column_density + asora::cells_to_shell(q - 4)
+            column_density + cells_to_shell(q - 2),
+            column_density + cells_to_shell(q - 3),
+            column_density + cells_to_shell(q - 4)
         };
     }
 
@@ -88,6 +88,12 @@ namespace {
         // When not in periodic mode, only treat cell if its in the grid
         if (!in_box(i0 + di, j0 + dj, k0 + dk, m1)) return;
 #endif
+        auto dist2 =
+            (dr * di) * (dr * di) + (dr * dj) * (dr * dj) + (dr * dk) * (dr * dk);
+        // Reducing the following calculation changes the numerical precision of
+        // the result, albeit the physical result doesn't.
+        if (dist2 / (dr * dr) > R_max * R_max) return;
+
         cell_interpolator interp{di, dj, dk};
         auto coldens_in =
             interp.interpolate(data_HI.shared_cdens, data_HI.cross_section);
@@ -95,19 +101,13 @@ namespace {
         constexpr double max_coldens = 2e30;
         if (coldens_in > max_coldens) return;
 
-        auto dist2 =
-            (dr * di) * (dr * di) + (dr * dj) * (dr * dj) + (dr * dk) * (dr * dk);
-        // Reducing the following calculation changes the numerical precision of
-        // the result, albeit the physical result doesn't.
-        if (dist2 / (dr * dr) > R_max * R_max) return;
-
         auto path = path_in_cell(di, dj, dk) * dr;
         auto vol_ph = 4 * c::pi<> * dist2 * path;
 
         // Get local ionization fraction & neutral hydrogen density in the cell
         const auto index = ravel_index(i0 + di, j0 + dj, k0 + dk, m1);
         const auto q_off = cells_to_shell(q - 1);
-        double nHI = densities.get(index);
+        auto nHI = densities.get(index);
 
         // Skip padded cells: since we set ndens and xHII to -1 for out-of-domain cells,
         // the get() function will return a negative value for nHI,
@@ -159,8 +159,7 @@ namespace asora {
 
         // Allocate (if necessary) and zero the output array for the photoionization
         // rate
-        if (!device::contains(buffer_tag::photo_ionization_HI))
-            device::add<double>(buffer_tag::photo_ionization_HI, n_cells);
+        device::ensure<double>(buffer_tag::photo_ionization_HI, n_cells);
         auto phi_buf = device::get(buffer_tag::photo_ionization_HI);
         auto phi_d = phi_buf.data<double>();
         safe_cuda(cudaMemset(phi_d, 0, phi_buf.size()));
@@ -171,10 +170,9 @@ namespace asora {
         // be 1.5*N in size. Allocate (if necessary) the column density array.
         // TODO CB: this is probably already taking care of the domain decomposition (we are using m1)
         int q_max = std::ceil(c::sqrt3<> * std::min(R, c::sqrt3<> * m1 / 2.0));
-        if (!device::contains(buffer_tag::column_density_HI))
-            device::add<double>(
-                buffer_tag::column_density_HI, grid_size * cells_to_shell(q_max)
-            );
+        device::ensure<double>(
+            buffer_tag::column_density_HI, grid_size * cells_to_shell(q_max)
+        );
 
         // Get source properties, assuming the arrays are already on the device.
         if (!device::contains(buffer_tag::source_flux) ||
@@ -247,7 +245,7 @@ namespace asora {
 
         // Offset pointer to the outgoing column density array used for
         // interpolation (each block works on its own array).
-        int cd_offset = blockIdx.x * cells_to_shell(q_max);
+        size_t cd_offset = blockIdx.x * cells_to_shell(q_max);
         data_HI.column_density += cd_offset;
 
         // Calculate column density and photoionization rate for the source cell.
