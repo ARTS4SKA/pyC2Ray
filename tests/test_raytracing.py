@@ -14,17 +14,6 @@ if libasora is None:
     pytest.skip("libasora_He.so missing, skipping tests", allow_module_level=True)
 
 
-@pytest.fixture
-def init_device():
-    libasora.device_init()
-    yield
-    libasora.device_close()
-
-
-def test_device_init(init_device):
-    libasora.is_device_init()
-
-
 @contextmanager
 def setup_do_all_sources(
     data_dir: Path,

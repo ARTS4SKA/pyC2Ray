@@ -79,6 +79,7 @@ namespace asoratest {
     void cell_interpolator(
         double *coldens_data, double *dens_data, const std::array<size_t, 3> &shape
     ) {
+        asora::setup_luts();
         size_t size =
             std::accumulate(shape.begin(), shape.end(), 1u, std::multiplies<>());
 

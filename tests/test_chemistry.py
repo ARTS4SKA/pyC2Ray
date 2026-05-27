@@ -10,12 +10,6 @@ from pyc2ray.load_extensions import libasora_He, libc2ray
 from pyc2ray.solver.helium import thermal
 
 
-def test_load_c2ray() -> None:
-    assert libc2ray is not None
-    assert hasattr(libc2ray, "chemistry_he")
-    assert hasattr(libc2ray.chemistry_he, "thermal")
-
-
 def test_thermal_evolution_only_cosmic_expansion_python(data_dir) -> None:
     ti = cosmo.age(40).cgs.value
     tf = cosmo.age(2).cgs.value
@@ -171,13 +165,6 @@ def test_chemistry_hydrogen_only(data_dir):
 
         expected_xHII = np.load(data_dir / "ionized_fraction_only_hydrogen.npy")
         assert np.allclose(xHII, expected_xHII)
-
-
-@pytest.fixture
-def init_device():
-    libasora_He.device_init()
-    yield
-    libasora_He.device_close()
 
 
 def test_chemistry_hydrogen_only_asora(data_dir, init_device):

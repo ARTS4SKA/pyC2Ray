@@ -13,9 +13,9 @@ namespace asora {
         /// Partition the column density array into 3 shared memory banks for easier
         /// interpolation
         shared_cdens = {
-            column_density + asora::cells_to_shell(q - 2),
-            column_density + asora::cells_to_shell(q - 3),
-            column_density + asora::cells_to_shell(q - 4)
+            column_density + cells_to_shell(q - 2),
+            column_density + cells_to_shell(q - 3),
+            column_density + cells_to_shell(q - 4)
         };
     }
 
