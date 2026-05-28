@@ -34,19 +34,25 @@ namespace asora {
 
     void device_buffer::copyFromHost(const void *src, size_t nbytes) {
         if (size() < nbytes)
-            throw std::invalid_argument(std::format(
-                "copyFromHost size mismatch: device buffer has {} bytes, requested {} bytes",
-                size(), nbytes
-            ));
+            throw std::invalid_argument(
+                std::format(
+                    "copyFromHost size mismatch: device buffer has {} bytes, requested "
+                    "{} bytes",
+                    size(), nbytes
+                )
+            );
         safe_cuda(cudaMemcpy(data(), src, nbytes, cudaMemcpyHostToDevice));
     }
 
     void device_buffer::copyToHost(void *dst, size_t nbytes) const {
         if (size() < nbytes)
-            throw std::invalid_argument(std::format(
-                "copyToHost size mismatch: device buffer has {} bytes, requested {} bytes",
-                size(), nbytes
-            ));
+            throw std::invalid_argument(
+                std::format(
+                    "copyToHost size mismatch: device buffer has {} bytes, requested "
+                    "{} bytes",
+                    size(), nbytes
+                )
+            );
         safe_cuda(cudaMemcpy(dst, data(), nbytes, cudaMemcpyDeviceToHost));
     }
 
@@ -97,20 +103,29 @@ namespace asora {
     }
 
     void device::allocate_or_copy(
-        buffer_tag tag, size_t nbytes, const void *src, bool ensure
+        buffer_tag tag, size_t nbytes, const void *src, bool ensure,
+        bool force_matching_size
     ) {
         check_initialized();
 
-        auto &&[it, success] = _memory_pool.try_emplace(tag, nbytes);
+        auto &&[it, inserted] = _memory_pool.try_emplace(tag, nbytes);
 
-        // Reallocate if existing buffer is too small
-        if (ensure && it->second.size() < nbytes) it->second = device_buffer(nbytes);
+        if (!inserted) {
+            if (ensure) {
+                // Ensure-mode is idempotent: keep existing buffer if sizing
+                // policy is satisfied, otherwise replace it.
+                const bool needs_realloc = force_matching_size
+                                               ? (it->second.size() != nbytes)
+                                               : (it->second.size() < nbytes);
+                if (needs_realloc) {
+                    it->second = device_buffer(nbytes);
+                }
+            } else if (!src) {
+                throw std::runtime_error("tag already in use");
+            }
+        }
 
-        // Throw if tag exists but no copy requested, otherwise copy data
-        if (!success && !ensure && !src)
-            throw std::runtime_error(
-                std::format("tag {} already in use", static_cast<int>(tag))
-            );
+        // Copy host data whenever a source pointer is provided.
         if (src) it->second.copyFromHost(src, nbytes);
     }
 
