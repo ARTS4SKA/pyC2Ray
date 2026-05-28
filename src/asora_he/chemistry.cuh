@@ -89,7 +89,7 @@ namespace asora {
     __host__ __device__ cuda::std::array<double, 2> thermal(
         double dt, double temp_start, double ndens_elec, double ndens_atom,
         double heating, double Hz, const cuda::std::array<double, 3>& xh,
-        const cooling_tables& rates, const linspace<double>& logscale,
+        const cooling_tables& rates, const linspace<double>& logtemp,
         const parameters& p = {}, double min_temp = 1.0, size_t max_iterations = 10'000
     );
 
@@ -124,6 +124,8 @@ namespace asora {
      * @param phi_ion Photo-ionization rates
      * @param phi_heat Photo-heating rates
      * @param clump Clumping factor
+     * @param tables Cooling rate lookup tables
+     * @param logtemp Log-scale temperature range for cooling rate interpolation
      * @param p Parameter set (cross sections, abundances, etc.)
      * @param max_iterations Maximum number of chemistry iterations
      *
@@ -133,6 +135,7 @@ namespace asora {
     __device__ cuda::std::array<double3, 2> do_chemistry(
         double dt, double Hz, double temp_start, double ndens, const double3& xh,
         double3 xh_av, const double3& phi_ion, const double3& phi_heat, double clump,
+        const cooling_tables& rates, const linspace<double>& logscale,
         const parameters& p = {}, size_t max_iterations = 400
     );
 
@@ -165,6 +168,8 @@ namespace asora {
      * @param phi_heat Photo-heating rates
      * @param clump Clumping factors
      * @param conv_flag Per-cell convergence flags (output)
+     * @param tables Cooling rate lookup tables
+     * @param logtemp Log-scale temperature range for cooling rate interpolation
      * @param p Parameter set (cross sections, abundances, etc.)
      * @param size Number of cells
      */
@@ -172,15 +177,16 @@ namespace asora {
         double dt, double Hz, const double* __restrict__ temp,
         const double* __restrict__ ndens, double3ptr xh, double3ptr xh_av,
         double3ptr xh_int, double3ptr phi_ion, double3ptr phi_heat,
-        const double* __restrict__ clump, bool* conv_flag, parameters p, size_t size
+        const double* __restrict__ clump, cooling_tables tables,
+        linspace<double> logtemp, bool* conv_flag, parameters p, size_t size
     );
 
     size_t global_pass(
         double dt, double Hz, const double* __restrict__ temp,
         const double* __restrict__ ndens, double3ptr xh, double3ptr xh_av,
         double3ptr xh_int, const double3ptr& phi_ion, const double3ptr& phi_heat,
-        const double* __restrict__ clump, const parameters& p, size_t n_cells,
-        size_t block_size
+        const double* __restrict__ clump, const linspace<double>& logtemp,
+        const parameters& p, size_t n_cells, size_t block_size
     );
 
 }  // namespace asora

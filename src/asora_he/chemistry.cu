@@ -27,9 +27,9 @@ namespace {
     __host__ __device__ double cooling_rate(
         double temp, double ndens_atom, double ndens_elec,
         const cuda::std::array<double, 3>& xh, const cooling_tables& rates,
-        const linspace<double>& logscale, double abu_h, double abu_he
+        const linspace<double>& logtemp, double abu_h, double abu_he
     ) {
-        auto&& [i0, i1, p] = log_table_index(temp, logscale);
+        auto&& [i0, i1, p] = log_table_index(temp, logtemp);
         auto q = 1 - p;
 
         auto& [xHI, xHeI, xHeII] = xh;
@@ -61,22 +61,18 @@ namespace {
 namespace asora {
 
     __host__ __device__ cuda::std::array<double, 2> thermal(
-        double dt, double temp_start, double ndens_elec, double ndens_atom,
-        double heating, double Hz, const cuda::std::array<double, 3>& xh,
-        const cooling_tables& rates, const linspace<double>& logscale,
-        const parameters& p, double min_temp, size_t max_iterations
+        double dt, double temp, double ndens_elec, double ndens_atom, double heating,
+        double Hz, const cuda::std::array<double, 3>& xh, const cooling_tables& rates,
+        const linspace<double>& logtemp, const parameters& p, double min_temp,
+        size_t max_iterations
     ) {
         // Thermal process only if temperature > min_temp
-        if (temp_start <= min_temp) return {temp_start, temp_start};
+        if (temp <= min_temp) return {temp, temp};
 
         // Find initial internal energy
-        auto u0 = get_energy(temp_start, ndens_atom + ndens_elec, p.gamma);
-        auto umin = get_energy(min_temp, ndens_atom + ndens_elec, p.gamma);
-        auto ui = u0;
-        auto ui_av = u0;
-
+        auto ui = get_energy(temp, ndens_atom + ndens_elec, p.gamma);
         double tot_time = 0.0;
-        auto temp_end = temp_start;
+        double temp_av = 0.0;
 
         // Exit conditions: reached dt (with tolerance like Fortran)
         while (max_iterations > 0 && tot_time < dt * (1.0 - 1e-6)) {
@@ -85,8 +81,7 @@ namespace asora {
             auto rate = heating - cosmo_cooling_rate(ui, Hz);
             if (!p.cosmo_only)
                 rate -= cooling_rate(
-                    temp_end, ndens_atom, ndens_elec, xh, rates, logscale, p.abu_h,
-                    p.abu_he
+                    temp, ndens_atom, ndens_elec, xh, rates, logtemp, p.abu_h, p.abu_he
                 );
 
             // Thermal time scale. Limit energy change to fraction relative_denergy
@@ -95,22 +90,23 @@ namespace asora {
                 min(p.relative_denergy * ui / max(1e-50, abs(rate)), dt - tot_time);
 
             ui += rate * subdt;
-            ui_av += rate * subdt * subdt / dt;
+            temp_av += 0.5 * temp * subdt;
 
-            temp_end = get_temperature(ui, ndens_atom + ndens_elec, p.gamma);
+            temp = get_temperature(ui, ndens_atom + ndens_elec, p.gamma);
+            temp_av += 0.5 * temp * subdt;
+
             tot_time += subdt;
 
             // Enforce minimum temperature
-            if (ui < umin) {
-                ui = umin;
-                temp_end = min_temp;
+            if (temp < min_temp) {
+                ui = get_energy(min_temp, ndens_atom + ndens_elec, p.gamma);
+                temp = min_temp;
                 break;
             }
         }
 
-        // Final temperature
-        auto temp_avg = get_temperature(ui_av, ndens_atom + ndens_elec, p.gamma);
-        return {temp_end, temp_avg};
+        temp_av /= dt;
+        return {temp, temp_av};
     }
 
 }  // namespace asora
@@ -160,14 +156,11 @@ namespace {
         return {xHII, xHeII, xHeIII};
     }
 
-    __device__ bool check_convergence_local(
-        const double3& xh_new, const double3& xh_old, double temp_new, double temp_old
-    ) {
+    __device__ bool check_convergence_local(double new_value, double old_value) {
         bool cond1 =
-            abs(xh_new.x - xh_old.x) / (1 - xh_new.x) < minimum_fractional_change;
-        bool cond2 = 1 - xh_new.x < minimum_fraction_of_atoms;
-        bool cond3 = abs(temp_new - temp_old) / temp_new < minimum_fractional_change;
-        return (cond1 || cond2) && cond3;
+            abs(new_value - old_value) / (1 - new_value) < minimum_fractional_change;
+        bool cond2 = 1 - new_value < minimum_fraction_of_atoms;
+        return cond1 || cond2;
     }
 
     __device__ bool check_convergence_global(double new_value, double old_value) {
@@ -181,7 +174,7 @@ namespace {
 
     // Create the first row of the matrix A in the chemistry equations.
     __device__ double3 make_row1(
-        const double2& alpha_HeII, const double2& alpha_HII, const double2& alpha_HeIII,
+        const double2& alpha_HII, const double2& alpha_HeII, const double2& alpha_HeIII,
         double beta_HeIII, double nu, double n_e, double yy, double y2a, double y2b,
         double zz, const double3& phi, const parameters& p, double f_lya
     ) {
@@ -300,7 +293,7 @@ namespace asora {
 
         // Recombination rate of HeIII (Eq. 2.18-20) [confirmed by Garrelt (13.10.24)]
         auto alpha_HeIII = recombination_rates(temp, tempHeII, 2.538e-13, 5.506e-14);
-        auto beta_HeIII = 8.54e-11 * std::pow(temp, -0.6);
+        auto beta_HeIII = 3.4e-13 * std::pow(temp / 1.0e4, -0.6);
 
         // Two photons emission from recombination of HeIII
         auto nu = 0.285 * std::pow(temp / 1.0e4, 0.119);
@@ -332,7 +325,7 @@ namespace asora {
 
         // Matrix elements with recombination rates (Eq. 2.30-35)
         auto A1 = make_row1(
-            alpha_HeII, alpha_HII, alpha_HeIII, beta_HeIII, nu, n_e, yy, y2a, y2b, zz,
+            alpha_HII, alpha_HeII, alpha_HeIII, beta_HeIII, nu, n_e, yy, y2a, y2b, zz,
             phi, p, f_lya
         );
         auto A2 = make_row2(
@@ -400,51 +393,55 @@ namespace asora {
     }
 
     __device__ cuda::std::array<double3, 2> do_chemistry(
-        double dt, double Hz, double temp_start, double ndens, const double3& xh,
+        double dt, double Hz, double temp, double ndens, const double3& xh,
         double3 xh_av, const double3& phi_ion, const double3& phi_heat, double clump,
+        const cooling_tables& tables, const linspace<double>& logtemp,
         const parameters& p, size_t max_iterations
     ) {
-        auto temp_end = temp_start;
         auto heating = phi_heat.x + phi_heat.y + phi_heat.z;
 
         // At each loop iteration, the counter is decreased until 0 unless convergence
         // is reached before.
         double3 xh_new, xh_av_new;
-        double temp_prev = temp_end;
+        double temp_av = temp;
+        ++max_iterations;  // to match fortran code
         while (max_iterations > 0) {
             double3 ndens_species{
                 ndens * p.abu_h * (1 - xh_av.x),             // HI
                 ndens * p.abu_he * (1 - xh_av.y - xh_av.z),  // HeI
-                ndens * p.abu_he * xh_av.z                   // HeII
+                ndens * p.abu_he * xh_av.y                   // HeII
             };
 
+            // Determine electron density.
             auto ndens_elec =
                 electron_density(ndens, xh_av, p.abu_h, p.abu_he, p.abu_c);
 
+            // Update ionizattion fractions according to the chemistry equations.
             cuda::std::tie(xh_new, xh_av_new) = friedrich(
-                dt, temp_end, ndens_elec, xh, phi_ion, phi_heat, ndens_species, clump, p
+                dt, temp, ndens_elec, xh, phi_ion, phi_heat, ndens_species, clump, p
             );
 
-            // Update average solution value
+            // Update electron density based on the fractions for thermal evolution.
             ndens_elec = electron_density(ndens, xh_av_new, p.abu_h, p.abu_he, p.abu_c);
 
-            // Update temperature
-            // NOTE: Force only Cosmo cooling for now
-            auto ploc = p;
-            ploc.cosmo_only = true;
-            cuda::std::tie(temp_end, cuda::std::ignore) = thermal(
-                dt, temp_end, ndens_elec, ndens, heating, Hz,
-                {xh_av_new.x, xh_av_new.y, xh_av_new.z}, {}, {}, ploc
+            // Update temperature.
+            auto&& [temp_new, temp_av_new] = thermal(
+                dt, temp, ndens_elec, ndens, heating, Hz,
+                {xh_av_new.x, xh_av_new.y, xh_av_new.z}, tables, logtemp, p
             );
 
-            if (check_convergence_local(xh_av_new, xh_av, temp_end, temp_prev))
+            if (check_convergence_local(xh_av_new.x, xh_av.x) &&  // HI
+                check_convergence_local(xh_av_new.y, xh_av.y) &&  // HeI
+                check_convergence_local(xh_av_new.z, xh_av.z) &&  // HeII
+                abs(temp_av_new - temp_av) / temp_av_new < minimum_fractional_change)
                 max_iterations = 0;
             else
                 --max_iterations;
 
             // Update xh_av for the next iteration.
             xh_av = xh_av_new;
-            temp_prev = temp_end;
+            temp = temp_new;
+            temp_av = temp_av_new;
         }
 
         // Return  xHII, HeI, HeII, xHII_av, HeI_av, HeII_av */
@@ -455,38 +452,35 @@ namespace asora {
     __global__ void evolve0D_gpu(
         double dt, double Hz, double* __restrict__ temp, double* __restrict__ ndens,
         double3ptr xh, double3ptr xh_av, double3ptr xh_int, double3ptr phi_ion,
-        double3ptr phi_heat, const double* __restrict__ clump, bool* conv_flag,
-        parameters p, size_t size
+        double3ptr phi_heat, const double* __restrict__ clump, cooling_tables tables,
+        linspace<double> logtemp, bool* conv_flag, parameters p, size_t size
     ) {
         auto idx = threadIdx.x + blockDim.x * blockIdx.x;
 
         // Thread can process more than one cell.
         while (idx < size) {
             // Get average fraction value as a reference: it will be updated later.
-            auto& xHII_p = xh.x[idx];
-            auto& xHeII_p = xh.y[idx];
-            auto& xHeIII_p = xh.z[idx];
-            auto& xHII_av_p = xh_av.x[idx];
-            auto& xHeII_av_p = xh_av.y[idx];
-            auto& xHeIII_av_p = xh_av.z[idx];
+            double3 xh_p = {xh.x[idx], xh.y[idx], xh.z[idx]};
+            double3 xh_av_p = {xh_av.x[idx], xh_av.y[idx], xh_av.z[idx]};
 
             auto&& [xh_int_new, xh_av_new] = do_chemistry(
-                dt, Hz, temp[idx], ndens[idx], {xHII_p, xHeII_p, xHeIII_p},
-                {xHII_av_p, xHeII_av_p, xHeIII_av_p},
+                dt, Hz, temp[idx], ndens[idx], xh_p, xh_av_p,
                 {phi_ion.x[idx], phi_ion.y[idx], phi_ion.z[idx]},
-                {phi_heat.x[idx], phi_heat.y[idx], phi_heat.z[idx]}, clump[idx], p
+                {phi_heat.x[idx], phi_heat.y[idx], phi_heat.z[idx]}, clump[idx], tables,
+                logtemp, p
             );
 
-            conv_flag[idx] = check_convergence_global(xh_av_new.x, xHII_av_p) &&
-                             check_convergence_global(xh_av_new.y, xHeII_av_p) &&
-                             check_convergence_global(xh_av_new.z, xHeIII_av_p);
+            conv_flag[idx] = check_convergence_global(xh_av_new.x, xh_av_p.x) &&
+                             check_convergence_global(xh_av_new.y, xh_av_p.y) &&
+                             check_convergence_global(xh_av_new.z, xh_av_p.z);
 
+            // Update the results in global memory.
             xh_int.x[idx] = xh_int_new.x;
             xh_int.y[idx] = xh_int_new.y;
             xh_int.z[idx] = xh_int_new.z;
-            xHII_av_p = xh_av_new.x;
-            xHeII_av_p = xh_av_new.y;
-            xHeIII_av_p = xh_av_new.z;
+            xh_av.x[idx] = xh_av_new.x;
+            xh_av.y[idx] = xh_av_new.y;
+            xh_av.z[idx] = xh_av_new.z;
 
             idx += blockDim.x * gridDim.x;
         }
@@ -503,8 +497,8 @@ namespace asora {
         double dt, double Hz, const double* __restrict__ temp,
         const double* __restrict__ ndens, double3ptr xh, double3ptr xh_av,
         double3ptr xh_int, const double3ptr& phi_ion, const double3ptr& phi_heat,
-        const double* __restrict__ clump, const parameters& p, size_t n_cells,
-        size_t block_size
+        const double* __restrict__ clump, const linspace<double>& logtemp,
+        const parameters& p, size_t n_cells, size_t block_size
     ) {
         // Initialize and copy const data.
         for (auto&& [tag, data] : {
@@ -535,38 +529,49 @@ namespace asora {
         device_buffer conv_flag(n_cells);
         auto conv_flag_d = conv_flag.view<bool>().data();
 
-        auto temp_d = device::get(buffer_tag::temperature).data<double>();
-        auto ndens_d = device::get(buffer_tag::number_density).data<double>();
-        auto clump_d = device::get(buffer_tag::clumping_factor).data<double>();
+        auto temp_d = get_data_view<double>(buffer_tag::temperature);
+        auto ndens_d = get_data_view<double>(buffer_tag::number_density);
+        auto clump_d = get_data_view<double>(buffer_tag::clumping_factor);
 
         double3ptr xh_d = {
             xHII_buf.data<double>(), xHeII_buf.data<double>(), xHeIII_buf.data<double>()
         };
         double3ptr xh_av_d = {
-            device::get(buffer_tag::fraction_HII).data<double>(),
-            device::get(buffer_tag::fraction_HeII).data<double>(),
-            device::get(buffer_tag::fraction_HeIII).data<double>()
+            get_data_view<double>(buffer_tag::fraction_HII),
+            get_data_view<double>(buffer_tag::fraction_HeII),
+            get_data_view<double>(buffer_tag::fraction_HeIII)
         };
         double3ptr xh_int_d = {
             xHII_int_buf.data<double>(), xHeII_int_buf.data<double>(),
             xHeIII_int_buf.data<double>()
         };
         double3ptr phi_ion_d = {
-            device::get(buffer_tag::photo_ionization_HI).data<double>(),
-            device::get(buffer_tag::photo_ionization_HeI).data<double>(),
-            device::get(buffer_tag::photo_ionization_HeII).data<double>()
+            get_data_view<double>(buffer_tag::photo_ionization_HI),
+            get_data_view<double>(buffer_tag::photo_ionization_HeI),
+            get_data_view<double>(buffer_tag::photo_ionization_HeII)
         };
         double3ptr phi_heat_d = {
-            device::get(buffer_tag::photo_heating_HI).data<double>(),
-            device::get(buffer_tag::photo_heating_HeI).data<double>(),
-            device::get(buffer_tag::photo_heating_HeII).data<double>()
+            get_data_view<double>(buffer_tag::photo_heating_HI),
+            get_data_view<double>(buffer_tag::photo_heating_HeI),
+            get_data_view<double>(buffer_tag::photo_heating_HeII)
         };
+
+        cooling_tables tables{};
+        if (!p.cosmo_only) {
+            tables = cooling_tables{
+                get_data_view<double>(buffer_tag::cooling_HI_table),
+                get_data_view<double>(buffer_tag::cooling_HII_table),
+                get_data_view<double>(buffer_tag::cooling_HeI_table),
+                get_data_view<double>(buffer_tag::cooling_HeII_table),
+                get_data_view<double>(buffer_tag::cooling_HeIII_table)
+            };
+        }
 
         // Launch kernel, divide by 2 so that threads do more work.
         size_t grid_size = std::ceil(static_cast<float>(n_cells) / block_size / 2);
         evolve0D_gpu<<<grid_size, block_size>>>(
             dt, Hz, temp_d, ndens_d, xh_d, xh_av_d, xh_int_d, phi_ion_d, phi_heat_d,
-            clump_d, conv_flag_d, p, n_cells
+            clump_d, tables, logtemp, conv_flag_d, p, n_cells
         );
 
         // Check for errors.

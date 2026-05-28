@@ -29,11 +29,6 @@ namespace {
 
     using namespace asora;
 
-    template <typename T>
-    T *get_data_view(asora::buffer_tag tag) {
-        return asora::device::get(tag).data<T>();
-    }
-
     // Compute the photoionization rate for a given cell based on the incoming column
     // density and the pre-computed photoionization tables.
     __device__ void update_photo_rates(

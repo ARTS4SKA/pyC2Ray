@@ -221,6 +221,35 @@ PyObject *asora_photo_tables_to_device(
     return Py_None;
 }
 
+/// Allocate and copy radiation tables to the device.
+PyObject *asora_cooling_tables_to_device(
+    [[maybe_unused]] PyObject *self, PyObject *args
+) {
+    PyArrayObject *HI_table;
+    PyArrayObject *HII_table;
+    PyArrayObject *HeI_table;
+    PyArrayObject *HeII_table;
+    PyArrayObject *HeIII_table;
+    if (!PyArg_ParseTuple(
+            args, "OOOOO", &HI_table, &HII_table, &HeI_table, &HeII_table, &HeIII_table
+        ))
+        return nullptr;
+
+    using namespace asora;
+
+    if (!load_array_to_device<double>(HI_table, buffer_tag::cooling_HI_table))
+        return nullptr;
+    if (!load_array_to_device<double>(HII_table, buffer_tag::cooling_HII_table))
+        return nullptr;
+    if (!load_array_to_device<double>(HeI_table, buffer_tag::cooling_HeI_table))
+        return nullptr;
+    if (!load_array_to_device<double>(HeII_table, buffer_tag::cooling_HeII_table))
+        return nullptr;
+    if (!load_array_to_device<double>(HeIII_table, buffer_tag::cooling_HeIII_table))
+        return nullptr;
+    return Py_None;
+}
+
 /// Allocate and copy source properties to the device.
 PyObject *asora_source_data_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
     PyArrayObject *src_pos, *src_flux;
@@ -324,13 +353,17 @@ PyObject *asora_chemistry_global_pass([[maybe_unused]] PyObject *self, PyObject 
     PyArrayObject *pheat_HeII;
     PyArrayObject *clump;
     int cosmo_only = false;
+    double minlogtemp = 0.0;
+    double dlogtemp = 1.0;
+    size_t num_temp = 1;
     size_t block_size = 512;
 
     if (!PyArg_ParseTuple(
-            args, "ddOOOOOOOOOOOOOOOOOOO|pk", &dt, &Hz, &ndens, &temp, &temp_av, &xHII,
-            &xHII_av, &xHII_int, &xHeII, &xHeII_av, &xHeII_int, &xHeIII, &xHeIII_av,
-            &xHeIII_int, &phion_HI, &phion_HeI, &phion_HeII, &pheat_HI, &pheat_HeI,
-            &pheat_HeII, &clump, &cosmo_only, &block_size
+            args, "ddOOOOOOOOOOOOOOOOOOO|pddkk", &dt, &Hz, &ndens, &temp, &temp_av,
+            &xHII, &xHII_av, &xHII_int, &xHeII, &xHeII_av, &xHeII_int, &xHeIII,
+            &xHeIII_av, &xHeIII_int, &phion_HI, &phion_HeI, &phion_HeII, &pheat_HI,
+            &pheat_HeI, &pheat_HeII, &clump, &cosmo_only, &minlogtemp, &dlogtemp,
+            &num_temp, &block_size
         ))
         return nullptr;
 
@@ -377,6 +410,7 @@ PyObject *asora_chemistry_global_pass([[maybe_unused]] PyObject *self, PyObject 
             {xHII_int_data, xHeII_int_data, xHeIII_int_data},
             {phion_HI_data, phion_HeI_data, phion_HeII_data},
             {pheat_HI_data, pheat_HeI_data, pheat_HeII_data}, clump_data,
+            {minlogtemp, dlogtemp, num_temp},
             {.cosmo_only = static_cast<bool>(cosmo_only)}, n_cells, block_size
         );
         return Py_BuildValue("k", conv_flag);
@@ -402,6 +436,8 @@ static PyMethodDef asoraMethods[] = {
      "Copy density field to GPU"},
     {"photo_tables_to_device", asora_photo_tables_to_device, METH_VARARGS,
      "Copy radiation tables to the device"},
+    {"cooling_tables_to_device", asora_cooling_tables_to_device, METH_VARARGS,
+     "Copy cooling rate tables to the device"},
     {"source_data_to_device", asora_source_data_to_device, METH_VARARGS,
      "Copy source data to the device"},
     {"chemistry_thermal", (PyCFunction)asora_chemistry_thermal,

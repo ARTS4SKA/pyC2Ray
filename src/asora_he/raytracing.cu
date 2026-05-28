@@ -40,11 +40,6 @@ namespace {
 
     using cross_section_histogram = cuda::std::span<double>;
 
-    template <typename T>
-    T *get_data_view(asora::buffer_tag tag) {
-        return asora::device::get(tag).view<T>().data();
-    }
-
     element_data make_element_data(
         asora::buffer_tag ion, asora::buffer_tag heat, asora::buffer_tag cdens,
         asora::buffer_tag sigma, size_t first_bin
