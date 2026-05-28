@@ -21,7 +21,7 @@ from pyc2ray.solver.helium import (
 
 def test_get_temperature_and_energy():
     temp = 1e4  # K
-    ndens = 1e-7  # cm^-3
+    ndens = 1e-5  # cm^-3
     energy = get_energy(temp, ndens)
     temp_calculated = get_temperature(energy, ndens)
     assert math.isclose(temp, temp_calculated)
@@ -51,19 +51,41 @@ def test_cooling_tables(data_dir) -> None:
 
 
 def test_cooling_rate() -> None:
+    abu_h = 0.76
+    abu_he = 0.24
     xHI, xHeI, xHeII = 0.9, 0.7, 0.2
-    n_a = 1e-8
-    n_e = n_a * ((1 - xHI) + xHeII + 2 * (1 - xHeI - xHeII))
+    n_a = 1e-4
+    n_e = n_a * (abu_h * (1 - xHI) + abu_he * (xHeII + 2 * (1 - xHeI - xHeII)))
     cool_tables = CoolingTables.from_dir()
 
-    rate = cooling_rate(
-        n_a, n_e, 1e5, xHI, xHeI, xHeII, cool_tables, abu_h=0.76, abu_he=0.24
-    )
-    assert math.isclose(rate * 1e36, 5.79021913)
+    rate = cooling_rate(n_a, n_e, 1e5, xHI, xHeI, xHeII, cool_tables, abu_h, abu_he)
+    assert math.isclose(rate * 1e28, 1.99183538)
 
 
 def test_cosmo_cooling_rate() -> None:
-    assert math.isclose(cosmo_cooling_rate(0.2, 0.1), 0.04)
+    temp = 1e4  # K
+    ndens = 1e-5  # cm^-3
+    energy = get_energy(temp, ndens)
+    Hz = cosmo.H(10).cgs.value
+    rate = cosmo_cooling_rate(energy, Hz)
+    assert math.isclose(rate * 1e33, 1.852166392)
+
+
+@pytest.mark.parametrize("n_a", (1e-6, 1e-5, 1e-4, 1e-3))
+@pytest.mark.parametrize("temp", [10, 100, 1000, 10000])
+def test_compare_cooling_rates(temp: float, n_a: float) -> None:
+    abu_h = 0.76
+    abu_he = 0.24
+    xHI, xHeI, xHeII = 0.9, 0.7, 0.2
+    n_e = n_a * (abu_h * (1 - xHI) + abu_he * (xHeII + 2 * (1 - xHeI - xHeII)))
+    cool_tables = CoolingTables.from_dir()
+    cool_rate = cooling_rate(
+        n_a, n_e, temp, xHI, xHeI, xHeII, cool_tables, abu_h, abu_he
+    )
+
+    Hz = cosmo.H(5).cgs.value
+    cosmo_rate = cosmo_cooling_rate(get_energy(temp, n_a + n_e), Hz)
+    assert 0.001 < cool_rate / cosmo_rate < 100.0
 
 
 @pytest.fixture(scope="class")
@@ -145,9 +167,9 @@ class TestThermalEvolution:
         # Get numerical solution using the thermal function
         dts = np.diff(times)
         temps_num = np.full_like(temps_anal, T0)
+        assert libasora_He is not None
         for i, (zi, dt) in enumerate(zip(zreds[:-1], dts), 1):
             Hz = cosmo.H(zi).cgs.value
-            assert libasora_He is not None
             T0, _ = libasora_He.chemistry_thermal(
                 dt, T0, 1.0, 1.0, 0.0, Hz, cosmo_only=True
             )
@@ -202,6 +224,7 @@ class TestThermalEvolution:
         # Get numerical solution using the thermal function
         dts = np.diff(times)
         temps = np.full_like(times, T0)
+        assert libasora_He is not None
         for i, (zi, dt) in enumerate(zip(zreds[:-1], dts), 1):
             Hz = cosmo.H(zi).cgs.value
             T0, _ = libasora_He.chemistry_thermal(
@@ -224,14 +247,14 @@ def setup_chemistry(
     mesh_shape = (mesh_size,) * 3
     rng = np.random.default_rng(2023)
 
-    dt = (1 * u.Myr).cgs.value
+    dt = (5 * u.Myr).cgs.value
     Hz = cosmo.H(10).cgs.value
 
     # density field [g/cm^3]
-    ndens = rng.uniform(5e-8, 5e-7, size=mesh_shape).astype(np.float64, order="F")
+    ndens = rng.uniform(1e-6, 1e-3, size=mesh_shape).astype(np.float64, order="F")
 
     # temperature [K]
-    temp = rng.normal(1e4, 10, size=mesh_shape).astype(np.float64, order="F")
+    temp = np.pow(10, rng.normal(4, 0.25, size=mesh_shape), dtype=np.float64, order="F")
 
     # Ionization fractions for x, x_av and x_int
     xHIIs = tuple(np.zeros_like(ndens) for _ in ionize_species)
@@ -247,6 +270,21 @@ def setup_chemistry(
     # Clumping factor
     clump = np.ones_like(ndens)
 
+    logtemp: tuple
+    if not cosmo_only:
+        assert libasora_He is not None
+        cool_tables = CoolingTables.from_dir()
+        libasora_He.cooling_tables_to_device(
+            cool_tables.HI,
+            cool_tables.HII,
+            cool_tables.HeI,
+            cool_tables.HeII,
+            cool_tables.HeIII,
+        )
+        logtemp = cool_tables.logtemp
+    else:
+        logtemp = tuple()
+
     yield (
         dt,
         Hz,
@@ -260,6 +298,7 @@ def setup_chemistry(
         *pheat,
         clump,
         cosmo_only,
+        *logtemp,
     )
 
 
@@ -274,6 +313,7 @@ def test_chemistry_c2ray_hydrogen_only_cosmo_only(data_dir):
             xHII[:] = xHII_int
             xHeII[:] = xHeII_int
             xHeIII[:] = xHeIII_int
+
             assert np.allclose(xHeII, 0.0)
             assert np.allclose(xHeII_av, 0.0)
             assert np.allclose(xHeIII, 0.0)
@@ -281,10 +321,8 @@ def test_chemistry_c2ray_hydrogen_only_cosmo_only(data_dir):
 
         assert conv == 0
 
-        expected_xHII = np.load(
-            data_dir / "ionized_fraction_hydrogen_only_cosmo_only.npy"
-        )
-        assert np.allclose(xHII, expected_xHII)
+        exp_xHII = np.load(data_dir / "ionized_fraction_hydrogen_only_cosmo_only.npy")
+        assert np.allclose(xHII, exp_xHII)
 
 
 def test_chemistry_c2ray_cosmo_only(data_dir):
@@ -330,10 +368,8 @@ def test_chemistry_asora_hydrogen_only_cosmo_only(data_dir, init_device):
 
         assert conv == 0
 
-        expected_xHII = np.load(
-            data_dir / "ionized_fraction_hydrogen_only_cosmo_only.npy"
-        )
-        assert np.allclose(xHII, expected_xHII)
+        exp_xHII = np.load(data_dir / "ionized_fraction_hydrogen_only_cosmo_only.npy")
+        assert np.allclose(xHII, exp_xHII)
 
 
 def test_chemistry_asora_cosmo_only(data_dir, init_device):
@@ -352,20 +388,71 @@ def test_chemistry_asora_cosmo_only(data_dir, init_device):
         assert conv == 0
 
         exp_xh = np.load(data_dir / "ionized_fraction_all_species_cosmo_only.npz")
-        assert np.allclose(xHII, exp_xh["xHII"], rtol=1e-5)
-        assert np.allclose(xHeII, exp_xh["xHeII"], rtol=1e-4)
-        assert np.allclose(xHeIII, exp_xh["xHeIII"], rtol=1e-3)
-        assert np.allclose(xHII_av, exp_xh["xHII_av"], rtol=1e-5)
+        assert np.allclose(xHII, exp_xh["xHII"])
+        assert np.allclose(xHeII, exp_xh["xHeII"])
+        assert np.allclose(xHeIII, exp_xh["xHeIII"], rtol=1e-4)
+        assert np.allclose(xHII_av, exp_xh["xHII_av"])
         assert np.allclose(xHeII_av, exp_xh["xHeII_av"], rtol=1e-4)
-        assert np.allclose(xHeIII_av, exp_xh["xHeIII_av"], rtol=1e-3)
+        assert np.allclose(xHeIII_av, exp_xh["xHeIII_av"], rtol=1e-4)
 
 
-def test_benchmark_chemistry(benchmark):
-    with setup_chemistry(200) as args:
+def test_chemistry_asora_hydrogen_only(data_dir, init_device):
+    with setup_chemistry(ionize_species=(True, False, False)) as args:
+        xHII, xHII_av, xHII_int = args[5:8]
+        xHeII, xHeII_av, xHeII_int = args[8:11]
+        xHeIII, xHeIII_av, xHeIII_int = args[11:14]
+
+        assert libasora_He is not None
+        for s in range(10):
+            conv = libasora_He.chemistry_global_pass(*args)
+            xHII[:] = xHII_int
+            xHeII[:] = xHeII_int
+            xHeIII[:] = xHeIII_int
+
+            assert np.allclose(xHeII, 0.0)
+            assert np.allclose(xHeII_av, 0.0)
+            assert np.allclose(xHeIII, 0.0)
+            assert np.allclose(xHeIII_av, 0.0)
+
+        assert conv == 0
+
+        exp_xHII = np.load(data_dir / "ionized_fraction_hydrogen_only.npy")
+        assert np.allclose(xHII, exp_xHII)
+
+
+def test_chemistry_asora(data_dir, init_device):
+    with setup_chemistry() as args:
+        xHII, xHII_av, xHII_int = args[5:8]
+        xHeII, xHeII_av, xHeII_int = args[8:11]
+        xHeIII, xHeIII_av, xHeIII_int = args[11:14]
+
+        assert libasora_He is not None
+        for s in range(10):
+            conv = libasora_He.chemistry_global_pass(*args)
+            xHII[:] = xHII_int
+            xHeII[:] = xHeII_int
+            xHeIII[:] = xHeIII_int
+
+        assert conv == 4
+
+        exp_xh = np.load(data_dir / "ionized_fraction_all_species.npz")
+        assert np.allclose(xHII, exp_xh["xHII"])
+        assert np.allclose(xHeII, exp_xh["xHeII"])
+        assert np.allclose(xHeIII, exp_xh["xHeIII"])
+        assert np.allclose(xHII_av, exp_xh["xHII_av"])
+        assert np.allclose(xHeII_av, exp_xh["xHeII_av"])
+        assert np.allclose(xHeIII_av, exp_xh["xHeIII_av"])
+
+
+### BENCHMARKS ###
+
+
+def test_benchmark_chemistry_c2ray(benchmark):
+    with setup_chemistry(100, cosmo_only=True) as args:
         benchmark(libc2ray.chemistry_he.global_pass, *args)
 
 
 @pytest.mark.parametrize("block_size", [128, 256, 512])
 def test_benchmark_chemistry_asora(benchmark, init_device, block_size):
-    with setup_chemistry(200) as args:
+    with setup_chemistry(100) as args:
         benchmark(libasora_He.chemistry_global_pass, *args, block_size)

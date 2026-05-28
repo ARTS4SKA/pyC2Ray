@@ -148,6 +148,28 @@ class TestLibasora:
         libasora.photo_tables_to_device(*create_photo_table_data(100))
         libasora.photo_tables_to_device(*create_photo_table_data(90))
 
+    def test_cooling_tables_to_device(self, init_device):
+        # Five arguments required
+        with pytest.raises(TypeError):
+            libasora.cooling_tables_to_device((np.array([]),) * 4)
+
+        # Arguments must be np.float64 arrays
+        with pytest.raises(TypeError):
+            libasora.cooling_tables_to_device(
+                np.ones(10, dtype=np.float32), (np.zeros(10, dtype=np.float64),) * 4
+            )
+
+        def create_cooling_table_data(
+            num_tau: int,
+        ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+            cool = np.linspace(1, 9, num_tau + 1, dtype=np.float64)
+            return (cool,) * 5
+
+        assert libasora is not None
+        libasora.cooling_tables_to_device(*create_cooling_table_data(80))
+        libasora.cooling_tables_to_device(*create_cooling_table_data(100))
+        libasora.cooling_tables_to_device(*create_cooling_table_data(90))
+
     def test_source_data_to_device(self, init_device):
         # Two arguments required
         with pytest.raises(TypeError):

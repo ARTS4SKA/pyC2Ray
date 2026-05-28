@@ -5,34 +5,57 @@ module chemistry_he
    use thermalevolution, only: thermal_impl => thermal
    use chem_utils, only: electrondens
 
+   use, intrinsic :: iso_c_binding, only: c_double
+
    implicit none
+
+   interface
+      real(c_double) function expm1(x) bind(c, name='expm1')
+         import c_double
+         real(c_double), intent(in), value :: x
+      end function expm1
+   end interface
 
    public :: global_pass, thermal
 
-   real(kind=real64), parameter :: epsilon = 1e-14_real64                    ! Double precision very small number
-   real(kind=real64), parameter :: minimum_fractional_change = 1.0e-3      ! Should be a global parameter. TODO
-   real(kind=real64), parameter :: minimum_fraction_of_atoms = 1.0e-8
+   real(kind=real64), parameter :: epsilon = 1d-14                    ! Double precision very small number
+   real(kind=real64), parameter :: minimum_fractional_change = 1.0d-3      ! Should be a global parameter. TODO
+   real(kind=real64), parameter :: minimum_fraction_of_atoms = 1.0d-8
    real(kind=real64), parameter :: minitemp = 1.0_real64                   ! minimum temperature
 
    ! TODO: the variables here below need to be inported by the module rather then being hard-coded
    ! cross section constants
-   real(kind=real64), parameter :: sigma_H_at_HeI = 1.238e-18                  ! HI cross-section at HeI ionization frequency
-   real(kind=real64), parameter :: sigma_H_at_HeII = 1.230695924714239e-19     ! HI cross-section at HeII ionization frequency
-   real(kind=real64), parameter :: sigma_H_at_HeLya = 9.907e-22                ! HI cross-section at HeI Lya frequency (h\nu = 40.8 eV)
-   real(kind=real64), parameter :: sigma_HeI_at_ion_freq = 7.430e-18           ! HeI cross section at its ionzing frequency
-   real(kind=real64), parameter :: sigma_HeI_at_HeII = 1.690780687052975e-18   ! HeI cross-section at HeII ionization threshold
-   real(kind=real64), parameter :: sigma_HeI_at_HeLya = 1.301e-20              ! HeI cross-section at HeI Lya frequency (h\nu = 40.8 eV)
-   real(kind=real64), parameter :: sigma_HeII_at_ion_freq = 1.589e-18          ! HeII cross section at its ionzing frequency
+   real(kind=real64), parameter :: sigma_H_at_HeI = 1.238d-18                  ! HI cross-section at HeI ionization frequency
+   real(kind=real64), parameter :: sigma_H_at_HeII = 1.230695924714239d-19     ! HI cross-section at HeII ionization frequency
+   real(kind=real64), parameter :: sigma_H_at_HeLya = 9.907d-22                ! HI cross-section at HeI Lya frequency (h\nu = 40.8 eV)
+   real(kind=real64), parameter :: sigma_HeI_at_ion_freq = 7.430d-18           ! HeI cross section at its ionzing frequency
+   real(kind=real64), parameter :: sigma_HeI_at_HeII = 1.690780687052975d-18   ! HeI cross-section at HeII ionization threshold
+   real(kind=real64), parameter :: sigma_HeI_at_HeLya = 1.301d-20              ! HeI cross-section at HeI Lya frequency (h\nu = 40.8 eV)
+   real(kind=real64), parameter :: sigma_HeII_at_ion_freq = 1.589d-18          ! HeII cross section at its ionzing frequency
 
    ! cosmological abundance
    real(kind=real64), parameter :: abu_he = 0.074_real64
    real(kind=real64), parameter :: abu_h = 0.926_real64
-   real(kind=real64), parameter :: abu_c = 7.1e-7
+   real(kind=real64), parameter :: abu_c = 7.1d-7
 
    ! constants for thermal evolution
    real(kind=real64), parameter :: gamma = 5.0_real64/3.0_real64   ! monoatomic gas heat capacity ratio
 
 contains
+
+   function expm1x(x)
+
+      implicit none
+      real(kind=real64) :: expm1x
+      real(kind=real64), intent(in) :: x
+
+      if (abs(x) .lt. 1.0d-8) then
+         expm1x = 1.0_real64
+      else
+         expm1x = expm1(x)/x
+      end if
+
+   end function expm1x
 
    subroutine thermal(dt, end_temper, avg_temper, ndens_el, ndens_atom, heat, Hz, cosmo_only)
       ! This is the wrapper that appears in chemistry_he
@@ -327,20 +350,6 @@ contains
       end do
    end subroutine do_chemistry
 
-   function expm1x(x)
-
-      implicit none
-      real(kind=real64) :: expm1x
-      real(kind=real64), intent(in) :: x
-
-      if (abs(x) .lt. 1.0d-8) then
-         expm1x = 1.0_real64
-      else
-         expm1x = (exp(x) - 1.0_real64)/x
-      end if
-
-   end function expm1x
-
    ! ===============================================================================================
    ! Calculates time dependent ionization state for hydrogen and helium
    ! Author: Martina Friderich (2012)
@@ -388,21 +397,21 @@ contains
       real(kind=real64), parameter :: p_rec = 0.96_real64
       real(kind=real64), parameter :: l_dec = 1.425_real64
       real(kind=real64), parameter :: m_dec = 0.737_real64
-      real(kind=real64), parameter  :: ev2k = 1.0/8.617e-05
-      real(kind=real64), parameter :: temph0 = 13.598*ev2k
-      real(kind=real64), parameter :: temphe0 = 24.587*ev2k
-      real(kind=real64), parameter :: temphe1 = 54.416*ev2k
-      real(kind=real64), parameter :: colh0 = 1.3e-8*0.83*1.0/(13.598**2)
-      real(kind=real64), parameter :: colhe0 = 1.3e-8*0.63*2.0/(24.587**2)
-      real(kind=real64), parameter :: colhe1 = 1.3e-8*1.30*1.0/(54.416**2)
-      real(kind=real64), parameter :: epsilon = 1.0e-20_real64
+      real(kind=real64), parameter  :: ev2k = 1.0_real64/8.617d-05
+      real(kind=real64), parameter :: temph0 = 13.598_real64*ev2k
+      real(kind=real64), parameter :: temphe0 = 24.587_real64*ev2k
+      real(kind=real64), parameter :: temphe1 = 54.416_real64*ev2k
+      real(kind=real64), parameter :: colh0 = 1.3d-8*0.83_real64/(13.598_real64**2)
+      real(kind=real64), parameter :: colhe0 = 1.3d-8*1.26_real64/(24.587_real64**2)
+      real(kind=real64), parameter :: colhe1 = 1.3d-8*1.30_real64/(54.416_real64**2)
+      real(kind=real64), parameter :: epsilon = 1.0d-20
 
       f_lya = max(min(10.0_real64*xHII, 1.0_real64), 0.01_real64)
 
       ! Recombination rate of HI (Eq. 2.12 and 2.13)
       lambda = 2.0_real64*(temph0/temp_p)
-      alphA_HII = 1.269e-13_real64*lambda**1.503_real64/(1.0_real64 + (lambda/0.522)**0.470)**1.923
-      alphB_HII = 2.753e-14_real64*lambda**1.500_real64/(1.0_real64 + (lambda/2.740)**0.407)**2.242
+      alphA_HII = 1.269d-13*lambda**1.503_real64/(1.0_real64 + (lambda/0.522_real64)**0.470_real64)**1.923_real64
+      alphB_HII = 2.753d-14*lambda**1.500_real64/(1.0_real64 + (lambda/2.740_real64)**0.407_real64)**2.242_real64
       alph1_HII = alphA_HII - alphB_HII ! UNUSED
 
       ! Recombination rate of HeII (Eq. 2.14-17)
@@ -411,21 +420,21 @@ contains
          alphB_HeII = alphB_HII
       else
          lambda = 2.0_real64*(temphe0/temp_p)
-         dielec = 1.9e-3_real64*temp_p**(-1.5_real64)*exp(-4.7e5_real64/temp_p)*(1.0_real64 + 0.3_real64*exp(-9.4e4_real64/temp_p))
-         alphA_HeII = 3.000e-14_real64*lambda**0.654_real64 + dielec
-         alphB_HeII = 1.260e-14_real64*lambda**0.750_real64 + dielec
+         dielec = 1.9d-3*temp_p**(-1.5_real64)*exp(-4.7d5/temp_p)*(1.0_real64 + 0.3_real64*exp(-9.4d4/temp_p))
+         alphA_HeII = 3.000d-14*lambda**0.654_real64 + dielec
+         alphB_HeII = 1.260d-14*lambda**0.750_real64 + dielec
       end if
       alph1_HeII = alphA_HeII - alphB_HeII
 
       ! Recombination rate of HeIII (Eq. 2.18-20)
       lambda = 2.0_real64*(temphe1/temp_p)
-      alphA_HeIII = 2.538e-13_real64*lambda**1.503_real64/(1.0_real64 + (lambda/0.522_real64)**0.470_real64)**1.923_real64
-      alphB_HeIII = 5.5060e-14_real64*lambda**1.5_real64/(1.0_real64 + (lambda/2.740_real64)**0.407_real64)**2.242_real64
+      alphA_HeIII = 2.538d-13*lambda**1.503_real64/(1.0_real64 + (lambda/0.522_real64)**0.470_real64)**1.923_real64
+      alphB_HeIII = 5.5060d-14*lambda**1.5_real64/(1.0_real64 + (lambda/2.740_real64)**0.407_real64)**2.242_real64
       alph1_HeIII = alphA_HeIII - alphB_HeIII     ! this was not specified in Kay Yan Lee thesis, but confirmed by Garrelt (13.10.24)
-      alph2_HeIII = 3.4e-13_real64*(temp_p/1.0e4_real64)**(-0.6_real64)  ! extrapolate Osterbrok B value minus C value, p 38
+      alph2_HeIII = 3.4d-13*(temp_p/1.0d4)**(-0.6_real64)  ! extrapolate Osterbrok B value minus C value, p 38
 
       ! two photons emission from recombination of HeIII
-      nu = 0.285_real64*(temp_p/1.0e4_real64)**0.119_real64
+      nu = 0.285_real64*(temp_p/1.0d4)**0.119_real64
 
       ! Comoving distance dr is factorized out from the optical depth calculation because it does not affect the ratios.
       ! optical depth of HI at HeI ionation frequency threshold
@@ -476,8 +485,8 @@ contains
 
       ! get matrix elements
       A11 = -uHI + rHII_HI*n_e
-      A12 = abu_he/abu_h*rHeII_HI*n_e
-      A13 = abu_he/abu_h*rHeIII_HI*n_e
+      A12 = abu_he/abu_h*n_e*rHeII_HI
+      A13 = abu_he/abu_h*n_e*rHeIII_HI
       !A21 = 0.0
       A22 = -uHeI - uHeII + rHeII_HeI*n_e
       A23 = -uHeI + rHeIII_HeI*n_e
@@ -521,14 +530,23 @@ contains
       c2 = (R + (A33 - A22 - S)*T)/(2.0*S)
       c3 = -(R + (A33 - A22 + S)*T)/(2.0*S)
 
-      el1 = lamb1*dt
-      el2 = lamb2*dt
-      el3 = lamb3*dt
+      el1 = exp(lamb1*dt)
+      el2 = exp(lamb2*dt)
+      el3 = exp(lamb3*dt)
 
       ! Define analytical solution (Eq. 2.39-41)
-      xHII = p1 + c1*exp(el1) + x2_1*c2*exp(el2) + x3_1*c3*exp(el3)
-      xHeII = p2 + x2_2*c2*exp(el2) + x3_2*c3*exp(el3)
-      xHeIII = p3 + c2*exp(el2) + c3*exp(el3)
+      xHII = p1 + c1*el1 + x2_1*c2*el2 + x3_1*c3*el3
+      xHeII = p2 + x2_2*c2*el2 + x3_2*c3*el3
+      xHeIII = p3 + c2*el2 + c3*el3
+
+      el1 = expm1x(lamb1*dt)
+      el2 = expm1x(lamb2*dt)
+      el3 = expm1x(lamb3*dt)
+
+      ! Define time average solution (Eq. 2.64-68)
+      xHII_av = p1 + c1*el1 + x2_1*c2*el2 + x3_1*c3*el3
+      xHeII_av = p2 + x2_2*c2*el2 + x3_2*c3*el3
+      xHeIII_av = p3 + c2*el2 + c3*el3
 
       ! Fix numerical limits and renormalize
       xHeI = 1.0 - xHeII - xHeIII
@@ -538,11 +556,6 @@ contains
       norm = xHeI + xHeII + xHeIII
       xHeII = xHeII/norm
       xHeIII = xHeIII/norm
-
-      ! Define time average solution (Eq. 2.64-68)
-      xHII_av = p1 + c1*expm1x(el1) + x2_1*c2*expm1x(el2) + x3_1*c3*expm1x(el3)
-      xHeII_av = p2 + x2_2*c2*expm1x(el2) + x3_2*c3*expm1x(el3)
-      xHeIII_av = p3 + c2*expm1x(el2) + c3*expm1x(el3)
 
       ! Fix numerical limits and renormalize
       xHeI_av = 1.0 - xHeII_av - xHeIII_av

@@ -155,6 +155,11 @@ namespace asora {
         source_position,         ///< Source position array (21)
         temperature,             ///< Gas temperature array (22)
         clumping_factor,         ///< Clumping factor array (23)
+        cooling_HI_table,        ///< Lookup table for HI cooling rates. (24)
+        cooling_HII_table,       ///< Lookup table for HII cooling rates. (25)
+        cooling_HeI_table,       ///< Lookup table for HeI cooling rates (26)
+        cooling_HeII_table,      ///< Lookup table for HeII cooling rates (27)
+        cooling_HeIII_table,     ///< Lookup table for HeIII cooling rates (28)
     };
 
     /* @brief Singleton managing only one GPU device and its memory pool.
@@ -284,5 +289,11 @@ namespace asora {
         /// Memory pool for device buffers
         std::unordered_map<buffer_tag, device_buffer> _memory_pool;
     };
+
+    /// Convenience function to easily acess the pointer to a device buffer by tag.
+    template <typename T>
+    T *get_data_view(asora::buffer_tag tag) {
+        return asora::device::get(tag).data<T>();
+    }
 
 }  // namespace asora
