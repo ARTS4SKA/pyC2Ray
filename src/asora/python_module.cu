@@ -92,8 +92,8 @@ PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) 
 
     try {
         asora::do_all_sources_gpu(
-            R, sig, dr, xh_av_data, phi_ion_data, num_src, m1,
-            minlogtau, dlogtau, num_tau, grid_size, block_size
+            R, sig, dr, xh_av_data, phi_ion_data, num_src, m1, minlogtau, dlogtau,
+            num_tau, grid_size, block_size
         );
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
@@ -191,6 +191,33 @@ PyObject *asora_source_data_to_device([[maybe_unused]] PyObject *self, PyObject 
                : nullptr;
 }
 
+/// Ensure mesh-dependent buffers exist with the expected size.
+PyObject *asora_prepare_grid_buffers([[maybe_unused]] PyObject *self, PyObject *args) {
+    size_t m1;
+    int force_matching_size = 0;
+    if (!PyArg_ParseTuple(args, "k|p", &m1, &force_matching_size)) return nullptr;
+
+    auto n_cells = m1 * m1 * m1;
+    try {
+        asora::device::ensure<double>(
+            asora::buffer_tag::number_density, n_cells,
+            static_cast<bool>(force_matching_size)
+        );
+        asora::device::ensure<double>(
+            asora::buffer_tag::fraction_HII, n_cells,
+            static_cast<bool>(force_matching_size)
+        );
+        asora::device::ensure<double>(
+            asora::buffer_tag::photo_ionization_HI, n_cells,
+            static_cast<bool>(force_matching_size)
+        );
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return nullptr;
+    }
+    return Py_None;
+}
+
 PyObject *asora_chemistry_global_pass([[maybe_unused]] PyObject *self, PyObject *args) {
     double dt;
     PyArrayObject *ndens;
@@ -255,6 +282,8 @@ static PyMethodDef asoraMethods[] = {
      "Copy radiation tables to the device"},
     {"source_data_to_device", asora_source_data_to_device, METH_VARARGS,
      "Copy source data to the device"},
+    {"prepare_grid_buffers", asora_prepare_grid_buffers, METH_VARARGS,
+     "Ensure grid buffers are allocated with exact size for mesh m1"},
     {"chemistry_global_pass", asora_chemistry_global_pass, METH_VARARGS,
      "Solve chemistry ODE"},
     {NULL, NULL, 0, NULL} /* Sentinel */
