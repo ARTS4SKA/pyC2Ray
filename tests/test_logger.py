@@ -60,6 +60,26 @@ def test_configure_logger_file(logger, caplog, capsys, tmp_path):
     assert "WARNING: This is a warning message" in text
     assert "ERROR: This is an error message" in text
 
+# TODO: check if we need this test
+def test_configure_logger_file_creates_parent_dir(logger, caplog, capsys, tmp_path):
+    logfile = tmp_path / "nested" / "logs" / "pyc2ray.log"
+    configure_logger(logfile)
+    logging_function(logger)
+
+    assert len(caplog.records) == 3
+    out, err = capsys.readouterr()
+    assert out == "This is an info message\n"
+    assert (
+        err == "WARNING: This is a warning message\nERROR: This is an error message\n"
+    )
+
+    with open(logfile) as f:
+        text = f.read()
+
+    assert "INFO: This is an info message" in text
+    assert "WARNING: This is a warning message" in text
+    assert "ERROR: This is an error message" in text
+
 
 def test_configure_logger_file_debug(logger, caplog, capsys, tmp_path):
     logfile = tmp_path / "pyc2ray.log"
