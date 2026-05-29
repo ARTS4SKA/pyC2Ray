@@ -156,20 +156,29 @@ class C2Ray:
         self.xh: FloatArray
         self.clumping_factor: FloatArray
 
-        # MPI setup
+        # TODO: remove the condition on self.raytracing_params.activate_domain_decomposition, it's only there for testing purposes.
+        if self.mpi and MPI.COMM_WORLD.Get_size() <= 1 and not self.raytracing_params.activate_domain_decomposition:
+            logger.warning(
+                "Requested to enable MPI but there is only one process available. "
+                "Try to run this application with a higher number of processes. Disabling MPI."
+            )
+            self.grid_params.mpi = False
+
+        # if self.mpi and MPI.COMM_WORLD.Get_size() <= 1
+        #     logger.warning(
+        #         "Requested to enable MPI but there is only one process available. "
+        #         "Try to run this application with a higher number of processes. Disabling MPI."
+        #     )
+        #     self.grid_params.mpi = False
+
+
+        # MPI setup needs to happen before output initialization because _output_init uses self.rank.
         if self.mpi:
             self.rank = MPI.COMM_WORLD.Get_rank()
             self.nprocs = MPI.COMM_WORLD.Get_size()
         else:
             self.rank = 0
             self.nprocs = 1
-
-        if self.mpi and MPI.COMM_WORLD.Get_size() <= 1:
-            logger.warning(
-                "Requested to enable MPI but there is only one process available. "
-                "Try to run this application with a higher number of processes. Disabling MPI."
-            )
-            self.grid_params.mpi = False
 
         # Set Raytracing mode
         if self.gpu:
