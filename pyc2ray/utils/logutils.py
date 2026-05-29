@@ -3,6 +3,7 @@ import os
 import sys
 import warnings
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Iterator
 
 from mpi4py import MPI
@@ -105,6 +106,8 @@ def configure_logger(
 
     # Optionally set up a more comprehensive file handler
     if logfile is not None:
+        # TODO: check if we want to have the folder creation here
+        Path(logfile).parent.mkdir(parents=True, exist_ok=True)
         fout = logging.FileHandler(logfile, mode="a")
         fout.setLevel(lev0)
         fout.setFormatter(
