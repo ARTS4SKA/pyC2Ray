@@ -140,18 +140,6 @@ def test_do_all_sources(data_dir, init_device):
         pheat_HeI = args[16] * 1e48
         pheat_HeII = args[17] * 1e48
 
-        # TODO: keep this line here until we are satisfied with the black body radiation tables
-        if False:
-            np.savez(
-                data_dir / "photo_rates_with_helium.npz",
-                ion_HI=phion_HI,
-                ion_HeI=phion_HeI,
-                ion_HeII=phion_HeII,
-                heat_HI=pheat_HI,
-                heat_HeI=pheat_HeI,
-                heat_HeII=pheat_HeII,
-            )
-
         expected_rates = np.load(data_dir / "photo_rates_with_helium.npz")
 
         assert np.allclose(phion_HI, expected_rates["ion_HI"])

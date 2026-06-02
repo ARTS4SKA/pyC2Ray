@@ -336,15 +336,6 @@ contains
 
          ! Warn about non-convergence and terminate iteration
          if (nit > 400) then
-            ! TODO: commented out because error message is too verbose
-            ! if (rank == 0) then
-            !     write(logf,*) 'Convergence failing (global) nit=', nit
-            !     write(logf,*) 'x',ion%h_av(0)
-            !     write(logf,*) 'h',yh0_av_old
-            !     write(logf,*) abs(ion%h_av(0)-yh0_av_old)
-            ! endif
-            ! write(*,*) 'Convergence failing (global) nit=', nit
-            !conv_flag = conv_flag + 1
             exit
          end if
       end do
@@ -406,7 +397,7 @@ contains
       real(kind=real64), parameter :: colhe1 = 1.3d-8*1.30_real64/(54.416_real64**2)
       real(kind=real64), parameter :: epsilon = 1.0d-20
 
-      f_lya = max(min(10.0_real64*xHII, 1.0_real64), 0.01_real64)
+      f_lya = max(min(10.0_real64*xHII_old, 1.0_real64), 0.01_real64)
 
       ! Recombination rate of HI (Eq. 2.12 and 2.13)
       lambda = 2.0_real64*(temph0/temp_p)

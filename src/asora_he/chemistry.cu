@@ -105,7 +105,7 @@ namespace asora {
             }
         }
 
-        temp_av /= dt;
+        if (tot_time > 0) temp_av /= tot_time;
         return {temp, temp_av};
     }
 
