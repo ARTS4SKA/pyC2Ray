@@ -45,7 +45,7 @@ contains
       ! record the time elapsed
       real(kind=real64) :: cumulative_time
       ! internal energy of the cell
-      real(kind=real64) :: internal_energy, average_energy
+      real(kind=real64) :: internal_energy
       ! thermal timescale, used to calculate the thermal timestep
       real(kind=real64) :: thermal_timescale
       ! heating rate
@@ -70,7 +70,6 @@ contains
 
       ! Find initial internal energy
       internal_energy = get_energy(end_temper, ndens_atom, ndens_el, gamma)
-      average_energy = internal_energy
 
       ! stores the time elapsed is done
       cumulative_time = 0.0
@@ -102,9 +101,13 @@ contains
          internal_energy = internal_energy + dt_ODE*rate
 
          ! Update avg_temper sum (first part of dt_thermal sub time step)
-         average_energy = average_energy + dt_ODE*dt_ODE*rate/dt
+         avg_temper = avg_temper + 0.5*end_temper*dt_ODE
 
+         ! Find new temperature from the internal energy density
          end_temper = get_temperature(internal_energy, ndens_atom, ndens_el, gamma)
+
+         ! Update avg_temper sum (second part of dt_thermal sub time step)
+         avg_temper = avg_temper + 0.5*end_temper*dt_ODE
 
          ! Update fractional cumulative_time
          cumulative_time = cumulative_time + dt_ODE
@@ -120,7 +123,9 @@ contains
       end do
 
       ! Calculate the final temperature
-      avg_temper = get_temperature(average_energy, ndens_atom, ndens_el, gamma)
+      if (cumulative_time > 0) then
+         avg_temper = avg_temper/cumulative_time
+      end if
 
    end subroutine thermal
 

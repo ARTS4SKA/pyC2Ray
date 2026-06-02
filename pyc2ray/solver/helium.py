@@ -63,6 +63,18 @@ class CoolingTables:
         kwargs["tables_directory"] = directory
         return cls(**kwargs)
 
+    def astuple(
+        self,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Return the cooling tables as a tuple."""
+        return (
+            self.HI,
+            self.HII,
+            self.HeI,
+            self.HeII,
+            self.HeIII,
+        )
+
 
 def cooling_rate(
     n_a: float,
@@ -100,7 +112,8 @@ def cooling_rate(
     # Find the position of the temperature in the table
     # NOTE(TB): Using the same interpolating formula as in rates.cu, which is different from MB notes from 20.05.26;
     # it instead reads: interp = min(tnum - 1, (ltemp - tstart) / tstep)
-    interp = (math.log10(temp) - tstart) / tstep
+    ltemp = max(tstart, math.log10(temp))
+    interp = (ltemp - tstart) / tstep
     p, r = math.modf(interp)
     q = 1 - p
     i0 = max(0, min(tnum - 1, int(r))) + 1
@@ -124,6 +137,19 @@ def cosmo_cooling_rate(energy: float, Hz: float) -> float:
     """Return the cosmological cooling rate per unit volume (erg/s/cm^3)
     for a given internal energy and Hubble parameter."""
     return 2.0 * energy * Hz
+
+
+def get_electron_density(
+    ndens: float,
+    xh: tuple[float, float, float],
+    *,
+    abu_h: float = 0.926,
+    abu_he: float = 0.074,
+    abu_c: float = 7.1e-7,
+) -> float:
+    """Calculate the electron number density from the atomic number density and ionized fractions."""
+    xhii, xheii, xheiii = xh
+    return ndens * (abu_h * xhii + abu_he * (xheii + 2.0 * xheiii) + abu_c)
 
 
 def thermal(
@@ -183,33 +209,35 @@ def thermal(
         if cool_tables is None:
             raise ValueError("cool_tables must be provided when cosmo_only is False.")
 
-    u0 = get_energy(start_temp, ndens_a + ndens_e, gamma)
-    u_min = get_energy(min_temp, ndens_a + ndens_e, gamma)
-    ui = u0
-    ui_av = u0
-    Ti = start_temp
-    tot_time = 0.0
+    ui = get_energy(start_temp, ndens_a + ndens_e, gamma)
+    end_temp = start_temp
+    avg_temp = 0.0
 
+    tot_time = 0.0
     niter = 0
     while niter < max_iterations and tot_time < dt * (1 - 1e-6):
         rate = heating - cosmo_cooling_rate(ui, Hz)
         if not cosmo_only:
             assert xh is not None and cool_tables is not None
-            rate -= cooling_rate(ndens_a, ndens_e, Ti, *xh, cool_tables, abu_h, abu_he)
+            rate -= cooling_rate(
+                ndens_a, ndens_e, end_temp, *xh, cool_tables, abu_h, abu_he
+            )
         subdt = min(relative_denergy * ui / abs(rate), dt - tot_time)
 
         ui += rate * subdt
-        ui_av += rate * subdt**2 / dt
-        Ti = get_temperature(ui, ndens_a + ndens_e, gamma)
+        avg_temp += 0.5 * end_temp * subdt
+
+        end_temp = get_temperature(ui, ndens_a + ndens_e, gamma)
+        avg_temp += 0.5 * end_temp * subdt
 
         tot_time += subdt
         niter += 1
-        if ui < u_min:
-            ui = u_min
-            Ti = min_temp
+        if end_temp < min_temp:
+            ui = get_energy(min_temp, ndens_a + ndens_e, gamma)
+            end_temp = min_temp
             break
 
-    end_temp = Ti
-    avg_temp = get_temperature(ui_av, ndens_a + ndens_e, gamma)
+    if tot_time > 0:
+        avg_temp /= tot_time
 
     return end_temp, avg_temp
