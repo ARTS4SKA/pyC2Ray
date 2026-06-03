@@ -259,6 +259,7 @@ def setup_chemistry(
     mesh_size: int = 10,
     ionize_species: tuple[bool, bool, bool] = (True, True, True),
     cosmo_only: bool = False,
+    heat: float = 1e-31,
 ):
     assert len(ionize_species) == 3, "ionize_species should be a tuple of 3 booleans"
 
@@ -282,8 +283,11 @@ def setup_chemistry(
         np.full_like(ndens, s * p)
         for s, p in zip(ionize_species, (1e-14, 1e-15, 1e-16))
     )
-    # Unused right now
-    pheat = tuple(np.zeros_like(ndens) for _ in ionize_species)
+    pheat = (
+        np.full_like(ndens, heat),
+        np.zeros_like(ndens),
+        np.zeros_like(ndens),
+    )
 
     # Clumping factor
     clump = np.ones_like(ndens)
@@ -320,110 +324,95 @@ def setup_chemistry(
     )
 
 
-def test_chemistry_c2ray_hydrogen_only_cosmo_only(data_dir):
-    with setup_chemistry(ionize_species=(True, False, False), cosmo_only=True) as args:
-        _, xHeII_av, xHeIII_av = args[6], args[9], args[12]
-        xHII, xHeII, xHeIII = args[7], args[10], args[13]
+def compare_ionized_fractions(results_file: Path, args: tuple) -> None:
+    exp_xh = np.load(results_file)
+    for idx, name in {
+        7: "xHII",
+        10: "xHeII",
+        13: "xHeIII",
+        6: "xHII_av",
+        9: "xHeII_av",
+        12: "xHeIII_av",
+    }.items():
+        assert np.allclose(args[idx], exp_xh[name])
 
+
+def test_chemistry_c2ray_no_heat_hydrogen_only_cosmo_only(data_dir):
+    with setup_chemistry(
+        heat=0.0, ionize_species=(True, False, False), cosmo_only=True
+    ) as args:
         conv = libc2ray.chemistry_he.global_pass(*args)
         assert conv == 0
-
-        exp_xHII = np.load(data_dir / "ionized_fraction_hydrogen_only_cosmo_only.npy")
-        assert np.allclose(xHII, exp_xHII)
-
-        assert np.allclose(xHeII, 0.0)
-        assert np.allclose(xHeII_av, 0.0)
-        assert np.allclose(xHeIII, 0.0)
-        assert np.allclose(xHeIII_av, 0.0)
+        compare_ionized_fractions(
+            data_dir / "ionized_fraction_no_heat_hydrogen_only_cosmo_only.npz", args
+        )
 
 
-def test_chemistry_c2ray_cosmo_only(data_dir):
-    with setup_chemistry(cosmo_only=True) as args:
-        xHII_av, xHeII_av, xHeIII_av = args[6], args[9], args[12]
-        xHII, xHeII, xHeIII = args[7], args[10], args[13]
-
+def test_chemistry_c2ray_no_heat_cosmo_only(data_dir):
+    with setup_chemistry(heat=0.0, cosmo_only=True) as args:
         conv = libc2ray.chemistry_he.global_pass(*args)
         assert conv == 0
-
-        exp_xh = np.load(data_dir / "ionized_fraction_all_species_cosmo_only.npz")
-        assert np.allclose(xHII, exp_xh["xHII"])
-        assert np.allclose(xHeII, exp_xh["xHeII"])
-        assert np.allclose(xHeIII, exp_xh["xHeIII"])
-        assert np.allclose(xHII_av, exp_xh["xHII_av"])
-        assert np.allclose(xHeII_av, exp_xh["xHeII_av"])
-        assert np.allclose(xHeIII_av, exp_xh["xHeIII_av"])
+        compare_ionized_fractions(
+            data_dir / "ionized_fraction_no_heat_all_species_cosmo_only.npz", args
+        )
 
 
-def test_chemistry_asora_hydrogen_only_cosmo_only(data_dir, init_device):
-    with setup_chemistry(ionize_species=(True, False, False), cosmo_only=True) as args:
-        _, xHeII_av, xHeIII_av = args[6], args[9], args[12]
-        xHII, xHeII, xHeIII = args[7], args[10], args[13]
-
+def test_chemistry_asora_no_heat_hydrogen_only_cosmo_only(data_dir, init_device):
+    with setup_chemistry(
+        heat=0.0, ionize_species=(True, False, False), cosmo_only=True
+    ) as args:
         assert libasora_He is not None
         conv = libasora_He.chemistry_global_pass(*args)
         assert conv == 0
-
-        exp_xHII = np.load(data_dir / "ionized_fraction_hydrogen_only_cosmo_only.npy")
-        assert np.allclose(xHII, exp_xHII)
-
-        assert np.allclose(xHeII, 0.0)
-        assert np.allclose(xHeII_av, 0.0)
-        assert np.allclose(xHeIII, 0.0)
-        assert np.allclose(xHeIII_av, 0.0)
+        compare_ionized_fractions(
+            data_dir / "ionized_fraction_no_heat_hydrogen_only_cosmo_only.npz", args
+        )
 
 
-def test_chemistry_asora_cosmo_only(data_dir, init_device):
-    with setup_chemistry(cosmo_only=True) as args:
-        xHII_av, xHeII_av, xHeIII_av = args[6], args[9], args[12]
-        xHII, xHeII, xHeIII = args[7], args[10], args[13]
-
+def test_chemistry_asora_no_heat_cosmo_only(data_dir, init_device):
+    with setup_chemistry(heat=0.0, cosmo_only=True) as args:
         assert libasora_He is not None
         conv = libasora_He.chemistry_global_pass(*args)
         assert conv == 0
+        compare_ionized_fractions(
+            data_dir / "ionized_fraction_no_heat_all_species_cosmo_only.npz", args
+        )
 
-        exp_xh = np.load(data_dir / "ionized_fraction_all_species_cosmo_only.npz")
-        assert np.allclose(xHII, exp_xh["xHII"])
-        assert np.allclose(xHeII, exp_xh["xHeII"])
-        assert np.allclose(xHeIII, exp_xh["xHeIII"], rtol=1e-4)
-        assert np.allclose(xHII_av, exp_xh["xHII_av"])
-        assert np.allclose(xHeII_av, exp_xh["xHeII_av"], rtol=1e-4)
-        assert np.allclose(xHeIII_av, exp_xh["xHeIII_av"], rtol=1e-4)
+
+def test_chemistry_asora_no_heat_hydrogen_only(data_dir, init_device):
+    with setup_chemistry(heat=0.0, ionize_species=(True, False, False)) as args:
+        assert libasora_He is not None
+        conv = libasora_He.chemistry_global_pass(*args)
+        assert conv == 0
+        compare_ionized_fractions(
+            data_dir / "ionized_fraction_no_heat_hydrogen_only.npz", args
+        )
+
+
+def test_chemistry_asora_no_heat(data_dir, init_device):
+    with setup_chemistry(heat=0.0) as args:
+        assert libasora_He is not None
+        conv = libasora_He.chemistry_global_pass(*args)
+        assert conv == 0
+        compare_ionized_fractions(
+            data_dir / "ionized_fraction_no_heat_all_species.npz", args
+        )
 
 
 def test_chemistry_asora_hydrogen_only(data_dir, init_device):
-    with setup_chemistry(ionize_species=(True, False, False)) as args:
-        _, xHeII_av, xHeIII_av = args[6], args[9], args[12]
-        xHII, xHeII, xHeIII = args[7], args[10], args[13]
-
+    with setup_chemistry(ionize_species=(True, False, False), heat=0.0) as args:
         assert libasora_He is not None
         conv = libasora_He.chemistry_global_pass(*args)
         assert conv == 0
-
-        exp_xHII = np.load(data_dir / "ionized_fraction_hydrogen_only.npy")
-        assert np.allclose(xHII, exp_xHII)
-
-        assert np.allclose(xHeII, 0.0)
-        assert np.allclose(xHeII_av, 0.0)
-        assert np.allclose(xHeIII, 0.0)
-        assert np.allclose(xHeIII_av, 0.0)
+        compare_ionized_fractions(data_dir / "ionized_fraction_hydrogen_only.npz", args)
 
 
 def test_chemistry_asora(data_dir, init_device):
     with setup_chemistry() as args:
-        xHII_av, xHeII_av, xHeIII_av = args[6], args[9], args[12]
-        xHII, xHeII, xHeIII = args[7], args[10], args[13]
-
         assert libasora_He is not None
         conv = libasora_He.chemistry_global_pass(*args)
         assert conv == 0
-
-        exp_xh = np.load(data_dir / "ionized_fraction_all_species.npz")
-        assert np.allclose(xHII, exp_xh["xHII"])
-        assert np.allclose(xHeII, exp_xh["xHeII"])
-        assert np.allclose(xHeIII, exp_xh["xHeIII"])
-        assert np.allclose(xHII_av, exp_xh["xHII_av"])
-        assert np.allclose(xHeII_av, exp_xh["xHeII_av"])
-        assert np.allclose(xHeIII_av, exp_xh["xHeIII_av"])
+        compare_ionized_fractions(data_dir / "ionized_fraction_all_species.npz", args)
 
 
 ### BENCHMARKS ###
