@@ -265,8 +265,7 @@ namespace asora {
 
     __device__ cuda::std::array<double3, 2> friedrich(
         double dt, double temp, double n_e, const double3& xh, const double3& phion,
-        [[maybe_unused]] const double3& pheat, const double3& ndens,
-        [[maybe_unused]] double clumping, const parameters& p
+        const double3& ndens, [[maybe_unused]] double clumping, const parameters& p
     ) {
         constexpr double ev2K = 1.0 / 8.617e-05;
         constexpr double etHI = 13.598;    // eV
@@ -417,9 +416,8 @@ namespace asora {
                 electron_density(ndens, xh_av, p.abu_h, p.abu_he, p.abu_c);
 
             // Update ionizattion fractions according to the chemistry equations.
-            cuda::std::tie(xh_new, xh_av_new) = friedrich(
-                dt, temp, ndens_elec, xh, phi_ion, phi_heat, ndens_species, clump, p
-            );
+            cuda::std::tie(xh_new, xh_av_new) =
+                friedrich(dt, temp, ndens_elec, xh, phi_ion, ndens_species, clump, p);
 
             // Update electron density based on the fractions for thermal evolution.
             ndens_elec = electron_density(ndens, xh_av_new, p.abu_h, p.abu_he, p.abu_c);

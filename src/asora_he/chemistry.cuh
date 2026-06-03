@@ -100,7 +100,6 @@ namespace asora {
      * @param n_e Electron number density
      * @param xh Current ionization fractions
      * @param phion Photoionization rates
-     * @param pheat Photoheating rates (currently unused)
      * @param ndens Number densities
      * @param clumping Clumping factor (currently unused)
      * @param p Parameter set (cross sections, abundances, etc.)
@@ -109,8 +108,7 @@ namespace asora {
      */
     __device__ cuda::std::array<double3, 2> friedrich(
         double dt, double temp, double n_e, const double3& xh, const double3& phion,
-        [[maybe_unused]] const double3& pheat, const double3& ndens,
-        [[maybe_unused]] double clumping, const parameters& p = {}
+        const double3& ndens, [[maybe_unused]] double clumping, const parameters& p = {}
     );
 
     /* @brief Chemistry and temperature evolution on a single cell.

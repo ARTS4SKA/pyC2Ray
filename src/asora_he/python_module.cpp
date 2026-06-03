@@ -356,7 +356,7 @@ PyObject *asora_chemistry_global_pass([[maybe_unused]] PyObject *self, PyObject 
     double minlogtemp = 0.0;
     double dlogtemp = 1.0;
     size_t num_temp = 1;
-    size_t block_size = 512;
+    size_t block_size = 128;
 
     if (!PyArg_ParseTuple(
             args, "ddOOOOOOOOOOOOOOOOOOO|pddkk", &dt, &Hz, &ndens, &temp, &temp_av,
