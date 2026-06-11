@@ -1,5 +1,6 @@
 from dataclasses import dataclass, fields
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -27,12 +28,38 @@ def params_file(data_dir: Path) -> Path:
 
 @dataclass
 class MockParameters(YmlParameters):
-    param1: int
-    param2: float
+    SECTION: ClassVar[str] = "Mock"
+
+    param1: int = 0
+    param2: float = 1.0
     param3: str = "default"
 
 
 class TestYmlParameters:
+    def test_mock_default(self):
+        obj = MockParameters.from_yml({"Section": {}})
+
+        assert obj.param1 == 0
+        assert pytest.approx(obj.param2) == 1.0
+        assert obj.param3 == "default"
+
+    def test_mock_section(self):
+        obj = MockParameters.from_yml(
+            {
+                "Mock": {
+                    "param1": 10,
+                    "param2": 3.14,
+                    "param3": "custom",
+                    "param4": "ignored",
+                }
+            }
+        )
+
+        assert obj.param1 == 10
+        assert obj.param2 == 3.14
+        assert obj.param3 == "custom"
+        assert not hasattr(obj, "param4")
+
     def test_mock_parameters(self):
         obj = MockParameters.from_dict(
             {"param1": 10, "param2": 3.14, "param3": "custom", "param4": "ignored"}

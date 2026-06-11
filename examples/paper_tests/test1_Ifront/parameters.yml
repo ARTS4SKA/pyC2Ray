@@ -133,7 +133,7 @@ Cosmology:
 # ------------
 Output:
   # Directory where results and log files are stored (don't forget slash at end)
-  results_basename: /home/mbianco/Documents/PostDoc_ETH/dev_pyc2ray/test_results/
+  results_basename: ./test_results/
   # Name of the log file to write
   logfile: pyC2Ray.log
 

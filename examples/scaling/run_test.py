@@ -1,10 +1,13 @@
-import numpy as np, time, argparse
+import argparse
 import pickle as pkl
+import time
+
+import numpy as np
 from tqdm import tqdm
 
 import pyc2ray as pc2r
+from pyc2ray.asora_core import device_close, device_init
 from pyc2ray.utils.sourceutils import format_sources
-from pyc2ray.asora_core import device_init, device_close
 
 # For reproducibility set random seed
 np.random.seed(918)

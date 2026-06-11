@@ -13,6 +13,7 @@ Grid:
   # Box size in Mpc
   boxsize: 0.014
   resume: 0
+  meshsize: 128
 
 # --------------------------------------------------------------------
 # (Initial) properties of physical quantities in the simulation volume

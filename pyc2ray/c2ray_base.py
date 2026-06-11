@@ -2,6 +2,7 @@ import atexit
 import logging
 from functools import cached_property
 from pathlib import Path
+from typing import TypeAlias
 
 import numpy as np
 import tools21cm as t2c
@@ -40,6 +41,7 @@ from pyc2ray.utils.sourceutils import FloatArray, IntArray
 
 logger = logging.getLogger(__name__)
 
+ParameterClass: TypeAlias = type[YmlParameters]
 
 # ======================================================================
 # This file defines the abstract C2Ray object class, which is the basis
@@ -861,17 +863,18 @@ This corresponds to %.3f grid cells.
     def _read_paramfile(self, paramfile: PathType) -> None:
         """Read in YAML parameter file"""
         ld = YmlParameters.load_yaml(paramfile)
-        self.output_params = OutputParameters.from_dict(ld["Output"])
-        self.grid_params = GridParameters.from_dict(ld["Grid"])
-        self.raytracing_params = RaytracingParameters.from_dict(ld["Raytracing"])
-        self.material_params = MaterialParameters.from_dict(ld["Material"])
-        self.cgs_params = CGSParameters.from_dict(ld["CGS"])
-        self.cosmology_params = CosmologyParameters.from_dict(ld["Cosmology"])
-        self.abundance_params = AbundancesParameters.from_dict(ld["Abundances"])
-        self.photo_params = PhotoParameters.from_dict(ld["Photo"])
-        self.sinks_params = SinksParameters.from_dict(ld["Sinks"])
-        self.blackbody_params = BlackBodyParameters.from_dict(ld["BlackBodySource"])
-        self.sources_params = SourcesParameters.from_dict(ld["Sources"])
+
+        self.output_params = OutputParameters.from_yml(ld)
+        self.grid_params = GridParameters.from_yml(ld)
+        self.raytracing_params = RaytracingParameters.from_yml(ld)
+        self.material_params = MaterialParameters.from_yml(ld)
+        self.cgs_params = CGSParameters.from_yml(ld)
+        self.cosmology_params = CosmologyParameters.from_yml(ld)
+        self.abundance_params = AbundancesParameters.from_yml(ld)
+        self.photo_params = PhotoParameters.from_yml(ld)
+        self.sinks_params = SinksParameters.from_yml(ld)
+        self.blackbody_params = BlackBodyParameters.from_yml(ld)
+        self.sources_params = SourcesParameters.from_yml(ld)
 
     def _gpu_close(self) -> None:
         """Deallocate GPU memory"""
