@@ -15,6 +15,7 @@ Grid:
   # used "as is". When cosmological = true, it is first scaled to zred_0
   # Maybe this should be changed, as it can induce some confusion ?
   boxsize: 22.685455026110553 # = 7e25 comoving cm
+  meshsize: 256
   resume: 0
   
 # --------------------------------------------------------------------

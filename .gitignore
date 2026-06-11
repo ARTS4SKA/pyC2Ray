@@ -32,3 +32,6 @@ pyc2ray/tables/SPICE_scatter_SFR/*txt
 
 # Ignore docs test results folder
 **/test_results/
+
+# Ignore log files
+**/pyC2Ray.log

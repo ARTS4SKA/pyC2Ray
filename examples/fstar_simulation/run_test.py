@@ -1,16 +1,19 @@
-import sys
-import numpy as np
-import shutil
-import time
-import pyc2ray as pc2r
+"""
+Example for pyc2ray: Cosmological simulation from N-body
+"""
+
 import logging
 import os
+import shutil
+import sys
+import time
+
+import numpy as np
+
+import pyc2ray as pc2r
 
 PathType = str | os.PathLike
 
-# ======================================================================
-# Example for pyc2ray: Cosmological simulation from N-body
-# ======================================================================
 logger = logging.getLogger("pyc2ray")
 
 
@@ -35,7 +38,7 @@ def run_simulation(paramfile: PathType, num_steps_between_slices: int = 2) -> No
         sim.inputs_basename / "redshift_checkpoints.txt", unpack=True
     )
 
-    # check for resume simulation
+    # Check for resume simulation
     if sim.resume:
         i_start = (zred_array > sim.zred).nonzero()[0][-1]
         sim.resume = i_start + 1
@@ -71,7 +74,7 @@ def run_simulation(paramfile: PathType, num_steps_between_slices: int = 2) -> No
             f"CDM_100Mpc_2048.{iz:05d}.halo.txt", z=zi, dt=dt
         )
 
-        # save previous time-step output (or initial state)
+        # Save previous time-step output (or initial state)
         if sim.rank == 0 and k != i_start:
             sim.write_output(z=zi, ext=".npy")
 
@@ -80,15 +83,14 @@ def run_simulation(paramfile: PathType, num_steps_between_slices: int = 2) -> No
 
         # Loop over timesteps
         for t in range(num_steps_between_slices):
-            # get cosmological time of the intermediate time-steps
+            # Get cosmological time of the intermediate time-steps
             t_age = sim.cosmology.age(zi).cgs.value + t * dt
 
-            # get corresponding redshift
+            # Get corresponding redshift
             z = sim.time2zred(t_age)
 
-            # register wall clock time
+            # Register wall clock time
             tnow = timer.lap(f"z = {z:.3f}")
-
             logger.info(
                 f"\n --- Timestep {t + 1}: z = {sim.zred:.3f}, Wall clock time: {tnow} --- \n"
             )
@@ -102,12 +104,12 @@ def run_simulation(paramfile: PathType, num_steps_between_slices: int = 2) -> No
         # Evolve cosmology over final half time step to reach the correct time for next slice (see note in c2ray_base.py)
         sim.cosmo_evolve_to_now()
 
-    # stop the timer and print the summary
-    timer.stop()
-    sim.printlog(timer.summary, sim.logfile)
-
     # Write final output
     sim.write_output(zf, ext=".npy")
+
+    # stop the timer and print the summary
+    timer.stop()
+    logger.info(timer.summary)
 
 
 if __name__ == "__main__":
