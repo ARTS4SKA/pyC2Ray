@@ -1,18 +1,31 @@
 include:
   - remote: 'https://gitlab.com/cscs-ci/recipes/-/raw/master/templates/v2/.ci-ext.yml'
-
 stages:
   - build
 
-build:
+build prgenv 24.11:
   extends: .uenv-runner-daint-gh200
   stage: build
-  image: prgenv-gnu/24.11:v2
+  image: 'prgenv-gnu/24.11:v2'
   script:
-    - python -m venv env
-    - source env/bin/activate
-    - pip install .[test]
-    - pytest --benchmark-skip
-    - deactivate
+    - ./ci/run-tests.sh
   variables:
-    WITH_UENV_VIEW: "default"
+    WITH_UENV_VIEW: default
+
+build prgenv 25.6:
+  extends: .uenv-runner-daint-gh200
+  stage: build
+  image: 'prgenv-gnu/25.6:v2'
+  script:
+    - ./ci/run-tests.sh
+  variables:
+    WITH_UENV_VIEW: default
+
+build prgenv 25.11:
+  extends: .uenv-runner-daint-gh200
+  stage: build
+  image: 'prgenv-gnu/25.11:v1'
+  script:
+    - ./ci/run-tests.sh
+  variables:
+    WITH_UENV_VIEW: default

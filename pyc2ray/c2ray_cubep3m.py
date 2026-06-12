@@ -140,7 +140,7 @@ class C2Ray_CubeP3M(C2Ray):
         ]
 
         if high_z != self.prev_zdens:
-            file = "%scoarser_densities/%.3fn_all.dat" % (self.inputs_basename, high_z)
+            file = self.inputs_basename / f"coarser_densities/{high_z:.3f}n_all.dat"
             self.ndens = (
                 t2c.DensityFile(filename=file).cgs_density
                 / (self.mean_molecular * c.m_p)
@@ -208,11 +208,11 @@ class C2Ray_CubeP3M(C2Ray):
     def _redshift_init(self) -> None:
         """Initialize time and redshift counter"""
         self.zred_density = t2c.get_dens_redshifts(
-            self.inputs_basename + "coarser_densities/"
+            self.inputs_basename / "coarser_densities/"
         )[::-1]
-        # self.zred_sources = get_source_redshifts(self.inputs_basename+'sources/')[::-1]
+        # self.zred_sources = get_source_redshifts(self.inputs_basename/'sources/')[::-1]
         # TODO: waiting for next tools21cm release
-        self.zred_sources = t2c.get_source_redshifts(self.inputs_basename + "sources/")[
+        self.zred_sources = t2c.get_source_redshifts(self.inputs_basename / "sources/")[
             ::-1
         ]
         if self.resume:
@@ -234,8 +234,8 @@ class C2Ray_CubeP3M(C2Ray):
             # get fields at the resuming redshift
             self.ndens = (
                 t2c.DensityFile(
-                    filename="%scoarser_densities/%.3fn_all.dat"
-                    % (self.inputs_basename, self.prev_zdens)
+                    filename=self.inputs_basename
+                    / f"coarser_densities/{self.prev_zdens:%.3f}n_all.dat"
                 ).cgs_density
                 / (self.mean_molecular * c.m_p)
                 * (1 + self.zred) ** 3

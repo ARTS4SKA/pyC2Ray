@@ -492,15 +492,14 @@ namespace asora {
 
     // Host function to call global_pass
     size_t global_pass(
-        double dt, double Hz, const double* __restrict__ temp,
-        const double* __restrict__ ndens, double3ptr xh, double3ptr xh_av,
-        double3ptr xh_int, const double3ptr& phi_ion, const double3ptr& phi_heat,
-        const double* __restrict__ clump, const linspace<double>& logtemp,
-        const parameters& p, size_t n_cells, size_t block_size
+        double dt, double Hz, const double* __restrict__ temp, double3ptr xh,
+        double3ptr xh_av, double3ptr xh_int, const double3ptr& phi_ion,
+        const double3ptr& phi_heat, const double* __restrict__ clump,
+        const linspace<double>& logtemp, const parameters& p, size_t n_cells,
+        size_t block_size
     ) {
         // Initialize and copy const data.
         for (auto&& [tag, data] : {
-                 std::pair{buffer_tag::number_density, ndens},
                  std::pair{buffer_tag::temperature, temp},
                  std::pair{buffer_tag::clumping_factor, clump},
                  std::pair{buffer_tag::fraction_HII, xh_av.cx()},

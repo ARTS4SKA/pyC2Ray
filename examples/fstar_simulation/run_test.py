@@ -1,82 +1,117 @@
+"""
+Example for pyc2ray: Cosmological simulation from N-body
+"""
+
+import logging
+import os
+import shutil
 import sys
-import numpy as np, os
 import time
+
+import numpy as np
+
 import pyc2ray as pc2r
 
-# ======================================================================
-# Example for pyc2ray: Cosmological simulation from N-body
-# ======================================================================
+PathType = str | os.PathLike
 
-# Global parameters
-num_steps_between_slices = 2        # Number of timesteps between redshift slices
-paramfile = sys.argv[1]             # Name of the parameter file
+logger = logging.getLogger("pyc2ray")
 
-# Create C2Ray object
-sim = pc2r.C2Ray_fstar(paramfile=paramfile)
 
-# copy parameter file into the output directory
-if(sim.rank == 0): os.system('cp %s %s' %(paramfile, sim.results_basename))
+def run_simulation(paramfile: PathType, num_steps_between_slices: int = 2) -> None:
+    """
+    Parameter
+    ----------
+    paramfile :
+        Name of a YAML file containing parameters for the C2Ray simulation
+    num_steps_between_slices :
+        Number of timesteps between redshift slices (default: 2)
+    """
+    # Create C2Ray object
+    sim = pc2r.C2Ray_fstar(paramfile=paramfile)
 
-# Get redshift list (test case)
-idx_zred, zred_array = np.loadtxt(sim.inputs_basename+'redshift_checkpoints.txt', dtype=float, unpack=True)
-#idx_zred, zred_array = idx_zred[:94], zred_array[:94]
+    # Copy parameter file into the output directory
+    if sim.rank == 0:
+        shutil.copy(paramfile, sim.results_basename)
 
-# check for resume simulation
-if(sim.resume):
-    i_start = np.argmin(np.abs(zred_array - sim.zred))
-    sim.resume = i_start+1
-else:
-    i_start = 0
+    # Get redshift list (test case)
+    idx_zred, zred_array = np.loadtxt(
+        sim.inputs_basename / "redshift_checkpoints.txt", unpack=True
+    )
 
-# Measure time
-timer = pc2r.Timer()
-timer.start()
-    
-# Loop over redshifts
-for k in range(i_start, len(zred_array)-1):
+    # Check for resume simulation
+    if sim.resume:
+        i_start = (zred_array > sim.zred).nonzero()[0][-1]
+        sim.resume = i_start + 1
+    else:
+        i_start = 0
 
-    zi = zred_array[k]       # Start redshift
-    zf = zred_array[k+1]     # End redshift
+    # Measure time
+    timer = pc2r.Timer()
+    timer.start()
 
-    sim.printlog("\n=================================\nDoing redshift %.3f to %.3f\n=================================\n" %(zi, zf), sim.logfile)
+    # Loop over redshifts
+    for k in range(i_start, len(zred_array) - 1):
+        iz = idx_zred[k]  # Index redshift
+        zi = zred_array[k]  # Start redshift
+        zf = zred_array[k + 1]  # End redshift
 
-    # Compute timestep of current redshift slice
-    dt = sim.set_timestep(zi, zf, num_steps_between_slices)
+        logger.info(
+            "\n=================================\n"
+            f"Doing redshift {zi:.3f} to {zf:.3f}"
+            "\n=================================\n"
+        )
 
-    # Read input files
-    sim.read_density(fbase='CDM_200Mpc_2048.%05d.den.256.0' %idx_zred[k], z=zi)
+        # Compute timestep of current redshift slice
+        dt = sim.set_timestep(zi, zf, num_steps_between_slices)
 
-    # Read source files
-    srcpos, normflux = sim.ionizing_flux(file='CDM_200Mpc_2048.%05d.fof.txt' %idx_zred[k], z=zi, dt=dt) #, save_Mstar=sim.results_basename+'/sources')
+        # Read input files
+        # FIXME: This should come from parameter file
+        sim.read_density(f"CDM_100Mpc_2048.{iz:05d}.ovrden.npy", z=zi)
 
-    #TODO: move this after time-loop and change for zf
-    if(sim.rank == 0 and k != i_start):    
-        # Write output
-        sim.write_output(z=zi, ext='.npy')
+        # Read source files
+        # FIXME: This should come from parameter file
+        srcpos, normflux = sim.ionizing_flux(
+            f"CDM_100Mpc_2048.{iz:05d}.halo.txt", z=zi, dt=dt
+        )
 
-    # Set redshift to current slice redshift
-    sim.zred = zi
+        # Save previous time-step output (or initial state)
+        if sim.rank == 0 and k != i_start:
+            sim.write_output(z=zi, ext=".npy")
 
-    # Loop over timesteps
-    for t in range(num_steps_between_slices):
-        t_age = sim.cosmology.age(zi).cgs.value + t*dt
-        z = sim.time2zred(t_age)
-        tnow = timer.lap('z = %.3f' %z)
-        sim.printlog("\n --- Timestep %d: z = %.3f, Wall clock time: %s --- \n" %(t+1, sim.zred, tnow), sim.logfile)
+        # Set redshift to current slice redshift
+        sim.zred = zi
 
-        # Evolve Cosmology: increment redshift and scale physical quantities (density, proper cell size, etc.)
-        sim.cosmo_evolve(dt)
+        # Loop over timesteps
+        for t in range(num_steps_between_slices):
+            # Get cosmological time of the intermediate time-steps
+            t_age = sim.cosmology.age(zi).cgs.value + t * dt
 
-        # Evolve the simulation: raytrace -> photoionization rates -> chemistry -> until convergence
-        sim.evolve3D(dt, normflux, srcpos)
+            # Get corresponding redshift
+            z = sim.time2zred(t_age)
 
-    # Evolve cosmology over final half time step to reach the correct time for next slice (see note in c2ray_base.py)
-    #sim.cosmo_evolve(0)
-    sim.cosmo_evolve_to_now()
+            # Register wall clock time
+            tnow = timer.lap(f"z = {z:.3f}")
+            logger.info(
+                f"\n --- Timestep {t + 1}: z = {sim.zred:.3f}, Wall clock time: {tnow} --- \n"
+            )
 
-# stop the timer and print the summary
-timer.stop()
-sim.printlog(timer.summary, sim.logfile)
+            # Evolve Cosmology: increment redshift and scale physical quantities (density, proper cell size, etc.)
+            sim.cosmo_evolve(dt)
 
-# Write final output
-sim.write_output(zf, ext='.npy')
+            # Evolve the simulation: raytrace -> photoionization rates -> chemistry -> until convergence
+            sim.evolve3D(dt, normflux, srcpos)
+
+        # Evolve cosmology over final half time step to reach the correct time for next slice (see note in c2ray_base.py)
+        sim.cosmo_evolve_to_now()
+
+    # Write final output
+    sim.write_output(zf, ext=".npy")
+
+    # stop the timer and print the summary
+    timer.stop()
+    logger.info(timer.summary)
+
+
+if __name__ == "__main__":
+    paramfile = sys.argv[1]
+    sys.exit(run_simulation(paramfile))

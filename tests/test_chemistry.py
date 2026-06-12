@@ -362,7 +362,11 @@ def test_chemistry_asora_no_heat_hydrogen_only_cosmo_only(data_dir, init_device)
         heat=0.0, ionize_species=(True, False, False), cosmo_only=True
     ) as args:
         assert libasora_He is not None
-        conv = libasora_He.chemistry_global_pass(*args)
+        libasora_He.density_to_device(args[2])
+
+        asora_args = args[:2] + args[3:]
+        conv = libasora_He.chemistry_global_pass(*asora_args)
+
         assert conv == 0
         compare_ionized_fractions(
             data_dir / "ionized_fraction_no_heat_hydrogen_only_cosmo_only.npz", args
@@ -372,7 +376,11 @@ def test_chemistry_asora_no_heat_hydrogen_only_cosmo_only(data_dir, init_device)
 def test_chemistry_asora_no_heat_cosmo_only(data_dir, init_device):
     with setup_chemistry(heat=0.0, cosmo_only=True) as args:
         assert libasora_He is not None
-        conv = libasora_He.chemistry_global_pass(*args)
+        libasora_He.density_to_device(args[2])
+
+        asora_args = args[:2] + args[3:]
+        conv = libasora_He.chemistry_global_pass(*asora_args)
+
         assert conv == 0
         compare_ionized_fractions(
             data_dir / "ionized_fraction_no_heat_all_species_cosmo_only.npz", args
@@ -382,7 +390,11 @@ def test_chemistry_asora_no_heat_cosmo_only(data_dir, init_device):
 def test_chemistry_asora_no_heat_hydrogen_only(data_dir, init_device):
     with setup_chemistry(heat=0.0, ionize_species=(True, False, False)) as args:
         assert libasora_He is not None
-        conv = libasora_He.chemistry_global_pass(*args)
+        libasora_He.density_to_device(args[2])
+
+        asora_args = args[:2] + args[3:]
+        conv = libasora_He.chemistry_global_pass(*asora_args)
+
         assert conv == 0
         compare_ionized_fractions(
             data_dir / "ionized_fraction_no_heat_hydrogen_only.npz", args
@@ -392,7 +404,10 @@ def test_chemistry_asora_no_heat_hydrogen_only(data_dir, init_device):
 def test_chemistry_asora_no_heat(data_dir, init_device):
     with setup_chemistry(heat=0.0) as args:
         assert libasora_He is not None
-        conv = libasora_He.chemistry_global_pass(*args)
+        libasora_He.density_to_device(args[2])
+
+        asora_args = args[:2] + args[3:]
+        conv = libasora_He.chemistry_global_pass(*asora_args)
         assert conv == 0
         compare_ionized_fractions(
             data_dir / "ionized_fraction_no_heat_all_species.npz", args
@@ -402,7 +417,11 @@ def test_chemistry_asora_no_heat(data_dir, init_device):
 def test_chemistry_asora_hydrogen_only(data_dir, init_device):
     with setup_chemistry(ionize_species=(True, False, False), heat=0.0) as args:
         assert libasora_He is not None
-        conv = libasora_He.chemistry_global_pass(*args)
+        libasora_He.density_to_device(args[2])
+
+        asora_args = args[:2] + args[3:]
+        conv = libasora_He.chemistry_global_pass(*asora_args)
+
         assert conv == 0
         compare_ionized_fractions(data_dir / "ionized_fraction_hydrogen_only.npz", args)
 
@@ -410,7 +429,11 @@ def test_chemistry_asora_hydrogen_only(data_dir, init_device):
 def test_chemistry_asora(data_dir, init_device):
     with setup_chemistry() as args:
         assert libasora_He is not None
-        conv = libasora_He.chemistry_global_pass(*args)
+        libasora_He.density_to_device(args[2])
+
+        asora_args = args[:2] + args[3:]
+        conv = libasora_He.chemistry_global_pass(*asora_args)
+
         assert conv == 0
         compare_ionized_fractions(data_dir / "ionized_fraction_all_species.npz", args)
 
@@ -426,4 +449,8 @@ def test_benchmark_chemistry_c2ray(benchmark):
 @pytest.mark.parametrize("block_size", [128, 256, 512])
 def test_benchmark_chemistry_asora(benchmark, init_device, block_size):
     with setup_chemistry(100) as args:
-        benchmark(libasora_He.chemistry_global_pass, *args, block_size)
+        assert libasora_He is not None
+        libasora_He.density_to_device(args[2])
+
+        asora_args = args[:2] + args[3:]
+        benchmark(libasora_He.chemistry_global_pass, *asora_args, block_size)

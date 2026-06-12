@@ -1,4 +1,5 @@
 import os
+from typing import TypeAlias
 
 import numpy as np
 import numpy.typing as npt
@@ -8,8 +9,8 @@ import numpy.typing as npt
 
 
 PathType = str | os.PathLike
-IntArray = npt.NDArray[np.int32]
-FloatArray = npt.NDArray[np.float64]
+IntArray: TypeAlias = npt.NDArray[np.int32]
+FloatArray: TypeAlias = npt.NDArray[np.float64]
 
 
 def format_sources(

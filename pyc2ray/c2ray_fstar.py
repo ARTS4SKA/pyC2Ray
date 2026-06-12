@@ -11,11 +11,7 @@ import pyc2ray.constants as c
 from .c2ray_base import C2Ray
 from .source_model import BurstySFR, EscapeFraction, StellarToHaloRelation
 from .utils import bin_sources
-from .utils.other_utils import (
-    find_bins,
-    get_extension_in_folder,
-    get_redshifts_from_output,
-)
+from .utils.other_utils import find_bins, get_redshifts_from_output
 from .utils.sourceutils import FloatArray, IntArray, PathType
 
 __all__ = ["C2Ray_fstar"]
@@ -73,7 +69,7 @@ class C2Ray_fstar(C2Ray):
 
         # read halo list
         srcpos_mpc, srcmass_msun = self.read_haloes(
-            f"{self.sources_basename}{file}", self.boxsize
+            self.sources_basename / file, self.boxsize
         )
 
         # source life-time in cgs
@@ -264,11 +260,9 @@ class C2Ray_fstar(C2Ray):
         elif suffix == ".dat":
             # Read haloes from a CUBEP3M file format.
             hl = t2c.HaloCubeP3MFull(filename=halo_file, box_len=box_len)
-            # FIXME: unknown attribute
-            h = self.h  # type: ignore
-            srcmass_msun = hl.get(var="m") / h  # Msun
-            srcpos_mpc = hl.get(var="pos") / h  # Mpc
-        elif suffix == ".txt":
+            srcmass_msun = hl.get(var="m") / self.cosmology.h  # Msun
+            srcpos_mpc = hl.get(var="pos") / self.cosmology.h  # Mpc
+        elif (suffix == ".txt") and ("fof" in str(halo_file)):
             # Read haloes from a PKDGrav converted in txt.
             hl = np.loadtxt(halo_file)
             srcmass_msun = hl[:, 0] / self.cosmology.h  # Msun
@@ -279,33 +273,65 @@ class C2Ray_fstar(C2Ray):
                 self.boxsize - srcpos_mpc[srcpos_mpc > self.boxsize]
             )
             srcpos_mpc[srcpos_mpc < 0.0] = self.boxsize + srcpos_mpc[srcpos_mpc < 0.0]
+            srcpos_mpc[srcpos_mpc > self.boxsize] = (
+                srcpos_mpc[srcpos_mpc > self.boxsize] - self.boxsize
+            )
+
+            assert srcpos_mpc.min() >= 0.0
+            assert srcpos_mpc.min() <= self.boxsize
+            srcpos_mpc /= self.cosmology.h  # Mpc
+        elif (suffix == ".txt") and ("halo" in str(halo_file)):
+            # Read haloes from a PKDGrav converted in txt (other converntion).
+            hl = np.loadtxt(halo_file)
+            srcmass_msun = hl[:, 0] / self.cosmology.h  # Msun
+
+            srcpos_mpc = hl[:, 1:]  # Mpc/h
+
+            srcpos_mpc[srcpos_mpc < 0.0] = self.boxsize + srcpos_mpc[srcpos_mpc < 0.0]
+            srcpos_mpc[srcpos_mpc > self.boxsize] = (
+                srcpos_mpc[srcpos_mpc > self.boxsize] - self.boxsize
+            )
+
+            assert srcpos_mpc.min() >= 0.0
+            assert srcpos_mpc.min() <= self.boxsize
+
             srcpos_mpc /= self.cosmology.h  # Mpc
         return srcpos_mpc, srcmass_msun
 
-    def read_density(self, fbase, z=None):
+    def read_density(self, fbase: PathType, z: float) -> None:
         """Read coarser density field from C2Ray-formatted file
 
-        This method is meant for reading density field run with either N-body or hydro-dynamical simulations. The field is then smoothed on a coarse mesh grid.
+        This method is meant for reading density field run with either N-body or hydro-dynamical simulations.
+        The field is then smoothed on a coarse mesh grid.
 
         Parameters
         ----------
-        fbase : string
-            the file name (cwithout the path) of the file to open
+        fbase : the file name (without the path) of the file to open
+        z : Redshift
 
         """
-        file = self.density_basename + fbase
-        rdr = t2c.Pkdgrav3data(self.boxsize, self.N, Omega_m=self.cosmology.Om0)
-        self.ndens = (
+        file = self.density_basename / fbase
+        if file.suffix == ".npy":
+            overd = np.load(file) - 1.0
+        else:
+            rdr = t2c.Pkdgrav3data(self.boxsize, self.N, Omega_m=self.cosmology.Om0)
+            overd = rdr.load_density_field(str(file))
+
+        self.ndens: np.ndarray = (
             self.cosmology.critical_density0.cgs.value
             * self.cosmology.Ob0
-            * (1.0 + rdr.load_density_field(file))
+            * (1.0 + overd)
             / (self.mean_molecular * c.m_p)
             * (1 + z) ** 3
         )
+
+        # set floor density to avoid cells with value zero
+        self.ndens = np.maximum(self.ndens, 5e-6)
+
         logger.info(
             """
 ---- Reading density file:
-  %s
+%s
  min, mean and max density : %.3e  %.3e  %.3e [1/cm3]""",
             file,
             self.ndens.min(),
@@ -319,8 +345,13 @@ class C2Ray_fstar(C2Ray):
 
     def _redshift_init(self):
         """Initialize time and redshift counter"""
-        self.zred_density = np.loadtxt(self.density_basename + "redshift_density.txt")
-        self.zred_sources = np.loadtxt(self.sources_basename + "redshift_sources.txt")
+        # FIXME: HARDCODED FILE NAMES
+        self.zred_density = np.loadtxt(
+            self.density_basename / "redshift_density.txt", usecols=1
+        )
+        self.zred_sources = np.loadtxt(
+            self.sources_basename / "redshift_sources.txt", usecols=1
+        )
         if self.resume:
             # get the resuming redshift
             self.zred = np.min(get_redshifts_from_output(self.results_basename))
@@ -335,50 +366,46 @@ class C2Ray_fstar(C2Ray):
 
     def _material_init(self):
         """Initialize material properties of the grid"""
-        if self.resume:
-            # get fields at the resuming redshift
-            self.ndens = self.read_density(
-                fbase="CDM_200Mpc_2048.%05d.den.256.0" % self.resume, z=self.prev_zdens
+        if not self.resume:
+            super()._material_init()
+            return
+
+        # get extension of the output file
+        # ext = get_extension_in_folder(path=self.results_basename)
+        ext = ".npy"
+        if ext == ".dat":
+            fname = "%sxfrac_z%.3f.dat" % (self.results_basename, self.zred)
+            self.xh = t2c.read_cbin(filename=fname, bits=64, order="F")
+            self.phi_ion = t2c.read_cbin(
+                filename="%sIonRates_z%.3f.dat" % (self.results_basename, self.zred),
+                bits=32,
+                order="F",
+            )
+        elif ext == ".npy":
+            fname = self.results_basename / ("xfrac_z%.3f.npy" % self.zred)
+            self.xh = np.load(fname)
+            self.phi_ion = np.load(
+                self.results_basename / ("IonRates_z%.3f.npy" % self.zred)
+            )
+        else:
+            raise FileNotFoundError(
+                " Resume file not found: %sxfrac_%.3f.npy"
+                % (self.results_basename, self.zred)
             )
 
-            # get extension of the output file
-            ext = get_extension_in_folder(path=self.results_basename)
-            if ext == ".dat":
-                fname = "%sxfrac_z%.3f.dat" % (self.results_basename, self.zred)
-                self.xh = t2c.read_cbin(filename=fname, bits=64, order="F")
-                self.phi_ion = t2c.read_cbin(
-                    filename="%sIonRates_z%.3f.dat"
-                    % (self.results_basename, self.zred),
-                    bits=32,
-                    order="F",
-                )
-            elif ext == ".npy":
-                fname = "%sxfrac_z%.3f.npy" % (self.results_basename, self.zred)
-                self.xh = np.load(fname)
-                self.phi_ion = np.load(
-                    "%sIonRates_z%.3f.npy" % (self.results_basename, self.zred)
-                )
-            else:
-                raise FileNotFoundError(
-                    " Resume file not found: %sxfrac_%.3f.npy"
-                    % (self.results_basename, self.zred)
-                )
-
-            logger.info(
-                """
+        logger.info(
+            """
 ---- Reading ionized fraction field:
 %s
  min, mean and max density : %.5e  %.5e  %.5e""",
-                fname,
-                self.xh.min(),
-                self.xh.mean(),
-                self.xh.max(),
-            )
+            fname,
+            self.xh.min(),
+            self.xh.mean(),
+            self.xh.max(),
+        )
 
-            # TODO: implement heating
-            self.temp = np.full(self.shape, self.material_params.temp0, order="F")
-        else:
-            super()._material_init()
+        # TODO: implement heating
+        self.temp = np.full(self.shape, self.material_params.temp0, order="F")
 
     @property
     def fstar_kind(self) -> str:

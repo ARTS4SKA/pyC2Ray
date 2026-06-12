@@ -180,11 +180,11 @@ namespace asora {
     );
 
     size_t global_pass(
-        double dt, double Hz, const double* __restrict__ temp,
-        const double* __restrict__ ndens, double3ptr xh, double3ptr xh_av,
-        double3ptr xh_int, const double3ptr& phi_ion, const double3ptr& phi_heat,
-        const double* __restrict__ clump, const linspace<double>& logtemp,
-        const parameters& p, size_t n_cells, size_t block_size
+        double dt, double Hz, const double* __restrict__ temp, double3ptr xh,
+        double3ptr xh_av, double3ptr xh_int, const double3ptr& phi_ion,
+        const double3ptr& phi_heat, const double* __restrict__ clump,
+        const linspace<double>& logtemp, const parameters& p, size_t n_cells,
+        size_t block_size
     );
 
 }  // namespace asora

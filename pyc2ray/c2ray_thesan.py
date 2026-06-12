@@ -85,7 +85,7 @@ class C2Ray_Thesan(C2Ray):
 
         # read halo list
         srcpos_mpc, srcmass_msun = self.read_haloes(
-            f"{self.sources_basename}{file}", self.boxsize
+            self.sources_basename / file, self.boxsize
         )
 
         # select table based on the closest redshift
@@ -234,7 +234,7 @@ class C2Ray_Thesan(C2Ray):
         z : redshift
 
         """
-        file = self.density_basename + fbase
+        file = self.density_basename / fbase
         rdr = t2c.Pkdgrav3data(self.boxsize, self.N, Omega_m=self.cosmology.Om0)
         self.ndens = (
             self.cosmology.critical_density0.cgs.value
@@ -260,8 +260,8 @@ class C2Ray_Thesan(C2Ray):
 
     def _redshift_init(self) -> None:
         """Initialize time and redshift counter"""
-        self.zred_density = np.loadtxt(self.density_basename + "redshift_density.txt")
-        self.zred_sources = np.loadtxt(self.sources_basename + "redshift_sources.txt")
+        self.zred_density = np.loadtxt(self.density_basename / "redshift_density.txt")
+        self.zred_sources = np.loadtxt(self.sources_basename / "redshift_sources.txt")
         if self.resume:
             # get the resuming redshift
             self.zred = np.min(get_redshifts_from_output(self.results_basename))
