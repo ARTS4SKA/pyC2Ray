@@ -163,43 +163,14 @@ class C2Ray_CubeP3M(C2Ray):
             # TODO: in the future use this values for a 3D interpolation for the density (can be extended to sources too)
             pass
 
-    def write_output(self, z: float, ext: str = ".dat") -> None:
+    def write_output(self, z: float, *args, **kwargs) -> None:
         """Write ionization fraction & ionization rates as C2Ray binary files
 
         Parameters
         ----------
         z : Redshift (used to name the file)
         """
-        suffix = f"_{z:.3f}.dat"
-        t2c.save_cbin(
-            filename=self.results_basename / f"xfrac{suffix}",
-            data=self.xh,
-            bits=64,
-            order="F",
-        )
-        t2c.save_cbin(
-            filename=self.results_basename / f"IonRates{suffix}",
-            data=self.phi_ion,
-            bits=32,
-            order="F",
-        )
-
-        logger.info(
-            """
---- Reionization History ----
- min, mean, max xHII : %.3e  %.3e  %.3e
- min, mean, max Irate : %.3e  %.3e  %.3e [1/s]
- min, mean, max density : %.3e  %.3e  %.3e [1/cm3]""",
-            self.xh.min(),
-            self.xh.mean(),
-            self.xh.max(),
-            self.phi_ion.min(),
-            self.phi_ion.mean(),
-            self.phi_ion.max(),
-            self.ndens.min(),
-            self.ndens.mean(),
-            self.ndens.max(),
-        )
+        super().write_output(z, write_summary=False)
 
     # =====================================================================================================
     # Below are the overridden initialization routines specific to the CubeP3M case

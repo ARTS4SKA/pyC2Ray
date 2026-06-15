@@ -2,6 +2,7 @@ import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -58,7 +59,7 @@ class CoolingTables:
             data = np.pow(10, np.loadtxt(filename, unpack=True)[1])
             return np.insert(data, 0, 0.0)
 
-        kwargs = {x: load_table(f) for x, f in table_filenames.items()}
+        kwargs: dict[str, Any] = {x: load_table(f) for x, f in table_filenames.items()}
         kwargs["logtemp"] = logtemp
         kwargs["tables_directory"] = directory
         return cls(**kwargs)

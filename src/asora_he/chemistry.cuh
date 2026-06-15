@@ -115,7 +115,7 @@ namespace asora {
      *
      * @param dt Timestep size
      * @param Hz Hubble parameter
-     * @param temp_start Temperature at the beginning of the step
+     * @param temp Temperature at the beginning of the step
      * @param ndens Hydrogen number density for the cell
      * @param xh Current ionization fractions
      * @param xh_av Current average ionization fractions
@@ -127,11 +127,11 @@ namespace asora {
      * @param p Parameter set (cross sections, abundances, etc.)
      * @param max_iterations Maximum number of chemistry iterations
      *
-     * @return {ionization fractions, average ionization fractions}
+     * @return {ionization fractions, average ionization fractions, temperature}
      */
 
-    __device__ cuda::std::array<double3, 2> do_chemistry(
-        double dt, double Hz, double temp_start, double ndens, const double3& xh,
+    __device__ cuda::std::tuple<double3, double3, double2> do_chemistry(
+        double dt, double Hz, double temp, double ndens, const double3& xh,
         double3 xh_av, const double3& phi_ion, const double3& phi_heat, double clump,
         const cooling_tables& rates, const linspace<double>& logscale,
         const parameters& p = {}, size_t max_iterations = 400
@@ -157,7 +157,8 @@ namespace asora {
      *
      * @param dt Timestep size
      * @param Hz Hubble parameter
-     * @param temp Temperature array
+     * @param temp Temperature array (input)
+     * @param temp_int Temperature array (output)
      * @param ndens Number density array
      * @param xh Ionization fractions
      * @param xh_av Average ionization fractions
@@ -173,18 +174,18 @@ namespace asora {
      */
     __global__ void evolve0D_gpu(
         double dt, double Hz, const double* __restrict__ temp,
-        const double* __restrict__ ndens, double3ptr xh, double3ptr xh_av,
-        double3ptr xh_int, double3ptr phi_ion, double3ptr phi_heat,
+        double* __restrict__ temp_int, const double* __restrict__ ndens, double3ptr xh,
+        double3ptr xh_av, double3ptr xh_int, double3ptr phi_ion, double3ptr phi_heat,
         const double* __restrict__ clump, cooling_tables tables,
         linspace<double> logtemp, bool* conv_flag, parameters p, size_t size
     );
 
     size_t global_pass(
-        double dt, double Hz, const double* __restrict__ temp, double3ptr xh,
-        double3ptr xh_av, double3ptr xh_int, const double3ptr& phi_ion,
-        const double3ptr& phi_heat, const double* __restrict__ clump,
-        const linspace<double>& logtemp, const parameters& p, size_t n_cells,
-        size_t block_size
+        double dt, double Hz, const double* __restrict__ temp,
+        double* __restrict__ temp_int, double3ptr xh, double3ptr xh_av,
+        double3ptr xh_int, const double3ptr& phi_ion, const double3ptr& phi_heat,
+        const double* __restrict__ clump, const linspace<double>& logtemp,
+        const parameters& p, size_t n_cells, size_t block_size
     );
 
 }  // namespace asora

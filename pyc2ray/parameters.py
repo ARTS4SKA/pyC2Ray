@@ -129,9 +129,13 @@ class MaterialParameters(YmlParameters):
     SECTION: ClassVar[str] = "Material"
 
     # Initial Temperature of the grid
-    temp0: float = 1e4
-    # Initial Ionized fraction of the grid
-    xh0: float = 1.2e-3
+    temp0: float = 10.0
+    # Initial Ionized fraction of the grid for HII
+    xHII: float = 2.0e-4
+    # Initial Ionized fraction of the grid for HeII
+    xHeII: float = 1.0e-15
+    # Initial Ionized fraction of the grid for HeIII
+    xHeIII: float = 0.0
     # Constant average density, comoving value
     avg_dens: float = 1.87e-7
 

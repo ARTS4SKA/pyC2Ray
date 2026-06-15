@@ -21,8 +21,10 @@ Raytracing:
   convergence_fraction: 1e-4
 
 Material:
-  temp0: 1e4
-  xh0: 1.2e-3
+  temp0: 10.0
+  xHII: 2.0e-4
+  xHeII: 1.0e-15
+  xHeIII: 0.0
   avg_dens: 1.87e-7
 
 CGS:

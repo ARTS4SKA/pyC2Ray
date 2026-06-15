@@ -78,7 +78,7 @@ class C2Ray_Test(C2Ray):
         """
         self.set_constant_average_density(self.avg_dens, z)
 
-    def write_output(self, z: float, ext: str = ".dat") -> None:
+    def write_output(self, z: float, *args, **kwargs) -> None:
         """Write ionization fraction & ionization rates as pickle files
 
         Parameters
@@ -86,13 +86,7 @@ class C2Ray_Test(C2Ray):
         z : float
             Redshift (used to name the file)
         """
-        np.save(f"{self.results_basename}/xfrac_{z:.3f}.npy", self.xh)
-        np.save(f"{self.results_basename}/IonRates_{z:.3f}.npy", self.phi_ion)
-        # suffix = f"_{z:.3f}.pkl"
-        # with open(self.results_basename + "xfrac" + suffix,"wb") as f:
-        #     pkl.dump(self.xh,f)
-        # with open(self.results_basename + "IonRates" + suffix,"wb") as f:
-        #     pkl.dump(self.phi_ion,f)
+        self._write_grids(z)
 
     def write_output_numbered(self, n: int) -> None:
         """Write ionization fraction & ionization rates as pickle files with number rather than redshift
@@ -106,7 +100,7 @@ class C2Ray_Test(C2Ray):
         with open(self.results_basename / f"xfrac{suffix}", "wb") as f:
             pkl.dump(self.xh, f)
         with open(self.results_basename / f"IonRates{suffix}", "wb") as f:
-            pkl.dump(self.phi_ion, f)
+            pkl.dump(self.phion, f)
 
     def set_constant_average_density(self, ndens: float, z: float) -> None:
         """Helper function to set the density grid to a constant value

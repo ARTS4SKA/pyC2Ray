@@ -391,7 +391,7 @@ namespace asora {
         return {res, res_av};
     }
 
-    __device__ cuda::std::array<double3, 2> do_chemistry(
+    __device__ cuda::std::tuple<double3, double3, double2> do_chemistry(
         double dt, double Hz, double temp, double ndens, const double3& xh,
         double3 xh_av, const double3& phi_ion, const double3& phi_heat, double clump,
         const cooling_tables& tables, const linspace<double>& logtemp,
@@ -442,16 +442,17 @@ namespace asora {
             temp_av = temp_av_new;
         }
 
-        // Return  xHII, HeI, HeII, xHII_av, HeI_av, HeII_av */
-        return {xh_new, xh_av_new};
+        // Return {xHII, xHeII, xHeIII}, {xHII_av, xHeII_av, xHeIII_av}, {temp, temp_av}
+        return {xh_new, xh_av_new, {temp, temp_av}};
     }
 
     // Global pass kernel
     __global__ void evolve0D_gpu(
-        double dt, double Hz, double* __restrict__ temp, double* __restrict__ ndens,
-        double3ptr xh, double3ptr xh_av, double3ptr xh_int, double3ptr phi_ion,
-        double3ptr phi_heat, const double* __restrict__ clump, cooling_tables tables,
-        linspace<double> logtemp, bool* conv_flag, parameters p, size_t size
+        double dt, double Hz, double* __restrict__ temp, double* __restrict__ temp_int,
+        double* __restrict__ ndens, double3ptr xh, double3ptr xh_av, double3ptr xh_int,
+        double3ptr phi_ion, double3ptr phi_heat, const double* __restrict__ clump,
+        cooling_tables tables, linspace<double> logtemp, bool* conv_flag, parameters p,
+        size_t size
     ) {
         auto idx = threadIdx.x + blockDim.x * blockIdx.x;
 
@@ -461,8 +462,10 @@ namespace asora {
             double3 xh_p = {xh.x[idx], xh.y[idx], xh.z[idx]};
             double3 xh_av_p = {xh_av.x[idx], xh_av.y[idx], xh_av.z[idx]};
 
-            auto&& [xh_int_new, xh_av_new] = do_chemistry(
-                dt, Hz, temp[idx], ndens[idx], xh_p, xh_av_p,
+            // This already writes to temp_int.
+            double temp_av_old = temp[idx];
+            auto&& [xh_int_new, xh_av_new, temp_new] = do_chemistry(
+                dt, Hz, temp_av_old, ndens[idx], xh_p, xh_av_p,
                 {phi_ion.x[idx], phi_ion.y[idx], phi_ion.z[idx]},
                 {phi_heat.x[idx], phi_heat.y[idx], phi_heat.z[idx]}, clump[idx], tables,
                 logtemp, p
@@ -470,9 +473,12 @@ namespace asora {
 
             conv_flag[idx] = check_convergence_global(xh_av_new.x, xh_av_p.x) &&
                              check_convergence_global(xh_av_new.y, xh_av_p.y) &&
-                             check_convergence_global(xh_av_new.z, xh_av_p.z);
+                             check_convergence_global(xh_av_new.z, xh_av_p.z) &&
+                             abs(temp_av_old - temp_new.y) / temp_new.y > 0.1 &&
+                             abs(temp_new.y - temp_av_old) > 100.0;
 
             // Update the results in global memory.
+            temp_int[idx] = temp_new.x;
             xh_int.x[idx] = xh_int_new.x;
             xh_int.y[idx] = xh_int_new.y;
             xh_int.z[idx] = xh_int_new.z;
@@ -492,11 +498,11 @@ namespace asora {
 
     // Host function to call global_pass
     size_t global_pass(
-        double dt, double Hz, const double* __restrict__ temp, double3ptr xh,
-        double3ptr xh_av, double3ptr xh_int, const double3ptr& phi_ion,
-        const double3ptr& phi_heat, const double* __restrict__ clump,
-        const linspace<double>& logtemp, const parameters& p, size_t n_cells,
-        size_t block_size
+        double dt, double Hz, const double* __restrict__ temp,
+        double* __restrict__ temp_int, double3ptr xh, double3ptr xh_av,
+        double3ptr xh_int, const double3ptr& phi_ion, const double3ptr& phi_heat,
+        const double* __restrict__ clump, const linspace<double>& logtemp,
+        const parameters& p, size_t n_cells, size_t block_size
     ) {
         // Initialize and copy const data.
         for (auto&& [tag, data] : {
@@ -516,6 +522,7 @@ namespace asora {
         }
 
         // Initialize and copy non-const data.
+        auto temp_int_buf = allocate_and_copy(n_cells, temp_int);
         auto xHII_buf = allocate_and_copy(n_cells, xh.x);
         auto xHII_int_buf = allocate_and_copy(n_cells, xh_int.x);
         auto xHeII_buf = allocate_and_copy(n_cells, xh.y);
@@ -527,6 +534,7 @@ namespace asora {
         auto conv_flag_d = conv_flag.view<bool>().data();
 
         auto temp_d = get_data_view<double>(buffer_tag::temperature);
+        auto temp_int_d = temp_int_buf.data<double>();
         auto ndens_d = get_data_view<double>(buffer_tag::number_density);
         auto clump_d = get_data_view<double>(buffer_tag::clumping_factor);
 
@@ -567,8 +575,8 @@ namespace asora {
         // Launch kernel, divide by 2 so that threads do more work.
         size_t grid_size = std::ceil(static_cast<float>(n_cells) / block_size / 2);
         evolve0D_gpu<<<grid_size, block_size>>>(
-            dt, Hz, temp_d, ndens_d, xh_d, xh_av_d, xh_int_d, phi_ion_d, phi_heat_d,
-            clump_d, tables, logtemp, conv_flag_d, p, n_cells
+            dt, Hz, temp_d, temp_int_d, ndens_d, xh_d, xh_av_d, xh_int_d, phi_ion_d,
+            phi_heat_d, clump_d, tables, logtemp, conv_flag_d, p, n_cells
         );
 
         // Check for errors.
@@ -578,6 +586,7 @@ namespace asora {
         auto convergence =
             thrust::count(thrust::device, conv_flag_d, conv_flag_d + n_cells, true);
 
+        temp_int_buf.copyToHost(temp_int);
         device::get(buffer_tag::fraction_HII).copyToHost(xh_av.x);
         device::get(buffer_tag::fraction_HeII).copyToHost(xh_av.y);
         device::get(buffer_tag::fraction_HeIII).copyToHost(xh_av.z);
