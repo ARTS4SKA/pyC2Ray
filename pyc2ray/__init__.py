@@ -8,6 +8,9 @@ from .c2ray_fstar import *  # noqa: F403
 from .c2ray_test import *  # noqa: F403
 from .c2ray_thesan import *  # noqa: F403
 
+# Domain decomposition and source grouping
+from .domain import *  # noqa: F403
+
 # Full evolve subroutine: raytracing & chemistry
 from .evolve import *  # noqa: F403
 
