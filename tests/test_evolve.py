@@ -59,10 +59,14 @@ def setup_evolve_mock(use_gpu: bool = False, rank: int = 0):
     src_flux *= 1e-46
 
     shape = (N, N, N)
-    ndens = np.empty(shape, order="F")
-    xh = np.full(shape, 1.2e-3, order="F")
-    temp = np.full(shape, 1e4, order="F")
-    clump = np.full(shape, 1.0, dtype=np.float64, order="F")
+    ndens = np.empty(shape, dtype=np.float64, order="F")
+    xh = (
+        np.full_like(ndens, 2.0e-4),
+        np.full_like(ndens, 1.0e-15),
+        np.full_like(ndens, 0.0),
+    )
+    temp = np.full_like(ndens, 1e4)
+    clump = np.full_like(ndens, 1.0)
 
     minlogtau, maxlogtau, num_tau = -20.0, 4.0, 20000
     tau, dlogtau = make_tau_table(minlogtau, maxlogtau, num_tau)
@@ -81,6 +85,7 @@ def setup_evolve_mock(use_gpu: bool = False, rank: int = 0):
         Hz=Hz,
         dt=1e3,
         dr=(1 * u.Mpc).cgs.value / N,
+        R_max=15.0,
         src_flux=src_flux,
         src_pos=src_pos,
         src_batch_size=8,
@@ -93,14 +98,14 @@ def setup_evolve_mock(use_gpu: bool = False, rank: int = 0):
         nprocs=8,
         temp=temp,
         ndens=ndens,
-        xh=xh,
         clump=clump,
+        xh=xh,
         photo_thin_table=photo_thin_table,
         photo_thick_table=photo_thick_table,
-        R_max_LLS=15.0,
         convergence_fraction=1e-4,
         sigma=sigma,
         logtau=logtau,
+        logtemp=(1.0, 0.1, 100),
     )
 
 
@@ -186,7 +191,9 @@ def setup_evolve_asora(
     temp = np.pow(10, rng.normal(4, 0.25, size=mesh_shape), dtype=np.float64)
     clump = np.ones_like(temp)
 
-    xHI = np.zeros_like(ndens)
+    xHII = np.full_like(ndens, 2.0e-4)
+    xHeII = np.full_like(ndens, 1.0e-15)
+    xHeIII = np.full_like(ndens, 0.0)
 
     # Define some random sources
     src_pos = rng.integers(0, mesh_size, size=(3, num_sources), dtype=np.int32)
@@ -200,17 +207,17 @@ def setup_evolve_asora(
 
     comm = MPI.COMM_WORLD
     yield dict(
+        Hz=Hz,
         dr=dr,
         dt=dt,
-        Hz=Hz,
+        R_max=radius,
         src_flux=src_flux,
         src_pos=src_pos,
         src_batch_size=8,
         temp=temp,
         ndens=ndens,
-        xh=xHI,
         clump=clump,
-        R_max_LLS=radius,
+        xh=(xHII, xHeII, xHeIII),
         convergence_fraction=1e-4,
         use_gpu=True,
         use_mpi=True,
@@ -224,7 +231,21 @@ def setup_evolve_asora(
 def test_evolve_asora(init_device, chem_params):
     with setup_evolve_asora() as kwargs:
         shape = kwargs["ndens"].shape
-        xh, phi = evolve3D(**kwargs, chems=chem_params)
+        xh, phion, pheat, temp = evolve3D(**kwargs, chems=chem_params)
 
-    assert xh.shape == shape
-    assert phi.shape == shape
+    assert len(xh) == 3
+    assert xh[0].shape == shape
+    assert xh[1].shape == shape
+    assert xh[2].shape == shape
+
+    assert len(phion) == 3
+    assert phion[0].shape == shape
+    assert phion[1].shape == shape
+    assert phion[2].shape == shape
+
+    assert len(pheat) == 3
+    assert pheat[0].shape == shape
+    assert pheat[1].shape == shape
+    assert pheat[2].shape == shape
+
+    assert temp.shape == shape

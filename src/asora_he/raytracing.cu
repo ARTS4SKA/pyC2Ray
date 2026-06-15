@@ -42,14 +42,14 @@ namespace {
 
     element_data make_element_data(
         asora::buffer_tag ion, asora::buffer_tag heat, asora::buffer_tag cdens,
-        asora::buffer_tag sigma, size_t first_bin
+        asora::buffer_tag sigma, size_t first_nonzero_bin
     ) {
         return {
             get_data_view<double>(ion),
             get_data_view<double>(heat),
             get_data_view<double>(cdens),
             get_data_view<double>(sigma),
-            first_bin,
+            first_nonzero_bin,
         };
     }
 
@@ -99,7 +99,7 @@ namespace {
         using tau = cuda::std::pair<double, double>;
         auto get_tau = [](size_t nf, const element_data &data, double cd_in,
                           double cd_out) -> tau {
-            if (nf < data.first_bin) return {0.0, 0.0};
+            if (nf < data.first_nonzero_bin) return {0.0, 0.0};
             auto sigma = data.cross_section[nf];
             return {cd_in * sigma, cd_out * sigma};
         };
@@ -137,16 +137,16 @@ namespace {
             // (part of the photon-conserving rate prescription)
             // TODO: potentially a problem if the fraction value is close to
             // zero.
-            auto mul_HI = tau_HI.second - tau_HI.first;
-            auto mul_HeI = tau_HeI.second - tau_HeI.first;
-            auto mul_HeII = tau_HeII.second - tau_HeII.first;
+            auto tau_cell_HI = tau_HI.second - tau_HI.first;
+            auto tau_cell_HeI = tau_HeI.second - tau_HeI.first;
+            auto tau_cell_HeII = tau_HeII.second - tau_HeII.first;
 
-            rate_HI.first += phi * mul_HI;
-            rate_HeI.first += phi * mul_HeI;
-            rate_HeII.first += phi * mul_HeII;
-            rate_HI.second += heat * mul_HI;
-            rate_HeI.second += heat * mul_HeI;
-            rate_HeII.second += heat * mul_HeII;
+            rate_HI.first += phi * tau_cell_HI;
+            rate_HeI.first += phi * tau_cell_HeI;
+            rate_HeII.first += phi * tau_cell_HeII;
+            rate_HI.second += heat * tau_cell_HI;
+            rate_HeI.second += heat * tau_cell_HeI;
+            rate_HeII.second += heat * tau_cell_HeII;
         }  // end loop freq
 
         // Rescale the photo rates by the flux strength normalized per volume

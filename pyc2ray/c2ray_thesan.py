@@ -28,11 +28,6 @@ logger = logging.getLogger(__name__)
 # ======================================================================
 
 
-# for curve fit
-def func(x, a, b):
-    return a * x + b
-
-
 class C2Ray_Thesan(C2Ray):
     def __init__(self, paramfile: PathType) -> None:
         """Basis class for a C2Ray Simulation
@@ -92,8 +87,7 @@ class C2Ray_Thesan(C2Ray):
         i_tab = np.argmin(np.abs(self.redshifts_thesan - z))
 
         # load tables
-        popt = self.popt_array[i_tab, :2]
-        std_opt = self.popt_array[i_tab, 2]
+        a_popt, b_popt, std_opt = self.popt_array[i_tab, :3]
 
         if std_opt == 0:
             # mid point of the bins
@@ -123,19 +117,23 @@ class C2Ray_Thesan(C2Ray):
                             + np.random.normal(loc=0, scale=0.1, size=mask_fit.sum())
                         )
                     else:
-                        # some bins in Thesan are empty, especially at high-z, due to the mass bin size I choose. Therefore, in that case use the linear relation with a small scatter.
+                        # some bins in Thesan are empty, especially at high-z, due to the mass bin size I choose.
+                        # Therefore, in that case use the linear relation with a small scatter.
                         dotN_pyc2ray[mask_fit] = 10 ** (
-                            func(np.log10(srcmass_msun[mask_fit]), *popt)
+                            a_popt * np.log10(srcmass_msun[mask_fit])
+                            + b_popt
                             + np.random.normal(loc=0.0, scale=0.1, size=mask_fit.sum())
                         )
 
             dotN_pyc2ray[~mask_ext] = 10 ** (
-                func(np.log10(srcmass_msun[~mask_ext]), *popt)
+                a_popt * np.log10(srcmass_msun[~mask_ext])
+                + b_popt
                 + np.random.normal(loc=0.0, scale=0.1, size=(1 - mask_ext).sum())
             )
         else:
             dotN_pyc2ray = 10 ** (
-                func(np.log10(srcmass_msun), *popt)
+                a_popt * np.log10(srcmass_msun)
+                + b_popt
                 + np.random.normal(loc=0, scale=std_opt, size=srcmass_msun.size)
             )
 
@@ -287,7 +285,7 @@ class C2Ray_Thesan(C2Ray):
             if ext == ".dat":
                 fname = "%sxfrac_z%.3f.dat" % (self.results_basename, self.zred)
                 self.xh = t2c.read_cbin(filename=fname, bits=64, order="F")
-                self.phi_ion = t2c.read_cbin(
+                self.phion = t2c.read_cbin(
                     filename="%sIonRates_z%.3f.dat"
                     % (self.results_basename, self.zred),
                     bits=32,
@@ -296,7 +294,7 @@ class C2Ray_Thesan(C2Ray):
             elif ext == ".npy":
                 fname = "%sxfrac_z%.3f.npy" % (self.results_basename, self.zred)
                 self.xh = np.load(fname)
-                self.phi_ion = np.load(
+                self.phion = np.load(
                     "%sIonRates_z%.3f.npy" % (self.results_basename, self.zred)
                 )
             else:
@@ -311,9 +309,9 @@ class C2Ray_Thesan(C2Ray):
  %s
  min, mean and max density : %.5e  %.5e  %.5e""",
                 fname,
-                self.xh.min(),
-                self.xh.mean(),
-                self.xh.max(),
+                self.xh[0].min(),
+                self.xh[0].mean(),
+                self.xh[0].max(),
             )
 
             # TODO: implement heating

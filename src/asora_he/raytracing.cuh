@@ -22,7 +22,7 @@ namespace asora {
         double *__restrict__ photo_heating;
         double *__restrict__ column_density;
         const double *__restrict__ cross_section;
-        size_t first_bin;
+        size_t first_nonzero_bin;
 
         cuda::std::array<const double *__restrict__, 3> shared_cdens = {};
 

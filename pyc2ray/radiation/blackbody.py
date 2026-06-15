@@ -302,8 +302,6 @@ class BlackBodySource_Multifreq(BlackBodyBase):
     def __init__(self, temp: float, grey: bool) -> None:
         self.temp = temp
         self.grey = grey
-        # self.freq0 = freq0
-        # self.pl_index = pl_index
         self.R_star = 1.0
         self.freq0_HI = (13.598 * u.eV / cst.h).to("Hz").value
         self.freq0_HeI = (24.587 * u.eV / cst.h).to("Hz").value

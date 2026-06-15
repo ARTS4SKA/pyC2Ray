@@ -23,12 +23,12 @@ version, and a MPI version which enables usage on multiple GPU nodes.
 import logging
 import time
 from dataclasses import dataclass
+from functools import partial
 
 import numpy as np
 from mpi4py import MPI
 
-from pyc2ray.asora_core import is_device_init
-from pyc2ray.load_extensions import libasora_He as libasora
+from pyc2ray.asora_core import is_device_init, libasora
 from pyc2ray.load_extensions import libc2ray
 from pyc2ray.radiation.blackbody import BlackBodySource_Multifreq
 from pyc2ray.utils.logutils import allow_rank_logging
@@ -47,13 +47,14 @@ class ChemistryParams:
 
     Parameters
     ----------
-    bh00
-        Hydrogen recombination parameter at 10^4 K in the case B OTS approximation.
-    albpow
+    bh00 :
+        Hydrogen recombination parameter at 10^4 K in the case B OTS
+        approximation.
+    albpow :
         Power-law index for the H recombination parameter.
-    colh0
+    colh0 :
         Hydrogen collisional ionization parameter.
-    temph0
+    temph0 :
         Hydrogen ionization energy expressed in K.
     abu_c
         Carbon abundance.
@@ -66,78 +67,120 @@ class ChemistryParams:
     abu_c: float
 
 
-def relative_change(old: float, new: float) -> float:
-    """Compute the relative change between an old and new value, with safe handling of zero values."""
+def _tot_fraction(xh: FloatArray) -> tuple[float, float]:
+    """Compute the total ionized and neutral fraction of a species across the
+    grid."""
+    tot = xh.sum()
+    return xh.size - tot, tot
+
+
+def _relative_change(old: float, new: float) -> float:
+    """Compute the relative change between an old and new value"""
     return abs((new - old) / new) if new > 0.0 else 1.0
+
+
+def _test_convergence(
+    xh: tuple[float, float], xh_new: tuple[float, float], rtol: float
+) -> bool:
+    """Test the convergence of the ionization fraction before and after the
+    chemistry step."""
+    return (
+        _relative_change(xh[0], xh_new[0]) < rtol
+        and _relative_change(xh[1], xh_new[1]) < rtol
+    )
 
 
 def _evolve3D_asora(
     Hz: float,
     dt: float,
     dr: float,
+    R_max: float,
     src_flux: FloatArray,
     src_pos: IntArray,
     src_batch_size: int,
+    temp: FloatArray,
+    ndens: FloatArray,
+    clump: FloatArray,
+    xh: tuple[FloatArray, FloatArray, FloatArray],
+    chems: ChemistryParams,
+    logtau: tuple[float, float, int],
+    logtemp: tuple[float, float, int],
+    convergence_fraction: float,
     use_mpi: bool,
     rank: int,
     nprocs: int,
-    temp: FloatArray,
-    ndens: FloatArray,
-    xh: FloatArray,
-    clump: FloatArray,
-    R_max_LLS: float,
-    convergence_fraction: float,
-    chems: ChemistryParams,
-    logtau: tuple[float, float, int],
-    logtemp: tuple[float, float, int] | None = None,
     **kwargs,
-) -> tuple[FloatArray, FloatArray]:
+) -> tuple[
+    tuple[FloatArray, FloatArray, FloatArray],  # xfrac
+    tuple[FloatArray, FloatArray, FloatArray],  # ion rate
+    tuple[FloatArray, FloatArray, FloatArray],  # heat rate
+    FloatArray,  # temp
+]:
     """Evolves the ionization fraction over one timestep for the whole grid
 
-    Warning: Calling this function assumes that the radiation tables have previously been
-    copied to the GPU using photo_table_to_device()
+    Warning: Calling this function assumes that the radiation tables have
+    previously been copied to the GPU using photo_table_to_device()
 
     Parameters
     ----------
-    dt
-        Timestep in seconds
-    dr
+    Hz :
+        Hubble constant.
+    dt :
+        Timestep in seconds.
+    dr :
         Cell dimension in each direction in cm.
-    src_flux
-        Array containing the total ionizing flux of each source, normalized by S_star (1e48 by default).
-    src_pos
-        Array containing the 3D grid position of each source, in Fortran indexing (from 1).
-    temp
+    R_max :
+        Value of maximum comoving distance for photons from source (type 3 LLS
+        in original C2Ray). This value is given in cell units, but doesn't need
+        to be an integer.
+    src_flux :
+        Array containing the total ionizing flux of each source, normalized by
+        S_star (1e48 by default).
+    src_pos :
+        Array containing the 3D grid position of each source, in Fortran
+        indexing (from 1).
+    temp :
         The initial temperature of each cell in K.
-    ndens
+    ndens :
         The hydrogen number density of each cell in cm^-3.
-    xh
-        The initial ionized fraction of each cell.
-    photo_thin_table
-        Tabulated values of the integral ∫L_v*e^(-τ_v)/hv. When using GPU, this table needs to have been copied to the GPU
-        in a separate (previous) step, using photo_table_to_device().
-    R_max_LLS
-        Value of maximum comoving distance for photons from source (type 3 LLS in original C2Ray). This value is
-        given in cell units, but doesn't need to be an integer.
-    convergence_fraction
-        Which fraction of the cells can be left unconverged to improve performance (usually ~ 1e-4).
-    chems
+    xh :
+        The initial ionized fraction of each cell for each species (HII, HeII,
+        HeIII).
+    chems :
         Parameters used by the chemistry solver.
-    logtau
-        Tuple of (start, step, num) describing the log tau axis of the photo tables.
-    logtemp
-        Tuple of (start, step, num) describing the log temperature axis of the cooling tables.
+    logtau :
+        Tuple of (start, step, num) describing the log tau axis of the photo
+        tables.
+    logtemp :
+        Tuple of (start, step, num) describing the log temperature axis of the
+        cooling tables.
+    convergence_fraction :
+        Which fraction of the cells can be left unconverged to improve
+        performance (usually ~ 1e-4).
+    use_mpi :
+        Distribute batches of sources to other processes with MPI.
+    rank :
+        The MPI rank of this process.
+    nprocs :
+        The total number of MPI processes.
 
     Returns
     -------
-    xh_int : 3D-array of dtype float
-        The updated ionization fraction of each cell at the end of the timestep.
-    phi_ion : 3D-array of dtype float
-        Photoionization rate of each cell due to all sources.
+    xh_int : tuple of float 3D-array
+        The updated ionization fraction of each cell at the end of the timestep
+        for each species (HII, HeII, HeIII).
+    phion : tuple of float 3D-array
+        Photo-ionization rate of each cell due to all sources for each species
+        (HI, HeI, HeII).
+    pheat : tuple of float 3D-array
+        Photo-heating rate of each cell due to all sources for each species
+        (HI, HeI, HeII).
+    temp_int : float 3D-array
+        Updated temperature of each cell at the end of the timestep.
     """
     if not is_device_init():
         raise RuntimeError(
-            "GPU not initialized. Please initialize it by calling device_init(N)"
+            "GPU not initialized. Please initialize it by calling device_init(id)"
         )
 
     rank_prefix = f"[Rank={rank}] " if use_mpi else ""
@@ -147,17 +190,18 @@ def _evolve3D_asora(
     num_cells = np.prod(mesh_shape)
     num_src, *_ = src_flux.shape
 
-    # Convergence Criteria
+    # Convergence criteria.
     conv_criterion = min(int(convergence_fraction * num_cells), (num_src - 1) / 3)
-    prev_sum_xh1 = float(2 * num_cells)
-    prev_sum_xh0 = float(2 * num_cells)
+    tot_xHII = float(2 * num_cells), float(2 * num_cells)
+    tot_xHeII = float(2 * num_cells), float(2 * num_cells)
+    tot_xHeIII = float(2 * num_cells), float(2 * num_cells)
     converged = False
 
     logger.info(f"""Calling evolve3D...
 dr [Mpc]: {dr / 3.086e24:.3e}
 dt [years]: {dt / 3.15576e07:.3e}
 Running on {num_src:n} source(s), total normalized ionizing flux: {src_flux.sum():.2e}
-Mean density (cgs): {ndens.mean():.3e}, Mean ionized fraction: {xh.mean():.3e}
+Mean density (cgs): {ndens.mean():.3e}, Mean ionized fraction: HII = {xh[0].mean():.3e}, HeII = {xh[1].mean():.3e}, HeIII = {xh[2].mean():.3e},
 Convergence Criterion (Number of points): {conv_criterion: n}
 """)
 
@@ -167,7 +211,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
     if use_mpi:
         chunk = distribute_jobs(num_src, nprocs, rank)
 
-        # Overwrite number of sources
+        # Overwrite number of sources.
         num_src = chunk.stop - chunk.start
         src_pos = src_pos[:, chunk]
         src_flux = src_flux[chunk]
@@ -175,7 +219,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
         with allow_rank_logging(rank):
             logger.info(f"{rank_prefix}{num_src} sources.")
 
-    # Copy positions & fluxes of sources to the GPU
+    # Copy positions & fluxes of sources to the GPU.
     assert libasora is not None
     libasora.source_data_to_device(src_pos.ravel(), src_flux.ravel())
 
@@ -184,21 +228,26 @@ Convergence Criterion (Number of points): {conv_criterion: n}
     ndens = np.ravel(ndens).astype(np.float64)
     libasora.density_to_device(ndens)
 
-    # Initialize average and intermediate results
-    xHII = np.ravel(xh).astype(np.float64)
+    # Initialize average and intermediate results.
+    xHII, xHeII, xHeIII = xh
+
+    xHII = np.ravel(xHII).astype(np.float64)
     xHII_av = xHII.copy()
     xHII_int = xHII.copy()
-    xHeII = np.zeros_like(xHII)
-    xHeII_av = np.zeros_like(xHII)
-    xHeII_int = np.zeros_like(xHII)
-    xHeIII = np.zeros_like(xHII)
-    xHeIII_av = np.zeros_like(xHII)
-    xHeIII_int = np.zeros_like(xHII)
 
-    # Initialize rate arrays.
+    xHeII = np.ravel(xHeII).astype(np.float64)
+    xHeII_av = xHeII.copy()
+    xHeII_int = xHeII.copy()
+
+    xHeIII = np.ravel(xHeIII).astype(np.float64)
+    xHeIII_av = xHeIII.copy()
+    xHeIII_int = xHeIII.copy()
+
+    # Initialize ionization and heating rate arrays.
     phion_HI = np.zeros_like(ndens)
     phion_HeI = np.zeros_like(ndens)
     phion_HeII = np.zeros_like(ndens)
+
     pheat_HI = np.zeros_like(ndens)
     pheat_HeI = np.zeros_like(ndens)
     pheat_HeII = np.zeros_like(ndens)
@@ -216,9 +265,8 @@ Convergence Criterion (Number of points): {conv_criterion: n}
 
     # Prepare other inputs
     temp = np.ravel(temp).astype(np.float64)
+    temp_int = temp.copy()
     clump = np.ravel(clump).astype(np.float64)
-    if logtemp is None:
-        logtemp = 1.0, 0.1, 10
 
     with allow_rank_logging(rank):
         logger.info(f"{rank_prefix}Copied source data to device.")
@@ -240,7 +288,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
         # This function updates phi_ion.
         assert libasora is not None
         libasora.do_all_sources(
-            R_max_LLS,
+            R_max,
             sigma_HI,
             sigma_HeI,
             sigma_HeII,
@@ -279,19 +327,19 @@ Convergence Criterion (Number of points): {conv_criterion: n}
 
         if rank == 0:
             # ---------------------
-            # (2): ODE Solving Step  TODO: Split this to MPI ranks
+            # (2): ODE Solving Step
             # ---------------------
             logger.info("Doing Chemistry...")
 
             time_start = time.perf_counter()
 
             # Apply the global rates to compute the updated ionization fraction
-            # This function updates xh_av and xh_int.
+            # This function updates xh_av, xh_int and temp_int.
             conv_flag = libasora.chemistry_global_pass(
                 dt,
                 Hz,  # must get this from outside
                 temp,
-                np.zeros_like(temp),
+                temp_int,
                 xHII,
                 xHII_av,
                 xHII_int,
@@ -318,118 +366,166 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             # ----------------------------
             # (3): Test Global Convergence
             # ----------------------------
-            sum_xh1 = xHII_int.sum()
-            sum_xh0 = xHII_int.size - sum_xh1  # = np.sum(1 - xHII_int)
 
-            rel_change_xh1 = relative_change(prev_sum_xh1, sum_xh1)
-            rel_change_xh0 = relative_change(prev_sum_xh0, sum_xh0)
+            tot_xHII_new = _tot_fraction(xHII_int)
+            tot_xHeII_new = _tot_fraction(xHeII_int)
+            tot_xHeIII_new = _tot_fraction(xHeIII_int)
 
-            # Display convergence
-            logger.info(
-                f"Number of non-converged points: {conv_flag} of {num_cells} ({conv_flag / num_cells * 100: .3f} % ), "
-                f"Relative change in ionfrac: {rel_change_xh1: .2e}",
-            )
+            test = partial(_test_convergence, rtol=convergence_fraction)
 
             converged = (conv_flag < conv_criterion) or (
-                (rel_change_xh1 < convergence_fraction)
-                and (rel_change_xh0 < convergence_fraction)
+                test(tot_xHII, tot_xHII_new)
+                and test(tot_xHeII, tot_xHeII_new)
+                and test(tot_xHeIII, tot_xHeIII_new)
             )
             n_count += 1
 
             # Set previous metrics to current ones and repeat if not converged
-            prev_sum_xh1 = sum_xh1
-            prev_sum_xh0 = sum_xh0
+            tot_xHII = tot_xHII_new
+            tot_xHeII = tot_xHeII_new
+            tot_xHeIII = tot_xHeIII_new
+            logger.info(
+                f"Number of non-converged points: {conv_flag} of {num_cells} ({conv_flag / num_cells * 100:.3f} % ), "
+                f"Relative change in: HII ionfrac {tot_xHII[0]:.2e}, "
+                f"Relative change in: HeII ionfrac {tot_xHeII[0]:.2e}, "
+                f"Relative change in: HeIII ionfrac {tot_xHeIII[0]:.2e}"
+            )
 
         if use_mpi:
-            # broadcast ionised fraction field
+            # Broadcast ionised fraction field
             MPI.COMM_WORLD.Bcast([xHII_av, MPI.DOUBLE], root=0)
             MPI.COMM_WORLD.Bcast([xHeII_av, MPI.DOUBLE], root=0)
             MPI.COMM_WORLD.Bcast([xHeIII_av, MPI.DOUBLE], root=0)
 
-            # broadcast convergence
-            MPI.COMM_WORLD.bcast(converged, root=0)
+            # Broadcast convergence
+            converged = MPI.COMM_WORLD.bcast(converged, root=0)
 
     if use_mpi:
         MPI.COMM_WORLD.Bcast([xHII_int, MPI.DOUBLE], root=0)
         MPI.COMM_WORLD.Bcast([xHeII_int, MPI.DOUBLE], root=0)
         MPI.COMM_WORLD.Bcast([xHeIII_int, MPI.DOUBLE], root=0)
+        MPI.COMM_WORLD.Bcast([temp_int, MPI.DOUBLE], root=0)
 
     if rank == 0:
         logger.info(
             f"Multiple source convergence reached after {n_count} ray-tracing iterations."
         )
 
-    return xHII_int.reshape(mesh_shape), phion_HI.reshape(mesh_shape)
+    return (
+        (
+            xHII_int.reshape(mesh_shape),
+            xHeII_int.reshape(mesh_shape),
+            xHeIII_int.reshape(mesh_shape),
+        ),
+        (
+            phion_HI.reshape(mesh_shape),
+            phion_HeI.reshape(mesh_shape),
+            phion_HeII.reshape(mesh_shape),
+        ),
+        (
+            pheat_HI.reshape(mesh_shape),
+            pheat_HeI.reshape(mesh_shape),
+            pheat_HeII.reshape(mesh_shape),
+        ),
+        temp_int.reshape(mesh_shape),
+    )
 
 
 def _evolve3D_c2ray(
     Hz: float,
     dt: float,
     dr: float,
+    R_max: float,
     src_flux: FloatArray,
     src_pos: IntArray,
     src_batch_size: int,
     max_subbox: int,
     subboxsize: int,
     loss_fraction: float,
-    use_mpi: bool,
-    rank: int,
-    nprocs: int,
     temp: FloatArray,
     ndens: FloatArray,
-    xh: FloatArray,
     clump: FloatArray,
+    xh: tuple[FloatArray, FloatArray, FloatArray],
     photo_thin_table: FloatArray,
     photo_thick_table: FloatArray,
-    R_max_LLS: float,
     convergence_fraction: float,
     sigma: float,
     chems: ChemistryParams,
     logtau: tuple[float, float, int],
-) -> tuple[FloatArray, FloatArray]:
+    use_mpi: bool,
+    rank: int,
+    nprocs: int,
+    *args,
+    **kwargs,
+) -> tuple[
+    tuple[FloatArray, FloatArray, FloatArray],  # xfrac
+    tuple[FloatArray, FloatArray, FloatArray],  # ion rate
+    tuple[FloatArray, FloatArray, FloatArray],  # heat rate
+    FloatArray,  # temp
+]:
     """Evolves the ionization fraction over one timestep for the whole grid
 
     Parameters
     ----------
-    dt
-        Timestep in seconds
-    dr
+    Hz :
+        Hubble constant.
+    dt :
+        Timestep in seconds.
+    dr :
         Cell dimension in each direction in cm.
-    src_flux
-        Array containing the total ionizing flux of each source, normalized by S_star (1e48 by default).
-    src_pos
-        Array containing the 3D grid position of each source, in Fortran indexing (from 1).
-    max_subbox
-        Maximum subbox to raytrace when using CPU cubic raytracing. Has no effect when use_gpu is true.
-    subboxsize
+    R_max :
+        Value of maximum comoving distance for photons from source (type 3 LLS
+        in original C2Ray). This value is given in cell units, but doesn't need
+        to be an integer.
+    src_flux :
+        Array containing the total ionizing flux of each source, normalized by
+        S_star (1e48 by default).
+    src_pos :
+        Array containing the 3D grid position of each source, in Fortran
+        indexing (from 1).
+    max_subbox :
+        Maximum subbox to raytrace when using CPU cubic raytracing. Has no
+        effect when use_gpu is true.
+    subboxsize :
         ...
-    loss_fraction
-        Fraction of remaining photons below we stop ray-tracing (subbox technique). Has no effect when use_gpu is true.
-    temp
+    loss_fraction :
+        Fraction of remaining photons below we stop ray-tracing (subbox
+        technique). Has no effect when use_gpu is true.
+    temp :
         The initial temperature of each cell in K.
-    ndens
+    ndens :
         The hydrogen number density of each cell in cm^-3.
-    xh
+    xh :
         The initial ionized fraction of each cell.
-    photo_thin_table
-        Tabulated values of the integral ∫L_v*e^(-τ_v)/hv. When using GPU, this table needs to have been copied to the GPU
-        in a separate (previous) step, using photo_table_to_device().
-    R_max_LLS
-        Value of maximum comoving distance for photons from source (type 3 LLS in original C2Ray). This value is
-        given in cell units, but doesn't need to be an integer.
-    convergence_fraction
-        Which fraction of the cells can be left unconverged to improve performance (usually ~ 1e-4).
-    sigma
+    clump :
+        The clumping factor of each cell.
+    photo_thin_table :
+    photo_thick_table :
+        Tabulated values of the integral ∫L_v*e^(-τ_v)/hv. When using GPU, this
+        table needs to have been copied to the GPU in a separate (previous)
+        step, using photo_table_to_device().
+    convergence_fraction :
+        Which fraction of the cells can be left unconverged to improve
+        performance (usually ~ 1e-4).
+    sigma :
         Constant photoionization cross-section of hydrogen in cm^2.
-    chems
+    chems :
         Parameters used by the chemistry solver.
-    logtau
-        Tuple of (start, step, num) describing the log tau axis of the photo tables.
+    logtau :
+        Tuple of (start, step, num) describing the log tau axis of the photo
+        tables.
+    use_mpi :
+        Distribute batches of sources to other processes with MPI.
+    rank :
+        The MPI rank of this process.
+    nprocs :
+        The total number of MPI processes.
 
     Returns
     -------
     xh_int : 3D-array of dtype float
-        The updated ionization fraction of each cell at the end of the timestep.
+        The updated ionization fraction of each cell at the end of the
+        timestep.
     phi_ion : 3D-array of dtype float
         Photoionization rate of each cell due to all sources.
     """
@@ -439,7 +535,6 @@ def _evolve3D_c2ray(
     N, _, _ = mesh_shape = ndens.shape
     num_cells = np.prod(mesh_shape)
     num_src, *_ = src_flux.shape
-    num_tau, *_ = photo_thin_table.shape
 
     # Convergence criteria.
     conv_criterion = min(int(convergence_fraction * num_cells), (num_src - 1) / 3)
@@ -451,7 +546,7 @@ def _evolve3D_c2ray(
 dr [Mpc]: {dr / 3.086e24:.3e}
 dt [years]: {dt / 3.15576e07:.3e}
 Running on {num_src:n} source(s), total normalized ionizing flux: {src_flux.sum():.2e}
-Mean density (cgs): {ndens.mean():.3e}, Mean ionized fraction: {xh.mean():.3e}
+Mean density (cgs): {ndens.mean():.3e}, Mean ionized fraction: HII = {xh[0].mean():.3e}, HeII = {xh[1].mean():.3e}, HeIII = {xh[2].mean():.3e},
 Convergence Criterion (Number of points): {conv_criterion: n}
 """)
 
@@ -470,15 +565,19 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             logger.info(f"{rank_prefix}{num_src} sources.")
 
     # Initialize average and intermediate results.
-    xHII = xh
-    xHII_av = xh.copy(order="F")
-    xHII_int = xh.copy(order="F")
-    xHeII = np.zeros_like(xh)
-    xHeII_av = np.zeros_like(xh)
-    xHeII_int = np.zeros_like(xh)
-    xHeIII = np.zeros_like(xh)
-    xHeIII_av = np.zeros_like(xh)
-    xHeIII_int = np.zeros_like(xh)
+    xHII, xHeII, xHeIII = xh
+
+    xHII = np.ravel(xHII).astype(np.float64, order="F")
+    xHII_av = xHII.copy()
+    xHII_int = xHII.copy()
+
+    xHeII = np.ravel(xHeII).astype(np.float64, order="F")
+    xHeII_av = xHeII.copy()
+    xHeII_int = xHeII.copy()
+
+    xHeIII = np.ravel(xHeIII).astype(np.float64, order="F")
+    xHeIII_av = xHeIII.copy()
+    xHeIII_int = xHeIII.copy()
 
     # Initialize rate arrays.
     phion_HI = np.zeros(mesh_shape, dtype=np.float64, order="F")
@@ -528,7 +627,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             heat_thick_table,
             logtau[0],
             logtau[1],
-            R_max_LLS,
+            R_max,
         )
 
         time_end = time.perf_counter()
@@ -586,8 +685,8 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             sum_xh1 = xHII_int.sum()
             sum_xh0 = xHII_int.size - sum_xh1  # = np.sum(1 - xHII_int)
 
-            rel_change_xh1 = relative_change(prev_sum_xh1, sum_xh1)
-            rel_change_xh0 = relative_change(prev_sum_xh0, sum_xh0)
+            rel_change_xh1 = _relative_change(prev_sum_xh1, sum_xh1)
+            rel_change_xh0 = _relative_change(prev_sum_xh0, sum_xh0)
 
             # Display convergence
             logger.info(
@@ -606,12 +705,12 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             prev_sum_xh0 = sum_xh0
 
         if use_mpi:
-            # broadcast ionised fraction field
+            # Broadcast ionised fraction field
             MPI.COMM_WORLD.Bcast([xHII_av, MPI.DOUBLE], root=0)
             MPI.COMM_WORLD.Bcast([xHeII_av, MPI.DOUBLE], root=0)
             MPI.COMM_WORLD.Bcast([xHeIII_av, MPI.DOUBLE], root=0)
 
-            # broadcast convergence
+            # Broadcast convergence
             converged = MPI.COMM_WORLD.bcast(converged, root=0)
 
     if use_mpi:
@@ -624,10 +723,22 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             f"Multiple source convergence reached after {n_count} ray-tracing iterations."
         )
 
-    return xHII_int, phion_HI
+    return (
+        (xHII_int, xHeII_int, xHeIII_int),
+        (phion_HI, phion_HeI, phion_HeII),
+        (pheat_HI, pheat_HeI, pheat_HeII),
+        temp,
+    )
 
 
-def evolve3D(**kwargs) -> tuple[FloatArray, FloatArray]:
+def evolve3D(
+    **kwargs,
+) -> tuple[
+    tuple[FloatArray, FloatArray, FloatArray],  # xfrac
+    tuple[FloatArray, FloatArray, FloatArray],  # ion rate
+    tuple[FloatArray, FloatArray, FloatArray],  # heat rate
+    FloatArray,  # temp
+]:
     """Evolves the ionization fraction over one timestep for the whole grid
     Relays the call to either evolve3D_asora or evolve3D_c2ray depending on the value of use_gpu in the arguments.
     """
