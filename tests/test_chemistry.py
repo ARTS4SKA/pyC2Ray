@@ -367,7 +367,8 @@ def test_chemistry_asora_no_heat_hydrogen_only_cosmo_only(data_dir, init_device)
         asora_args = args[:2] + args[3:]
         conv = libasora_He.chemistry_global_pass(*asora_args)
 
-        assert conv == 0
+        # Solution doesn't converge in one step.
+        assert conv == 1000
         compare_ionized_fractions(
             data_dir / "ionized_fraction_no_heat_hydrogen_only_cosmo_only.npz", args
         )
@@ -381,7 +382,8 @@ def test_chemistry_asora_no_heat_cosmo_only(data_dir, init_device):
         asora_args = args[:2] + args[3:]
         conv = libasora_He.chemistry_global_pass(*asora_args)
 
-        assert conv == 0
+        # Solution doesn't converge in one step.
+        assert conv == 1000
         compare_ionized_fractions(
             data_dir / "ionized_fraction_no_heat_all_species_cosmo_only.npz", args
         )
@@ -395,7 +397,8 @@ def test_chemistry_asora_no_heat_hydrogen_only(data_dir, init_device):
         asora_args = args[:2] + args[3:]
         conv = libasora_He.chemistry_global_pass(*asora_args)
 
-        assert conv == 0
+        # Solution doesn't converge in one step.
+        assert conv == 1000
         compare_ionized_fractions(
             data_dir / "ionized_fraction_no_heat_hydrogen_only.npz", args
         )
@@ -408,7 +411,9 @@ def test_chemistry_asora_no_heat(data_dir, init_device):
 
         asora_args = args[:2] + args[3:]
         conv = libasora_He.chemistry_global_pass(*asora_args)
-        assert conv == 0
+
+        # Solution doesn't converge in one step.
+        assert conv == 1000
         compare_ionized_fractions(
             data_dir / "ionized_fraction_no_heat_all_species.npz", args
         )
@@ -422,7 +427,8 @@ def test_chemistry_asora_hydrogen_only(data_dir, init_device):
         asora_args = args[:2] + args[3:]
         conv = libasora_He.chemistry_global_pass(*asora_args)
 
-        assert conv == 0
+        # Solution doesn't converge in one step.
+        assert conv == 1000
         compare_ionized_fractions(data_dir / "ionized_fraction_hydrogen_only.npz", args)
 
 
@@ -434,7 +440,8 @@ def test_chemistry_asora(data_dir, init_device):
         asora_args = args[:2] + args[3:]
         conv = libasora_He.chemistry_global_pass(*asora_args)
 
-        assert conv == 0
+        # Solution doesn't converge in one step.
+        assert conv == 1000
         compare_ionized_fractions(data_dir / "ionized_fraction_all_species.npz", args)
 
 

@@ -75,9 +75,9 @@ def setup_do_all_sources(
     pheat_HeII = np.empty(size, dtype=np.float64)
 
     ndens = np.full(size, 1.87e-7, dtype=np.float64)
-    xHI = np.full(size, 1.2e-3, dtype=np.float64)
-    xHeI = np.full(size, 1e-3, dtype=np.float64)
+    xHII = np.full(size, 1.2e-3, dtype=np.float64)
     xHeII = np.full(size, 1e-3, dtype=np.float64)
+    xHeIII = np.full(size, 1e-3, dtype=np.float64)
 
     # Copy density field to GPU device
     assert libasora is not None
@@ -110,9 +110,9 @@ def setup_do_all_sources(
         numb3,
         num_freq,
         dr,
-        xHI,
-        xHeI,
+        xHII,
         xHeII,
+        xHeIII,
         phion_HI,
         phion_HeI,
         phion_HeII,

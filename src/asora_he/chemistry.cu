@@ -157,19 +157,38 @@ namespace {
     }
 
     __device__ bool check_convergence_local(double new_value, double old_value) {
-        bool cond1 =
-            abs(new_value - old_value) / (1 - new_value) < minimum_fractional_change;
-        bool cond2 = 1 - new_value < minimum_fraction_of_atoms;
-        return cond1 || cond2;
+        return abs(new_value - old_value) < minimum_fractional_change * new_value ||
+               new_value < minimum_fraction_of_atoms;
+    }
+
+    __device__ bool check_friedrich_convergence(
+        const double3& xh_new, const double3& xh_old, double temp_new, double temp_old
+    ) {
+        return check_convergence_local(1 - xh_new.x, 1 - xh_old.x) &&
+               check_convergence_local(
+                   1 - xh_new.y - xh_new.z, 1 - xh_old.y - xh_old.z
+               ) &&
+               check_convergence_local(xh_new.z, xh_old.z) &&
+               abs(temp_new - temp_old) / temp_new < minimum_fractional_change;
     }
 
     __device__ bool check_convergence_global(double new_value, double old_value) {
-        auto cond1 = abs(new_value - old_value) > minimum_fractional_change;
-        auto cond2 =
-            abs((new_value - old_value) / (1 - old_value)) > minimum_fractional_change;
-        auto cond3 = (1 - old_value) > minimum_fraction_of_atoms;
+        auto diff = abs(new_value - old_value);
+        return diff > minimum_fractional_change &&
+               diff > minimum_fractional_change * new_value &&
+               new_value > minimum_fraction_of_atoms;
+    }
 
-        return cond1 && cond2 && cond3;
+    __device__ bool check_do_chemistry_convergence(
+        const double3& xh_new, const double3& xh_old, double temp_new, double temp_old
+    ) {
+        auto temp_diff = abs(temp_new - temp_old);
+        return check_convergence_global(1 - xh_new.x, 1 - xh_old.x) ||
+               check_convergence_global(
+                   1 - xh_new.y - xh_new.z, 1 - xh_old.y - xh_old.z
+               ) ||
+               check_convergence_global(xh_new.z, xh_old.z) ||
+               (temp_diff / temp_new > 0.1 && temp_diff > 100.0);
     }
 
     // Create the first row of the matrix A in the chemistry equations.
@@ -290,7 +309,8 @@ namespace asora {
             };
         }
 
-        // Recombination rate of HeIII (Eq. 2.18-20) [confirmed by Garrelt (13.10.24)]
+        // Recombination rate of HeIII (Eq. 2.18-20) [confirmed by Garrelt
+        // (13.10.24)]
         auto alpha_HeIII = recombination_rates(temp, tempHeII, 2.538e-13, 5.506e-14);
         auto beta_HeIII = 3.4e-13 * std::pow(temp / 1.0e4, -0.6);
 
@@ -399,8 +419,8 @@ namespace asora {
     ) {
         auto heating = phi_heat.x + phi_heat.y + phi_heat.z;
 
-        // At each loop iteration, the counter is decreased until 0 unless convergence
-        // is reached before.
+        // At each loop iteration, the counter is decreased until 0 unless
+        // convergence is reached before.
         double3 xh_new, xh_av_new;
         double temp_av = temp;
         ++max_iterations;  // to match fortran code
@@ -428,10 +448,7 @@ namespace asora {
                 {xh_av_new.x, xh_av_new.y, xh_av_new.z}, tables, logtemp, p
             );
 
-            if (check_convergence_local(xh_av_new.x, xh_av.x) &&  // HI
-                check_convergence_local(xh_av_new.y, xh_av.y) &&  // HeI
-                check_convergence_local(xh_av_new.z, xh_av.z) &&  // HeII
-                abs(temp_av_new - temp_av) / temp_av_new < minimum_fractional_change)
+            if (check_friedrich_convergence(xh_av_new, xh_av, temp_av_new, temp_av))
                 max_iterations = 0;
             else
                 --max_iterations;
@@ -442,7 +459,8 @@ namespace asora {
             temp_av = temp_av_new;
         }
 
-        // Return {xHII, xHeII, xHeIII}, {xHII_av, xHeII_av, xHeIII_av}, {temp, temp_av}
+        // Return {xHII, xHeII, xHeIII}, {xHII_av, xHeII_av, xHeIII_av}, {temp,
+        // temp_av}
         return {xh_new, xh_av_new, {temp, temp_av}};
     }
 
@@ -458,24 +476,19 @@ namespace asora {
 
         // Thread can process more than one cell.
         while (idx < size) {
-            // Get average fraction value as a reference: it will be updated later.
-            double3 xh_p = {xh.x[idx], xh.y[idx], xh.z[idx]};
-            double3 xh_av_p = {xh_av.x[idx], xh_av.y[idx], xh_av.z[idx]};
+            double3 xh_av_old = {xh_av.x[idx], xh_av.y[idx], xh_av.z[idx]};
 
-            // This already writes to temp_int.
             double temp_av_old = temp[idx];
             auto&& [xh_int_new, xh_av_new, temp_new] = do_chemistry(
-                dt, Hz, temp_av_old, ndens[idx], xh_p, xh_av_p,
-                {phi_ion.x[idx], phi_ion.y[idx], phi_ion.z[idx]},
+                dt, Hz, temp_av_old, ndens[idx], {xh.x[idx], xh.y[idx], xh.z[idx]},
+                xh_av_old, {phi_ion.x[idx], phi_ion.y[idx], phi_ion.z[idx]},
                 {phi_heat.x[idx], phi_heat.y[idx], phi_heat.z[idx]}, clump[idx], tables,
                 logtemp, p
             );
 
-            conv_flag[idx] = check_convergence_global(xh_av_new.x, xh_av_p.x) &&
-                             check_convergence_global(xh_av_new.y, xh_av_p.y) &&
-                             check_convergence_global(xh_av_new.z, xh_av_p.z) &&
-                             abs(temp_av_old - temp_new.y) / temp_new.y > 0.1 &&
-                             abs(temp_new.y - temp_av_old) > 100.0;
+            conv_flag[idx] = check_do_chemistry_convergence(
+                xh_av_new, xh_av_old, temp_new.y, temp_av_old
+            );
 
             // Update the results in global memory.
             temp_int[idx] = temp_new.x;

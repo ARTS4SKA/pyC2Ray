@@ -64,20 +64,6 @@ class C2Ray_Test(C2Ray):
         """
         return read_test_sources(file, numsrc, S_star_ref)
 
-    def density_init(self, z: float) -> None:
-        """Set density at redshift z
-
-        Sets the density to a constant value, specified in the parameter file,
-        that is scaled to redshift if the run is cosmological.
-
-        Parameters
-        ----------
-        z : float
-            Redshift slice
-
-        """
-        self.set_constant_average_density(self.avg_dens, z)
-
     def write_output(self, z: float, *args, **kwargs) -> None:
         """Write ionization fraction & ionization rates as pickle files
 
@@ -153,7 +139,3 @@ class C2Ray_Test(C2Ray):
         """Initialize time and redshift counter"""
         self.time = self.age_0
         self.zred = self.zred_0
-
-    @property
-    def avg_dens(self) -> float:
-        return self.material_params.avg_dens

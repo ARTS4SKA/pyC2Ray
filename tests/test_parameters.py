@@ -104,7 +104,6 @@ class TestYmlParameters:
         assert pytest.approx(obj.xHII) == 2.0e-4
         assert pytest.approx(obj.xHeII) == 1.0e-15
         assert pytest.approx(obj.xHeIII) == 0.0
-        assert pytest.approx(obj.avg_dens) == 1.87e-7
 
     def test_cgs_parameters(self, params_file: Path):
         obj = CGSParameters.from_file(params_file, "CGS")
