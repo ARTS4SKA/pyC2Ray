@@ -136,8 +136,6 @@ class MaterialParameters(YmlParameters):
     xHeII: float = 1.0e-15
     # Initial Ionized fraction of the grid for HeIII
     xHeIII: float = 0.0
-    # Constant average density, comoving value
-    avg_dens: float = 1.87e-7
 
 
 @dataclass

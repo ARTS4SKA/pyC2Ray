@@ -232,16 +232,90 @@ namespace {
 
 namespace asora {
     // ========================================================================
+    // Raytracing kernel, adapted from C2Ray. Calculates in/out column density
+    // to the current cell and finds the photoionization rate
+    // ========================================================================
+    __global__ void evolve0D_gpu(
+        size_t m1, double dr, double R_max, int q_max, size_t ns_start, size_t num_src,
+        int *src_pos, double *src_flux, element_data data_HI, element_data data_HeI,
+        element_data data_HeII, density_maps densities, photo_tables ion_tables,
+        photo_tables heat_tables, linspace<double> logtau, size_t num_freq
+    ) {
+        /* The raytracing kernel proceeds as follows:
+         * 1. Select the source based on the thread-block number
+         * 2. Loop over the asora q-shells around the source, up to q_max
+         * 3. For each shell, threads independently raytrace on all cells
+         * 4. Before moving to the next q-shell, threads are synchronized to ensure
+         * causality
+         */
+
+        // Source identifier: one source per thread-block.
+        const size_t ns = ns_start + blockIdx.x;
+
+        // Ensure the source index is valid
+        if (ns >= num_src) return;
+
+        // Get source properties.
+        const auto i0 = src_pos[3 * ns + 0];
+        const auto j0 = src_pos[3 * ns + 1];
+        const auto k0 = src_pos[3 * ns + 2];
+        const auto strength = src_flux[ns];
+
+        // Offset pointer to the outgoing column density array used for
+        // interpolation (each block needs its own copy of the array)
+        size_t cd_offset = blockIdx.x * cells_to_shell(q_max);
+
+        data_HI.column_density += cd_offset;
+        data_HeI.column_density += cd_offset;
+        data_HeII.column_density += cd_offset;
+
+        // Calculate column density and photoionization rate for the source cell.
+        // This is done separately from the main loop because to take advantage of
+        // some simplifications.
+        if (threadIdx.x == 0) {
+            const auto index = ravel_index(i0, j0, k0, m1);
+            auto ns = densities.get(index);
+            update_photo_rates(
+                data_HI, data_HeI, data_HeII, 0, index, {0.0, 0.0, 0.0}, ns, 0.5 * dr,
+                strength, dr * dr * dr, ion_tables, heat_tables, logtau, num_freq
+            );
+        }
+        __syncthreads();
+
+        // Loop over ASORA q-shells and each thread does raytracing on one or more
+        // cells. "s" is the index in the range [0, ..., 4q^2 + 1] that gets mapped
+        // to the cells in the shell. The threads are usually fewer than the number
+        // of cells, therefore they can do additional work. (q, s) indexing is
+        // mapped to the (i, j, k) indexing of the cells via the mapping described
+        // in the paper.
+        for (int q = 1; q <= q_max; ++q) {
+            data_HI.partition_column_density(q);
+            data_HeI.partition_column_density(q);
+            data_HeII.partition_column_density(q);
+
+            int s = threadIdx.x;
+            while (static_cast<size_t>(s) < cells_in_shell(q)) {
+                raytrace(
+                    q, s, i0, j0, k0, strength, dr, R_max, data_HI, data_HeI, data_HeII,
+                    densities, ion_tables, heat_tables, logtau, m1, num_freq
+                );
+                s += blockDim.x;
+            }
+            __syncthreads();
+        }
+    }
+
+    // ========================================================================
     // Raytrace all sources and add up ionization rates
     // ========================================================================
     void do_all_sources_gpu(
         double R, const double *sig_HI, const double *sig_HeI, const double *sig_HeII,
         size_t num_bin_1, size_t num_bin_2, size_t num_freq, double dr,
         const double *xHII_av, const double *xHeII_av, const double *xHeIII_av,
-        double *phi_ion_HI, double *phi_ion_HeI, double *phi_ion_HeII,
-        double *phi_heat_HI, double *phi_heat_HeI, double *phi_heat_HeII,
-        size_t num_src, size_t m1, double minlogtau, double dlogtau, size_t num_tau,
-        size_t grid_size, size_t block_size
+        double *phion_HI, double *phion_HeI, double *phion_HeII, double *pheat_HI,
+        double *pheat_HeI, double *pheat_HeII, size_t num_src, size_t m1,
+        double minlogtau, double dlogtau, size_t num_tau, size_t grid_size,
+        size_t block_size
     ) {
         device::check_initialized();
 
@@ -343,89 +417,15 @@ namespace asora {
 
         // Copy the accumulated ionization rates back to the host
         for (auto &&[tag, data] : {
-                 std::pair{buffer_tag::photo_ionization_HI, phi_ion_HI},
-                 std::pair{buffer_tag::photo_ionization_HeI, phi_ion_HeI},
-                 std::pair{buffer_tag::photo_ionization_HeII, phi_ion_HeII},
-                 std::pair{buffer_tag::photo_heating_HI, phi_heat_HI},
-                 std::pair{buffer_tag::photo_heating_HeI, phi_heat_HeI},
-                 std::pair{buffer_tag::photo_heating_HeII, phi_heat_HeII},
+                 std::pair{buffer_tag::photo_ionization_HI, phion_HI},
+                 std::pair{buffer_tag::photo_ionization_HeI, phion_HeI},
+                 std::pair{buffer_tag::photo_ionization_HeII, phion_HeII},
+                 std::pair{buffer_tag::photo_heating_HI, pheat_HI},
+                 std::pair{buffer_tag::photo_heating_HeI, pheat_HeI},
+                 std::pair{buffer_tag::photo_heating_HeII, pheat_HeII},
              }) {
             auto buf = device::get(tag);
             buf.copyToHost(data);
-        }
-    }
-
-    // ========================================================================
-    // Raytracing kernel, adapted from C2Ray. Calculates in/out column density
-    // to the current cell and finds the photoionization rate
-    // ========================================================================
-    __global__ void evolve0D_gpu(
-        size_t m1, double dr, double R_max, int q_max, size_t ns_start, size_t num_src,
-        int *src_pos, double *src_flux, element_data data_HI, element_data data_HeI,
-        element_data data_HeII, density_maps densities, photo_tables ion_tables,
-        photo_tables heat_tables, linspace<double> logtau, size_t num_freq
-    ) {
-        /* The raytracing kernel proceeds as follows:
-         * 1. Select the source based on the thread-block number
-         * 2. Loop over the asora q-shells around the source, up to q_max
-         * 3. For each shell, threads independently raytrace on all cells
-         * 4. Before moving to the next q-shell, threads are synchronized to ensure
-         * causality
-         */
-
-        // Source identifier: one source per thread-block.
-        const size_t ns = ns_start + blockIdx.x;
-
-        // Ensure the source index is valid
-        if (ns >= num_src) return;
-
-        // Get source properties.
-        const auto i0 = src_pos[3 * ns + 0];
-        const auto j0 = src_pos[3 * ns + 1];
-        const auto k0 = src_pos[3 * ns + 2];
-        const auto strength = src_flux[ns];
-
-        // Offset pointer to the outgoing column density array used for
-        // interpolation (each block needs its own copy of the array)
-        size_t cd_offset = blockIdx.x * cells_to_shell(q_max);
-
-        data_HI.column_density += cd_offset;
-        data_HeI.column_density += cd_offset;
-        data_HeII.column_density += cd_offset;
-
-        // Calculate column density and photoionization rate for the source cell.
-        // This is done separately from the main loop because to take advantage of
-        // some simplifications.
-        if (threadIdx.x == 0) {
-            const auto index = ravel_index(i0, j0, k0, m1);
-            auto ns = densities.get(index);
-            update_photo_rates(
-                data_HI, data_HeI, data_HeII, 0, index, {0.0, 0.0, 0.0}, ns, 0.5 * dr,
-                strength, dr * dr * dr, ion_tables, heat_tables, logtau, num_freq
-            );
-        }
-        __syncthreads();
-
-        // Loop over ASORA q-shells and each thread does raytracing on one or more
-        // cells. "s" is the index in the range [0, ..., 4q^2 + 1] that gets mapped
-        // to the cells in the shell. The threads are usually fewer than the number
-        // of cells, therefore they can do additional work. (q, s) indexing is
-        // mapped to the (i, j, k) indexing of the cells via the mapping described
-        // in the paper.
-        for (int q = 1; q <= q_max; ++q) {
-            data_HI.partition_column_density(q);
-            data_HeI.partition_column_density(q);
-            data_HeII.partition_column_density(q);
-
-            int s = threadIdx.x;
-            while (static_cast<size_t>(s) < cells_in_shell(q)) {
-                raytrace(
-                    q, s, i0, j0, k0, strength, dr, R_max, data_HI, data_HeI, data_HeII,
-                    densities, ion_tables, heat_tables, logtau, m1, num_freq
-                );
-                s += blockDim.x;
-            }
-            __syncthreads();
         }
     }
 

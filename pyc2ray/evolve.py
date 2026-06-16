@@ -20,10 +20,12 @@ This file defines two variants of evolve3D: The reference, single-gpu
 version, and a MPI version which enables usage on multiple GPU nodes.
 """
 
+from __future__ import annotations
+
 import logging
 import time
 from dataclasses import dataclass
-from functools import partial
+from typing import Sequence, cast
 
 import numpy as np
 from mpi4py import MPI
@@ -67,27 +69,53 @@ class ChemistryParams:
     abu_c: float
 
 
-def _tot_fraction(xh: FloatArray) -> tuple[float, float]:
-    """Compute the total ionized and neutral fraction of a species across the
-    grid."""
-    tot = xh.sum()
-    return xh.size - tot, tot
+class FractionStats:
+    """Hold the total neutral and ionized fractions of the different species acress the grid."""
 
+    def __init__(self, data: Sequence[float]) -> None:
+        """Initialize the total fraction stats with dummy values."""
+        if len(data) != 6:
+            raise ValueError(
+                f"Expected 6 values for the total fraction stats, but got {len(data)}"
+            )
+        self.data = cast(tuple[float, float, float, float, float, float], tuple(data))
 
-def _relative_change(old: float, new: float) -> float:
-    """Compute the relative change between an old and new value"""
-    return abs((new - old) / new) if new > 0.0 else 1.0
+    @property
+    def HII(self) -> tuple[float, float]:
+        return self.data[0], self.data[1]
 
+    @property
+    def HeII(self) -> tuple[float, float]:
+        return self.data[2], self.data[3]
 
-def _test_convergence(
-    xh: tuple[float, float], xh_new: tuple[float, float], rtol: float
-) -> bool:
-    """Test the convergence of the ionization fraction before and after the
-    chemistry step."""
-    return (
-        _relative_change(xh[0], xh_new[0]) < rtol
-        and _relative_change(xh[1], xh_new[1]) < rtol
-    )
+    @property
+    def HeIII(self) -> tuple[float, float]:
+        return self.data[4], self.data[5]
+
+    @classmethod
+    def from_xh(self, *xh: FloatArray) -> FractionStats:
+        """Compute the total ionized and neutral fraction of each species across the
+        grid from the ionization fraction fields."""
+        if len(xh) != 3:
+            raise ValueError(
+                f"Expected 3 ionization fraction fields for HII, HeII and HeIII, but got {len(xh)}"
+            )
+        tot_fracs: list[float] = []
+        for frac in xh:
+            tot = frac.sum()
+            tot_fracs.append(frac.size - tot)
+            tot_fracs.append(tot)
+        return FractionStats(tot_fracs)
+
+    def relative_change(self, xh_new: FractionStats) -> FractionStats:
+        """Compute the relative change between an old and new value"""
+
+        def _rel_change(old: float, new: float) -> float:
+            return abs((new - old) / new) if new > 0.0 else 1.0
+
+        return FractionStats(
+            tuple(_rel_change(old, new) for old, new in zip(self.data, xh_new.data))
+        )
 
 
 def _evolve3D_asora(
@@ -191,10 +219,8 @@ def _evolve3D_asora(
     num_src, *_ = src_flux.shape
 
     # Convergence criteria.
+    tot_xh = FractionStats((2.0 * num_cells,) * 6)
     conv_criterion = min(int(convergence_fraction * num_cells), (num_src - 1) / 3)
-    tot_xHII = float(2 * num_cells), float(2 * num_cells)
-    tot_xHeII = float(2 * num_cells), float(2 * num_cells)
-    tot_xHeIII = float(2 * num_cells), float(2 * num_cells)
     converged = False
 
     logger.info(f"""Calling evolve3D...
@@ -244,13 +270,13 @@ Convergence Criterion (Number of points): {conv_criterion: n}
     xHeIII_int = xHeIII.copy()
 
     # Initialize ionization and heating rate arrays.
-    phion_HI = np.zeros_like(ndens)
-    phion_HeI = np.zeros_like(ndens)
-    phion_HeII = np.zeros_like(ndens)
+    phion_HI = np.empty_like(ndens)
+    phion_HeI = np.empty_like(ndens)
+    phion_HeII = np.empty_like(ndens)
 
-    pheat_HI = np.zeros_like(ndens)
-    pheat_HeI = np.zeros_like(ndens)
-    pheat_HeII = np.zeros_like(ndens)
+    pheat_HI = np.empty_like(ndens)
+    pheat_HeI = np.empty_like(ndens)
+    pheat_HeII = np.empty_like(ndens)
 
     # Temporary input elements for helium raytracing and chemistry.
     _, sigma_HI, sigma_HeI, sigma_HeII = np.loadtxt(
@@ -367,29 +393,20 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             # (3): Test Global Convergence
             # ----------------------------
 
-            tot_xHII_new = _tot_fraction(xHII_int)
-            tot_xHeII_new = _tot_fraction(xHeII_int)
-            tot_xHeIII_new = _tot_fraction(xHeIII_int)
+            tot_xh_new = FractionStats.from_xh(xHII_int, xHeII_int, xHeIII_int)
+            rel_change = tot_xh.relative_change(tot_xh_new)
 
-            test = partial(_test_convergence, rtol=convergence_fraction)
+            logger.info(
+                f"Number of non-converged points: {conv_flag} of {num_cells} ({conv_flag / num_cells:.3%}), "
+                f"Relative change in: HII ionfrac {rel_change.HII[0]:.2e}, "
+                f"HeII ionfrac {rel_change.HeII[0]:.2e}, HeIII ionfrac {rel_change.HeIII[0]:.2e}"
+            )
 
-            converged = (conv_flag < conv_criterion) or (
-                test(tot_xHII, tot_xHII_new)
-                and test(tot_xHeII, tot_xHeII_new)
-                and test(tot_xHeIII, tot_xHeIII_new)
+            converged = (conv_flag < conv_criterion) or all(
+                xh < convergence_fraction for xh in rel_change.data
             )
             n_count += 1
-
-            # Set previous metrics to current ones and repeat if not converged
-            tot_xHII = tot_xHII_new
-            tot_xHeII = tot_xHeII_new
-            tot_xHeIII = tot_xHeIII_new
-            logger.info(
-                f"Number of non-converged points: {conv_flag} of {num_cells} ({conv_flag / num_cells * 100:.3f} % ), "
-                f"Relative change in: HII ionfrac {tot_xHII[0]:.2e}, "
-                f"Relative change in: HeII ionfrac {tot_xHeII[0]:.2e}, "
-                f"Relative change in: HeIII ionfrac {tot_xHeIII[0]:.2e}"
-            )
+            tot_xh = tot_xh_new
 
         if use_mpi:
             # Broadcast ionised fraction field
@@ -537,9 +554,8 @@ def _evolve3D_c2ray(
     num_src, *_ = src_flux.shape
 
     # Convergence criteria.
+    tot_xh = FractionStats((2.0 * num_cells,) * 6)
     conv_criterion = min(int(convergence_fraction * num_cells), (num_src - 1) / 3)
-    prev_sum_xh1 = float(2 * num_cells)
-    prev_sum_xh0 = float(2 * num_cells)
     converged = False
 
     logger.info(f"""Calling evolve3D...
@@ -682,27 +698,20 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             # ----------------------------
             # (3): Test Global Convergence
             # ----------------------------
-            sum_xh1 = xHII_int.sum()
-            sum_xh0 = xHII_int.size - sum_xh1  # = np.sum(1 - xHII_int)
+            tot_xh_new = FractionStats.from_xh(xHII_int, xHeII_int, xHeIII_int)
+            rel_change = tot_xh.relative_change(tot_xh_new)
 
-            rel_change_xh1 = _relative_change(prev_sum_xh1, sum_xh1)
-            rel_change_xh0 = _relative_change(prev_sum_xh0, sum_xh0)
-
-            # Display convergence
             logger.info(
                 f"Number of non-converged points: {conv_flag} of {num_cells} ({conv_flag / num_cells:.3%}), "
-                f"Relative change in ionfrac: {rel_change_xh1:.2e}",
+                f"Relative change in: HII ionfrac {rel_change.HII[0]:.2e}, "
+                f"HeII ionfrac {rel_change.HeII[0]:.2e}, HeIII ionfrac {rel_change.HeIII[0]:.2e}"
             )
 
-            converged = (conv_flag < conv_criterion) or (
-                (rel_change_xh1 < convergence_fraction)
-                and (rel_change_xh0 < convergence_fraction)
+            converged = (conv_flag < conv_criterion) or all(
+                xh < convergence_fraction for xh in rel_change.data
             )
             n_count += 1
-
-            # Set previous metrics to current ones and repeat if not converged
-            prev_sum_xh1 = sum_xh1
-            prev_sum_xh0 = sum_xh0
+            tot_xh = tot_xh_new
 
         if use_mpi:
             # Broadcast ionised fraction field

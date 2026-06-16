@@ -52,7 +52,7 @@ import atexit
 import logging
 from functools import cached_property
 from pathlib import Path
-from typing import TypeAlias
+from typing import Sequence, TypeAlias
 
 import numpy as np
 from astropy import constants as cst
@@ -175,9 +175,6 @@ class C2Ray:
             logger.info(
                 f"Using CPU Raytracing (subboxsize = {self.subboxsize}, max_subbox = {self.max_subbox})"
             )
-
-        # initialize radiation tables
-        self._radiation_init()
 
         if self.mpi:
             MPI.COMM_WORLD.Barrier()
@@ -330,8 +327,8 @@ This corresponds to %.3f grid cells.""",
             ndens=self.ndens,
             clump=self.clumping_factor,
             xh=self.xh,
-            chems=self.chem_parms,
-            logtau=(self.minlogtau, self.dlogtau, len(self.photo_thin_table)),
+            chems=self.chem_params,
+            logtau=(self.minlogtau, self.dlogtau, self.num_tau),
             logtemp=self.cool_tables.logtemp,
             convergence_fraction=self.convergence_fraction,
             use_gpu=self.gpu,
@@ -375,19 +372,16 @@ This corresponds to %.3f grid cells.""",
 
     def _write_grids(self, z: float) -> None:
         def save_npz(
-            prefix: str, data: tuple[FloatArray, FloatArray, FloatArray]
+            prefix: str, data: Sequence[FloatArray], labels: Sequence[str]
         ) -> None:
             nonlocal z
             filename = self.results_basename / f"{prefix}_z{z:.3f}.npz"
-            np.savez(filename, HII=data[0], HeII=data[1], HeIII=data[2])
+            np.savez(filename, **dict(zip(labels, data)))  # type: ignore
 
-        save_npz(C2Ray.XH_PREFIX, self.xh)
-        save_npz(C2Ray.PHION_PREFIX, self.phion)
-        save_npz(C2Ray.PHEAT_PREFIX, self.pheat)
-        np.savez(
-            self.results_basename / f"{C2Ray.TEMP_AV_PREFIX}_z{z:.3f}.npz",
-            temp_av=self.temp_av,
-        )
+        save_npz(C2Ray.XH_PREFIX, self.xh, ("HII", "HeII", "HeIII"))
+        save_npz(C2Ray.PHION_PREFIX, self.phion, ("HI", "HeI", "HeII"))
+        save_npz(C2Ray.PHEAT_PREFIX, self.pheat, ("HI", "HeI", "HeII"))
+        save_npz(C2Ray.TEMP_AV_PREFIX, (self.temp_av,), ("temp_av",))
 
     def _log_history(self) -> None:
         # Prevent expensive computation of stats if logger is not enabled.
@@ -565,7 +559,7 @@ This corresponds to %.3f grid cells.""",
         return self.cosmology_params.cosmological
 
     @cached_property
-    def chem_parms(self) -> ChemistryParams:
+    def chem_params(self) -> ChemistryParams:
         return ChemistryParams(
             self.cgs_params.bh00,
             self.cgs_params.albpow,
@@ -583,7 +577,7 @@ This corresponds to %.3f grid cells.""",
         return self.photo_params.maxlogtau
 
     @property
-    def NumTau(self) -> int:
+    def num_tau(self) -> int:
         return self.photo_params.NumTau
 
     @property
@@ -660,17 +654,17 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}""")
         # Create optical depth table (log-spaced)
 
         if self.grey:
-            logger.info("Warning: Using grey opacity")
+            logger.warning("Using grey opacity")
         else:
             logger.info(
-                f"Using power-law opacity with {self.NumTau:n} table points between tau=10^({self.minlogtau:n}) "
+                f"Using power-law opacity with {self.num_tau:n} table points between tau=10^({self.minlogtau:n}) "
                 f"and tau=10^({self.maxlogtau:n})"
             )
 
-        # The actual table has NumTau + 1 points: the 0-th position is tau=0 and
-        # the remaining NumTau points are log-spaced from minlogtau to maxlogtau (same as in C2Ray)
+        # The actual table has num_tau + 1 points: the 0-th position is tau=0 and
+        # the remaining num_tau points are log-spaced from minlogtau to maxlogtau (same as in C2Ray)
         self.tau, self.dlogtau = make_tau_table(
-            self.minlogtau, self.maxlogtau, self.NumTau
+            self.minlogtau, self.maxlogtau, self.num_tau
         )
 
         ion_freq_HI = c.ev2fr * self.eth0
@@ -736,14 +730,16 @@ This is Energy:           {freq_min / c.ev2fr:.3e} to {freq_max / c.ev2fr:.3e} e
             assert libasora is not None
 
             libasora.photo_tables_to_device(
-                self.photo_thin_table,
-                self.photo_thick_table,
-                self.heat_thin_table,
-                self.heat_thick_table,
+                self.photo_thin_table.ravel(),
+                self.photo_thick_table.ravel(),
+                self.heat_thin_table.ravel(),
+                self.heat_thick_table.ravel(),
             )
             logger.info("Successfully copied radiation tables to GPU memory.")
 
-            libasora.cooling_tables_to_device(*self.cool_tables.astuple())
+            libasora.cooling_tables_to_device(
+                *tuple(tab.ravel() for tab in self.cool_tables.astuple())
+            )
             logger.info("Successfully copied cooling tables to GPU memory.")
 
     def _grid_init(self) -> None:
@@ -786,7 +782,6 @@ Simulation Box size (comoving Mpc): {self.boxsize:.3e}"""
 
     def _sinks_init(self) -> None:
         """Initialize sinks physics class for the mean-free path and clumping factor"""
-
         # init sink physics class for MFP and clumping
         self.sinks = SinksPhysics(self.sinks_params, self.N, self.boxsize)
 
