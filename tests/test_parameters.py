@@ -10,6 +10,7 @@ from pyc2ray.parameters import (
     BlackBodyParameters,
     CGSParameters,
     CosmologyParameters,
+    DomainDecompositionParameters,
     GridParameters,
     MaterialParameters,
     OutputParameters,
@@ -96,6 +97,42 @@ class TestYmlParameters:
         assert obj.max_subbox == 1000
         assert obj.source_batch_size == 1
         assert obj.convergence_fraction == 1e-4
+
+    def test_domain_decomposition_parameters_empty(self):
+        obj = DomainDecompositionParameters.from_dict({})
+
+        assert obj.enabled is False
+        assert obj.grouping_algorithm == "morton"
+        assert obj.max_num_sources_per_group == 1000
+        assert obj.morton_bits == 10
+        assert pytest.approx(obj.max_memory_cost_per_group) == 50.0e9
+
+    def test_domain_decomposition_parameters(self, params_file: Path):
+        obj = DomainDecompositionParameters.from_file(
+            params_file, "DomainDecomposition"
+        )
+
+        assert obj.enabled == 1
+        assert obj.grouping_algorithm == "morton"
+        assert obj.max_num_sources_per_group == 12
+        assert obj.morton_bits == 8
+        assert pytest.approx(obj.max_memory_cost_per_group) == 4.0e9
+
+    def test_domain_decomposition_rejects_unknown_grouping_algorithm(self):
+        with pytest.raises(ValueError):
+            DomainDecompositionParameters.from_dict({"grouping_algorithm": "unknown"})
+
+    def test_domain_decomposition_rejects_non_positive_max_num_sources_per_group(self):
+        with pytest.raises(ValueError):
+            DomainDecompositionParameters.from_dict({"max_num_sources_per_group": -1})
+
+    def test_domain_decomposition_rejects_non_positive_morton_bits(self):
+        with pytest.raises(ValueError):
+            DomainDecompositionParameters.from_dict({"morton_bits": -1})
+
+    def test_domain_decomposition_rejects_non_positive_max_memory_cost_per_group(self):
+        with pytest.raises(ValueError):
+            DomainDecompositionParameters.from_dict({"max_memory_cost_per_group": -1})
 
     def test_material_parameters(self, params_file: Path):
         obj = MaterialParameters.from_file(params_file, "Material")

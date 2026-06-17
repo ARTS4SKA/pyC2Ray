@@ -123,6 +123,46 @@ class RaytracingParameters(YmlParameters):
 
 
 @dataclass
+class DomainDecompositionParameters(YmlParameters):
+    """Parameters for domain decomposition and source grouping."""
+
+    SECTION: ClassVar[str] = "DomainDecomposition"
+
+    # Enable domain decomposition/source grouping
+    enabled: bool = False
+    # Source grouping/domain decomposition algorithm
+    grouping_algorithm: str = "morton"
+    # Maximum number of sources in one source group
+    max_num_sources_per_group: int = 1000
+    # Number of bits per dimension for Morton ordering
+    morton_bits: int = 10
+    # Maximum allowed memory cost per group in bytes
+    max_memory_cost_per_group: float = 50.0e9
+
+    def __post_init__(self) -> None:
+        if self.grouping_algorithm not in ("morton",):
+            raise ValueError(
+                f"Grouping algorithm {self.grouping_algorithm} not implemented. "
+                "The only supported algorithm is 'morton'."
+            )
+        if self.max_num_sources_per_group <= 0:
+            raise ValueError(
+                f"max_num_sources_per_group must be a positive integer. "
+                f"Provided value is {self.max_num_sources_per_group}."
+            )
+        if self.morton_bits <= 0:
+            raise ValueError(
+                f"morton_bits must be a positive integer. "
+                f"Provided value is {self.morton_bits}."
+            )
+        if self.max_memory_cost_per_group <= 0:
+            raise ValueError(
+                f"max_memory_cost_per_group must be a positive number. "
+                f"Provided value is {self.max_memory_cost_per_group}."
+            )
+
+
+@dataclass
 class MaterialParameters(YmlParameters):
     """Properties of physical quantities in the simulation volume"""
 

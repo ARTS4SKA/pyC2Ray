@@ -20,6 +20,13 @@ Raytracing:
   source_batch_size: 1
   convergence_fraction: 1e-4
 
+DomainDecomposition:
+  enabled: 1
+  grouping_algorithm: "morton"
+  max_num_sources_per_group: 12
+  morton_bits: 8
+  max_memory_cost_per_group: 4.0e9
+
 Material:
   temp0: 1e4
   xh0: 1.2e-3

@@ -19,6 +19,7 @@ from pyc2ray.parameters import (
     BlackBodyParameters,
     CGSParameters,
     CosmologyParameters,
+    DomainDecompositionParameters,
     GridParameters,
     MaterialParameters,
     OutputParameters,
@@ -163,6 +164,19 @@ class C2Ray:
 
             # Register deallocation function (automatically calls this on program termination)
             atexit.register(device_close)
+
+        # Check if domain decomposion is compatible with MPI and GPU usage setup
+        if self.domain_decomposition_params.enabled:
+            if not self.gpu:
+                logger.warning(
+                    "Domain decomposition is only implemented for GPU raytracing. Disabling domain decomposition."
+                )
+                self.domain_decomposition_params.enabled = False
+            elif not self.mpi:
+                logger.warning(
+                    "Domain decomposition is only implemented for MPI runs. Disabling domain decomposition."
+                )
+                self.domain_decomposition_params.enabled = False
 
         # Initialize output and logger. Waits for all ranks to reach this point.
         self._output_init()
@@ -867,6 +881,7 @@ This corresponds to %.3f grid cells.
         self.output_params = OutputParameters.from_yml(ld)
         self.grid_params = GridParameters.from_yml(ld)
         self.raytracing_params = RaytracingParameters.from_yml(ld)
+        self.domain_decomposition_params = DomainDecompositionParameters.from_yml(ld)
         self.material_params = MaterialParameters.from_yml(ld)
         self.cgs_params = CGSParameters.from_yml(ld)
         self.cosmology_params = CosmologyParameters.from_yml(ld)
