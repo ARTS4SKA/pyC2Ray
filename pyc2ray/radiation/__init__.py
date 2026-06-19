@@ -1,3 +1,15 @@
-# FIXME: don't use import * to avoid namespace pollution
-from .blackbody import *  # noqa: F403
-from .common import *  # noqa: F403
+from .blackbody import (
+    BlackBodyBase,
+    BlackBodySource,
+    BlackBodySource_Multifreq,
+    YggdrasilModel,
+    make_tau_table,
+)
+
+__all__ = [
+    "make_tau_table",
+    "BlackBodyBase",
+    "BlackBodySource",
+    "BlackBodySource_Multifreq",
+    "YggdrasilModel",
+]
