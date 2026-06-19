@@ -244,8 +244,7 @@ class TestBlackBodySourceMultifreq:
         assert pytest.approx(rad.ion_freq_HeI) == ion_freq_HeI
         assert pytest.approx(rad.ion_freq_HeII) == ion_freq_HeII
 
-        assert rad.freq_min.shape == (47,)
-        assert rad.freq_max.shape == (47,)
+        assert rad.freqs.shape == (47, 2)
 
         assert rad.pl_index_HI.shape == (47,)
         assert rad.pl_index_HeI.shape == (47,)
@@ -258,7 +257,7 @@ class TestBlackBodySourceMultifreq:
         tau = np.logspace(-2, 4, num=7)
 
         pl = 2.8
-        fmin = rad.freq_min[20]
+        fmin = rad.freqs[20, 0]  # Reference frequency for HeI
         thin = rad.make_photo_integrand(rad.integrand_thin, tau, fmin, pl)
         thick = rad.make_photo_integrand(rad.integrand_thick, tau, fmin, pl)
 
@@ -390,7 +389,7 @@ class TestBlackBodySourceMultifreq:
 
         # When grey, i.e. no frequency dependency, thin and thick are always identical
         pl = 2.8
-        fmin = rad.freq_min[20]
+        fmin = rad.freqs[20, 0]  # Reference frequency for HeI
         thin = rad.make_photo_integrand(rad.integrand_thin, tau, fmin, pl)
         thick = rad.make_photo_integrand(rad.integrand_thick, tau, fmin, pl)
 

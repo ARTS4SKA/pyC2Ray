@@ -20,7 +20,7 @@ def main(
     t_evol: float = 5e8,
     flux_strength: float = 1e54,
     avg_dens: float = 1.87e-7,
-    num_steps_between_slices: int = 1,
+    num_steps_between_slices: int = 2,
 ) -> int:
     # Create C2Ray object
     sim = pc2r.C2Ray_Test(paramfile)
