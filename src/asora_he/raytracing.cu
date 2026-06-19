@@ -22,13 +22,10 @@ namespace asora {
     }
 
     __device__ double3 density_maps::get(size_t index) const {
-        // TODO: need to expose this to parameters.yml
-        constexpr double abu_he_mass = 0.2486;
-
         auto np = ndens[index];
-        auto nHI = np * (1.0 - abu_he_mass) * (1.0 - xHII[index]);
-        auto nHeI = np * abu_he_mass * (1.0 - xHeII[index] - xHeIII[index]);
-        auto nHeII = np * abu_he_mass * xHeII[index];
+        auto nHI = np * abu_h * (1.0 - xHII[index]);
+        auto nHeI = np * abu_he * (1.0 - xHeII[index] - xHeIII[index]);
+        auto nHeII = np * abu_he * xHeII[index];
 
         return {nHI, nHeI, nHeII};
     }
@@ -107,7 +104,7 @@ namespace {
     }
 
     // Compute the secondary ionization and heating rates based on the primary
-    // photo-heating rates Return the secondary ionization rates for HI, HeI, and the
+    // photo-heating rates. Return the secondary ionization rates for HI, HeI, and the
     // heating rate
     __device__ photo_rates compute_secondary_ionization(
         const double *__restrict__ heat_factors, const double3 &heat_rates,
@@ -180,8 +177,10 @@ namespace {
             auto tpos_in = log_table_index(tau_tot.in, logtau);
             auto tpos_out = log_table_index(tau_tot.out, logtau);
 
+            auto ntau = logtau.num + 1;
+
             // Photo-ionization:
-            auto ion_off = nf * (logtau.num + 1);
+            auto ion_off = nf * ntau;
             auto ion = photo_table_lookup(
                 tpos_in, tpos_out, tau_tot.cell(),
                 {ion_tables.thin + ion_off, ion_tables.thick + ion_off}
@@ -189,18 +188,20 @@ namespace {
             rates += {ion * scaling_HI, ion * scaling_HeI, ion * scaling_HeII, 0.0};
 
             // Photo-heating:
-            auto heat_off = nf * (logtau.num + 1) * 3;
+            auto heat_off = nf * ntau * 3;
             auto heat_HI = photo_table_lookup(
                 tpos_in, tpos_out, tau_tot.cell(),
                 {heat_tables.thin + heat_off, heat_tables.thick + heat_off}
             );
             auto heat_HeI = photo_table_lookup(
                 tpos_in, tpos_out, tau_tot.cell(),
-                {heat_tables.thin + heat_off + 1, heat_tables.thick + heat_off + 1}
+                {heat_tables.thin + heat_off + ntau,
+                 heat_tables.thick + heat_off + ntau}
             );
             auto heat_HeII = photo_table_lookup(
                 tpos_in, tpos_out, tau_tot.cell(),
-                {heat_tables.thin + heat_off + 2, heat_tables.thick + heat_off + 2}
+                {heat_tables.thin + heat_off + 2 * ntau,
+                 heat_tables.thick + heat_off + 2 * ntau}
             );
 
             heat_HI *= scaling_HI;
@@ -208,24 +209,17 @@ namespace {
             heat_HeII *= scaling_HeII;
 
             rates += compute_secondary_ionization(
-                heat_factors + nf, {heat_HI, heat_HeI, heat_HeII}, y1R, y2R
+                heat_factors + nf * 12, {heat_HI, heat_HeI, heat_HeII}, y1R, y2R
             );
         }  // end loop freq
 
         return rates;
     }
 
-    // Compute the photoionization rate for a given cell based on the incoming column
-    // density and the pre-computed photoionization tables.
-    __device__ void update_photo_rates(
+    __device__ void update_column_densities(
         element_data &__restrict__ data_HI, element_data &__restrict__ data_HeI,
-        element_data &__restrict__ data_HeII, double *__restrict__ photo_heating,
-        size_t cd_index, size_t ph_index, const double3 &coldens_in,
-        const double3 &ndens_species, double xHII, double path, double scale,
-        const double *__restrict__ heat_factors,
-        const photo_tables<> &__restrict__ ion_tables,
-        const photo_tables<> &__restrict__ heat_tables, const linspace<> &logtau,
-        size_t num_freq
+        element_data &__restrict__ data_HeII, size_t cd_index,
+        const double3 &coldens_in, const double3 &ndens_species, double path
     ) {
         auto &&[nHI, nHeI, nHeII] = ndens_species;
         double3 coldens_out = {
@@ -235,6 +229,26 @@ namespace {
         data_HI.column_density[cd_index] = coldens_out.x;
         data_HeI.column_density[cd_index] = coldens_out.y;
         data_HeII.column_density[cd_index] = coldens_out.z;
+    }
+
+    // Compute the photoionization rate for a given cell based on the incoming column
+    // density and the pre-computed photoionization tables.
+    __device__ void update_photo_rates(
+        element_data &__restrict__ data_HI, element_data &__restrict__ data_HeI,
+        element_data &__restrict__ data_HeII, double *__restrict__ photo_heating,
+        size_t cd_index, size_t ph_index, const double3 &coldens_in,
+        const double3 &ndens_species, double xHII, double scale,
+        const double *__restrict__ heat_factors,
+        const photo_tables<> &__restrict__ ion_tables,
+        const photo_tables<> &__restrict__ heat_tables, const linspace<> &logtau,
+        size_t num_freq
+    ) {
+        auto &&[nHI, nHeI, nHeII] = ndens_species;
+        double3 coldens_out = {
+            data_HI.column_density[cd_index],
+            data_HeI.column_density[cd_index],
+            data_HeII.column_density[cd_index],
+        };
 
         auto &&[y1R, y2R] = fit_factors(xHII);
         auto rates = compute_photo_rates(
@@ -294,21 +308,14 @@ namespace {
         // the result, albeit the physical result doesn't.
         if (dist2 / (dr * dr) > R_max * R_max) return;
 
+        // FIXME: hard coded indices for cross sections
         cell_interpolator interp{di, dj, dk};
         auto cd_in_HI =
             interp.interpolate(data_HI.shared_cdens, data_HI.cross_section[0]);
         auto cd_in_HeI =
-            interp.interpolate(data_HeI.shared_cdens, data_HeI.cross_section[0]);
+            interp.interpolate(data_HeI.shared_cdens, data_HeI.cross_section[1]);
         auto cd_in_HeII =
-            interp.interpolate(data_HeII.shared_cdens, data_HeII.cross_section[0]);
-
-        // Compute photoionization rates from column density.
-        // WARNING: for now this is limited to the grey-opacity
-        // test case source
-        constexpr double max_coldens = 2e30;
-        if (cd_in_HI > max_coldens || cd_in_HeI > max_coldens ||
-            cd_in_HeII > max_coldens)
-            return;
+            interp.interpolate(data_HeII.shared_cdens, data_HeII.cross_section[27]);
 
         auto path = path_in_cell(di, dj, dk) * dr;
         auto vol = 4 * c::pi<> * dist2 * path;
@@ -319,12 +326,26 @@ namespace {
 
         // Get local number density of HI, HeI, and HeII
         auto ns = densities.get(index);
+
+        // Update the column densities for the current cell.
+        update_column_densities(
+            data_HI, data_HeI, data_HeII, q_off + s, {cd_in_HI, cd_in_HeI, cd_in_HeII},
+            ns, path
+        );
+
+        constexpr double max_coldens = 2e29;
+        if (cd_in_HI > max_coldens || cd_in_HeI > max_coldens ||
+            cd_in_HeII > max_coldens)
+            return;
+
+        // Hydrogen ionized fraction is used to compute the Ricotti form factors.
         auto xHII = densities.xHII[index];
 
+        // Use column densities to compute the photo-ionization and -heating rates.
         update_photo_rates(
             data_HI, data_HeI, data_HeII, photo_heating, q_off + s, index,
-            {cd_in_HI, cd_in_HeI, cd_in_HeII}, ns, xHII, path, strength / vol,
-            heat_factors, ion_tables, heat_tables, logtau, num_freq
+            {cd_in_HI, cd_in_HeI, cd_in_HeII}, ns, xHII, strength / vol, heat_factors,
+            ion_tables, heat_tables, logtau, num_freq
         );
     }
 
@@ -378,9 +399,12 @@ namespace asora {
             const auto index = ravel_index(i0, j0, k0, m1);
             auto ns = densities.get(index);
             auto xHII = densities.xHII[index];
+            update_column_densities(
+                data_HI, data_HeI, data_HeII, 0, {0.0, 0.0, 0.0}, ns, 0.5 * dr
+            );
             update_photo_rates(
                 data_HI, data_HeI, data_HeII, photo_heating, 0, index, {0.0, 0.0, 0.0},
-                ns, xHII, 0.5 * dr, strength / (dr * dr * dr), heat_factors, ion_tables,
+                ns, xHII, strength / (dr * dr * dr), heat_factors, ion_tables,
                 heat_tables, logtau, num_freq
             );
         }

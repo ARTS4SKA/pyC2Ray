@@ -76,21 +76,34 @@ namespace asora {
      *
      * @param dt Timestep size
      * @param temp_start Temperature at the beginning of the step
-     * @param ndens_elec Electron number density
-     * @param ndens_atom Atomic number density
+     * @param ndens Atomic number density
      * @param heating Heating rate
      * @param Hz Hubble parameter in cgs
+     * @param xh Current ionization fractions
+     * @param xh_av Current average ionization fractions
+     * @param xh_int Current intermediate ionization fractions
      * @param p Parameter set (cross sections, abundances, etc.)
      * @param min_temp Floor temperature (default: 1.0)
      * @param max_iterations Maximum number of iterations allowed
      *
      * @return {end temperature, average temperature}
      */
-    __host__ __device__ cuda::std::array<double, 2> thermal(
-        double dt, double temp_start, double ndens_elec, double ndens_atom,
-        double heating, double Hz, const cuda::std::array<double, 3>& xh,
+    __host__ __device__ double2 thermal(
+        double dt, double temp_start, double ndens, double heating, double Hz,
+        const double3& xh, const double3& xh_av, const double3& xh_int,
         const cooling_tables& rates, const linspace<double>& logtemp,
         const parameters& p = {}, double min_temp = 1.0, size_t max_iterations = 10'000
+    );
+
+    /* @brief Compute optical depth ratios for photoionization rates.
+     *
+     * @param ndens Number densities of H, HeI, HeII
+     * @param p Parameter set (cross sections, abundances, etc.)
+     *
+     * @return Optical depth ratios for use in friedrich
+     */
+    __host__ __device__ cuda::std::array<double, 4> optical_depth_ratios(
+        const double3& ndens, const parameters& p = {}
     );
 
     /* @brief Chemistry solution.
@@ -100,15 +113,16 @@ namespace asora {
      * @param n_e Electron number density
      * @param xh Current ionization fractions
      * @param phion Photoionization rates
-     * @param ndens Number densities
+     * @param opt_depth_ratios Optical depth ratios
      * @param clumping Clumping factor (currently unused)
      * @param p Parameter set (cross sections, abundances, etc.)
      *
      * @return {ionization fractions, average ionization fractions}
      */
-    __device__ cuda::std::array<double3, 2> friedrich(
-        double dt, double temp, double n_e, const double3& xh, const double3& phion,
-        const double3& ndens, [[maybe_unused]] double clumping, const parameters& p = {}
+    __host__ __device__ cuda::std::array<double3, 2> friedrich(
+        double dt, double temp, double n_e, const double3& xh, double xHII_int,
+        const double3& phion, const cuda::std::array<double, 4>& opt_depth_ratios,
+        double clumping = 1.0, const parameters& p = {}
     );
 
     /* @brief Chemistry and temperature evolution on a single cell.
@@ -119,7 +133,7 @@ namespace asora {
      * @param ndens Hydrogen number density for the cell
      * @param xh Current ionization fractions
      * @param xh_av Current average ionization fractions
-     * @param phi_ion Photo-ionization rates
+     * @param phion Photo-ionization rates
      * @param heating Photo-heating rate
      * @param clump Clumping factor
      * @param tables Cooling rate lookup tables
@@ -128,12 +142,12 @@ namespace asora {
      * @param max_iterations Maximum number of chemistry iterations
      *
      * @return {ionization fractions, average ionization fractions, temperature}
+     *         where temperature is {temp, temp_av}.
      */
-
     __device__ cuda::std::tuple<double3, double3, double2> do_chemistry(
-        double dt, double Hz, double temp, double ndens, const double3& xh,
-        double3 xh_av, const double3& phi_ion, double heating, double clump,
-        const cooling_tables& rates, const linspace<double>& logscale,
+        double dt, double Hz, double temp, double temp_av, double ndens,
+        const double3& xh, double3 xh_av, const double3& phion, double heating,
+        double clump, const cooling_tables& rates, const linspace<double>& logscale,
         const parameters& p = {}, size_t max_iterations = 400
     );
 
@@ -157,14 +171,13 @@ namespace asora {
      *
      * @param dt Timestep size
      * @param Hz Hubble parameter
-     * @param temp Temperature array (input)
-     * @param temp_int Temperature array (output)
+     * @param temp Temperature arrays: initial, average and result
      * @param ndens Number density array
      * @param xh Ionization fractions
      * @param xh_av Average ionization fractions
      * @param xh_int Intermediate ionization fractions
-     * @param phi_ion Photo-ionization rates
-     * @param phi_heat Photo-heating rates
+     * @param phion Photo-ionization rates
+     * @param pheat Photo-heating rates
      * @param clump Clumping factors
      * @param conv_flag Per-cell convergence flags (output)
      * @param tables Cooling rate lookup tables
@@ -173,21 +186,18 @@ namespace asora {
      * @param size Number of cells
      */
     __global__ void evolve0D_gpu(
-        double dt, double Hz, const double* __restrict__ temp,
-        double* __restrict__ temp_int, const double* __restrict__ ndens, double3ptr xh,
-        double3ptr xh_av, double3ptr xh_int, double3ptr phi_ion,
-        const double* __restrict__ phi_heat, const double* __restrict__ clump,
+        double dt, double Hz, double3ptr temp, const double* __restrict__ ndens,
+        double3ptr xh, double3ptr xh_av, double3ptr xh_int, double3ptr phion,
+        const double* __restrict__ pheat, const double* __restrict__ clump,
         cooling_tables tables, linspace<double> logtemp, bool* conv_flag, parameters p,
         size_t size
     );
 
     size_t global_pass(
-        double dt, double Hz, const double* __restrict__ temp,
-        double* __restrict__ temp_int, double3ptr xh, double3ptr xh_av,
-        double3ptr xh_int, const double3ptr& phi_ion,
-        const double* __restrict__ phi_heat, const double* __restrict__ clump,
-        const linspace<double>& logtemp, const parameters& p, size_t n_cells,
-        size_t block_size
+        double dt, double Hz, double3ptr temp, double3ptr xh, double3ptr xh_av,
+        double3ptr xh_int, const double3ptr& phion, const double* __restrict__ pheat,
+        const double* __restrict__ clump, const linspace<double>& logtemp,
+        const parameters& p, size_t n_cells, size_t block_size
     );
 
 }  // namespace asora
