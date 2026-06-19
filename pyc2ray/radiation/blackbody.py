@@ -9,6 +9,10 @@ import numpy.typing as npt
 import scipy
 from scipy.integrate import quad, quad_vec
 
+from pathlib import Path
+
+from ..utils.sourceutils import PathType
+
 import pyc2ray as pc2r
 
 # For detailed comparisons with C2Ray, we use the same exact value for the constants
@@ -19,10 +23,15 @@ pi = np.pi
 c = cst.c.cgs.value
 two_pi_over_c_square = 2.0 * pi / (c * c)
 hplanck = cst.h.cgs.value
-ion_freq_HI = (cst.Ryd * cst.c).cgs.value
 sigma_0 = 6.3e-18
 
-__all__ = ["BlackBodyBase", "BlackBodySource", "YggdrasilModel"]
+# CGS constants
+Lsun_erg   = cst.L_sun.cgs.value
+c_cgs      = cst.c.cgs.value
+c_AA       = cst.c.to(u.AA / u.s).value   # speed of light in Å/s
+ion_freq_HI = (cst.Ryd * cst.c).cgs.value # Hz
+
+__all__ = ["BlackBodyBase", "BPASSSource", "BlackBodySource", "YggdrasilModel"]
 
 BlackBodyType = TypeVar("BlackBodyType", bound="BlackBodyBase")
 
@@ -40,6 +49,318 @@ class BlackBodyBase(ABC):
         self, tau: FloatArray, freq_min: float, freq_max: float, S_star_ref: float
     ) -> tuple[FloatArray, FloatArray]: ...
 
+
+class BPASSSource(BlackBodyBase):
+    """
+    Point source whose spectral shape is a blackbody normalised using
+    BPASS stellar population data.
+
+    BPASS provides one file per metallicity: rows = wavelength (Angstrom),
+    columns = log-age bins. For a given (metallicity, age), this class
+    derives applies the user-supplied normalization to match the BPASS 
+    SED and ionizing photon rate.
+
+    Assumes that the SED files are already normalised
+    """
+
+    # TO DO: Change to access directly from parameter file instead (?)
+    BPASS_METALLICITIES: list[float] = [
+        0.00001, 0.0001, 0.001, 0.002, 0.003, 0.004, 0.006,
+        0.008, 0.01, 0.014, 0.03, 0.04,
+    ]
+    
+    def __init__(
+        self,
+        metallicity: float,
+        age: float,
+        bpass_dir: PathType,
+        grey: bool,
+        freq0: float,
+        pl_index: float,
+        log_age_bins: FloatArray | None = None,
+    ) -> None:
+
+        # if not provided, assume full-resolution BPASS (52 columns)
+        if log_age_bins is None:
+            self.log_age_bins = np.round(np.arange(6.0, 11.05, 0.1), decimals=1)
+        else:
+            self.log_age_bins = np.asarray(log_age_bins)
+            
+        self.grey = grey
+        self.freq0 = freq0
+        self.pl_index = pl_index
+        self.metallicity = self._snap_metallicity(metallicity)
+        self.age = age
+
+        # Load BPASS SED for this metallicity and age
+        self.freqs, self.sed_photon = self._load_bpass_sed(Path(bpass_dir))
+
+
+    # ------------------------------------------------------------------
+    # Metallicity snapping and helpers
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def _snap_metallicity(cls, Z: float) -> float:
+        """Return the nearest BPASS metallicity bin to Z."""
+        return min(cls.BPASS_METALLICITIES, key=lambda z: abs(z - Z))
+
+    @staticmethod
+    def _metallicity_to_str(Z: float) -> str:
+        """
+        Convert metallicity float to BPASS filename suffix.
+        e.g. 0.001 → '00100',  0.00001 → '00001'
+        Matches the convention: ('%.5f' % Z)[2:]
+        """
+        return ('%.5f' % Z)[2:]
+
+    # ------------------------------------------------------------------
+    # BPASS table loading
+    # ------------------------------------------------------------------
+
+    def _load_bpass_sed(
+        self, bpass_dir: PathType
+    ) -> tuple[FloatArray, FloatArray]:
+        """
+        Load BPASS table for self.metallicity and return the SED at self.age.
+
+        Expected BPASS file layout:
+            Column 0  : wavelength (Angstrom)
+            Columns 1+: L_lambda (L_sun/Å) at each log-age bin
+
+        Returns
+        -------
+        freqs      : frequencies in Hz, monotonically increasing
+        sed_photon : photon-rate SED in photons/s/Hz
+                     (un-normalised; normalisation happens in make_photo_table)
+        """
+        
+        # TODO: adapt path convention to BPASS version
+        # e.g. "spectra-bin-imf135_300.z{Z_str}.dat"
+        Z_str    = self._metallicity_to_str(self.metallicity)
+        filepath = bpass_dir / f"spectra-bin-imf135_300.z{Z_str}.dat"
+
+        data     = np.loadtxt(filepath)
+        wl_aa    = data[:, 0]                       # Angstrom
+        age_col  = self._age_to_column(data)
+        L_lambda = data[:, age_col]                 # L_sun/Å
+
+        # Wavelength → frequency; ensure monotonically increasing
+        freqs = c_AA / wl_aa
+        if freqs[0] > freqs[-1]:
+            freqs    = freqs[::-1]
+            L_lambda = L_lambda[::-1]
+            wl_aa    = wl_aa[::-1]
+        
+        # L_lambda [L_sun/Å] → L_nu [L_sun/Hz]:  L_nu = L_lambda × lambda² / c
+        L_nu_Lsun  = L_lambda * wl_aa**2 / c_AA    # L_sun/Hz
+
+        # L_nu [L_sun/Hz] → photon SED [photons/s/Hz]:  divide by h*nu
+        L_nu_erg   = L_nu_Lsun * Lsun_erg          # erg/s/Hz
+        sed_photon = L_nu_erg / (hplanck * freqs)   # photons/s/Hz
+
+        return freqs, sed_photon 
+
+    # TO DO: Interpolate between BPASS ages, or snap to nearest age?
+    def _age_to_column(self, data: FloatArray) -> int:
+        log_age_target = np.log10(self.age)
+        idx = int(np.argmin(np.abs(self.log_age_bins - log_age_target)))
+        return idx + 1   # +1 for wavelength column
+
+    # ------------------------------------------------------------------
+    # Cross-section frequency dependence
+    # ------------------------------------------------------------------
+
+    # TO DO: check formula
+    def _cross_section(self, freq: FloatArray) -> FloatArray:
+        if self.grey:
+            return np.ones_like(freq)
+        return (freq / self.freq0) ** (-self.pl_index)
+
+    # ------------------------------------------------------------------
+    # SED normalisation
+    # ------------------------------------------------------------------
+
+    def _normalize_sed(
+        self,
+        freqs: FloatArray,
+        sed: FloatArray,
+        freq_min: float,
+        freq_max: float,
+        S_star_ref: float,
+    ) -> FloatArray:
+        """
+        Scale the photon-rate SED so that
+            ∫_{freq_min}^{freq_max} SED dν  =  S_star_ref.
+        Returns the full (all-frequency) scaled SED.
+        """
+        mask      = (freqs >= freq_min) & (freqs <= freq_max)
+        S_unscaled = scipy.integrate.simpson(y=sed[mask], x=freqs[mask])
+        return sed * (S_star_ref / S_unscaled)
+
+    # ------------------------------------------------------------------
+    # Integrand helpers
+    # ------------------------------------------------------------------
+
+    def _photo_thick_integrand(
+        self, freqs: FloatArray, tau: float, sed_norm: FloatArray
+    ) -> FloatArray:
+        sigma   = self._cross_section(freqs)
+        exponent = tau * sigma
+        return np.where(exponent < 700.0, sed_norm * np.exp(-exponent), 0.0)
+
+    def _photo_thin_integrand(
+        self, freqs: FloatArray, tau: float, sed_norm: FloatArray
+    ) -> FloatArray:
+        sigma    = self._cross_section(freqs)
+        exponent = tau * sigma
+        return np.where(exponent < 700.0, sed_norm * sigma * np.exp(-exponent), 0.0)
+
+    def _heat_thick_integrand(
+        self, freqs: FloatArray, tau: float, sed_norm: FloatArray
+    ) -> FloatArray:
+        excess_energy = hplanck * (freqs - ion_freq_HI)
+        return excess_energy * self._photo_thick_integrand(freqs, tau, sed_norm)
+
+    def _heat_thin_integrand(
+        self, freqs: FloatArray, tau: float, sed_norm: FloatArray
+    ) -> FloatArray:
+        excess_energy = hplanck * (freqs - ion_freq_HI)
+        return excess_energy * self._photo_thin_integrand(freqs, tau, sed_norm)
+
+    # ------------------------------------------------------------------
+    # Core integration loop
+    # ------------------------------------------------------------------
+
+    def _compute_tables(
+        self,
+        tau: FloatArray,
+        freq_min: float,
+        freq_max: float,
+        S_star_ref: float,
+        thin_integrand,
+        thick_integrand,
+    ) -> tuple[FloatArray, FloatArray]:
+        sed_norm  = self._normalize_sed(
+            self.freqs, self.sed_photon, freq_min, freq_max, S_star_ref
+        )
+        mask      = (self.freqs >= freq_min) & (self.freqs <= freq_max)
+        freqs_r   = self.freqs[mask]
+        sed_r     = sed_norm[mask]
+
+        table_thin  = np.array([
+            scipy.integrate.simpson(y=thin_integrand(freqs_r, t, sed_r),  x=freqs_r)
+            for t in tau
+        ])
+        table_thick = np.array([
+            scipy.integrate.simpson(y=thick_integrand(freqs_r, t, sed_r), x=freqs_r)
+            for t in tau
+        ])
+        return table_thin, table_thick
+
+    # ------------------------------------------------------------------
+    # BlackBodyBase interface
+    # ------------------------------------------------------------------
+
+    def make_photo_table(
+        self,
+        tau: FloatArray,
+        freq_min: float,
+        freq_max: float,
+        S_star_ref: float,
+        cache_path: PathType | None = None,
+    ) -> tuple[FloatArray, FloatArray]:
+        if cache_path is not None and Path(cache_path).exists():
+            data = np.load(cache_path)
+            return data["thin"], data["thick"]
+
+        thin, thick = self._compute_tables(
+            tau, freq_min, freq_max, S_star_ref,
+            self._photo_thin_integrand, self._photo_thick_integrand,
+        )
+
+        if cache_path is not None:
+            np.savez(cache_path, thin=thin, thick=thick,
+                     metallicity=self.metallicity, age=self.age)
+        return thin, thick
+
+    def make_heat_table(
+        self,
+        tau: FloatArray,
+        freq_min: float,
+        freq_max: float,
+        S_star_ref: float,
+        cache_path: PathType | None = None,
+    ) -> tuple[FloatArray, FloatArray]:
+        if cache_path is not None and Path(cache_path).exists():
+            data = np.load(cache_path)
+            return data["thin"], data["thick"]
+
+        thin, thick = self._compute_tables(
+            tau, freq_min, freq_max, S_star_ref,
+            self._heat_thin_integrand, self._heat_thick_integrand,
+        )
+
+        if cache_path is not None:
+            np.savez(cache_path, thin=thin, thick=thick,
+                     metallicity=self.metallicity, age=self.age)
+        return thin, thick
+
+    # ------------------------------------------------------------------
+    # Pre-computation over all (Z, age) combinations
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def precompute_tables(
+        cls,
+        metallicities: list[float],
+        ages: list[float],
+        bpass_dir: PathType,
+        tau: FloatArray,
+        freq_min: float,
+        freq_max: float,
+        S_star_ref: float,
+        cache_dir: PathType,
+        grey: bool,
+        freq0: float,
+        pl_index: float,
+        log_age_bins: FloatArray | None = None,
+        compute_heat: bool = False,
+    ) -> dict[tuple[float, float], tuple[FloatArray, FloatArray]]:
+        """
+        Pre-compute and cache photo (and optionally heat) tables for every
+        (metallicity, age) pair. Skips pairs whose cache file already exists.
+    
+        Parameters
+        ----------
+        log_age_bins : array of log10(age/yr) values corresponding to the columns
+            in the BPASS files (after the wavelength column). If None, assumes the
+            full-resolution BPASS layout (log_age 6.0 to 11.0 in 0.1 dex steps).
+    
+        Returns
+        -------
+        dict keyed by (Z, age) → (thin_table, thick_table)
+        """
+        cache_dir = Path(cache_dir)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        tables = {}
+    
+        for Z in metallicities:
+            for age in ages:
+                src = cls(Z, age, bpass_dir, grey, freq0, pl_index, log_age_bins)
+                photo_path = cache_dir / f"photo_Z{Z:.5f}_age{age:.3e}.npz"
+                tables[(Z, age)] = src.make_photo_table(
+                    tau, freq_min, freq_max, S_star_ref, cache_path=photo_path
+                )
+                if compute_heat:
+                    heat_path = cache_dir / f"heat_Z{Z:.5f}_age{age:.3e}.npz"
+                    src.make_heat_table(
+                        tau, freq_min, freq_max, S_star_ref, cache_path=heat_path
+                    )
+    
+        return tables
+
+    
 
 class BlackBodySource(BlackBodyBase):
     """A point source emitting a Black-body spectrum"""

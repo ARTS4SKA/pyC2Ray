@@ -331,3 +331,39 @@ class SourcesParameters(YmlParameters):
                 f"bursty_sfr {self.bursty_sfr} not implemented. "
                 "Choose from 'no', 'instant' or 'integrate'."
             )
+
+
+@dataclass
+class BPASSParameters(YmlParameters):
+    """Parameters for BPASS source type (metallicity-dependent stellar populations)"""
+
+    # Metallicity of the BPASS population (solar metallicities, e.g. 0.001, 0.006)
+    metallicity: float
+    # Age of the stellar population in years
+    age: float
+    # Path to the root directory containing BPASS SED files
+    bpass_dir: str
+
+
+@dataclass
+class MetallicityEvolutionParameters(YmlParameters):
+    """Parameters for metallicity evolution pipeline (C2Ray_Metals)"""
+
+    # Root simulation directory (e.g. /path/to/simulation/)
+    sim_root: str
+    # Simulation subdirectory name (e.g. "CDM_100Mpc_2048/")
+    sim_subdir: str
+    # Subdirectory within sim_root/sim_subdir containing halo files (default "sources/")
+    halo_subdir: str = "sources/"
+    # Subdirectory within sim_root/sim_subdir containing overdensity grids (default "grids/nc100/")
+    overdensity_subdir: str = "grids/nc100/"
+    # Format string for halo files: e.g. "{sim_subdir}.{i:05d}.halo.txt"
+    halo_filename_fmt: str = "{sim_subdir}.{i:05d}.halo.txt"
+    # Format string for overdensity files: e.g. "{sim_subdir}.{i:05d}.overden.npy"
+    overdensity_filename_fmt: str = "{sim_subdir}.{i:05d}.overden.npy"
+    # Grid resolution for metallicity accumulation (default 100)
+    N_cell: int = 100
+    # Minimum metallicity floor (default 1e-5)
+    Z_min: float = 1e-5
+    # Output directory for metallicity results (if None, uses current directory)
+    output_dir: OptStr = None

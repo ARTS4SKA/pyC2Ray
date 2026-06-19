@@ -15,10 +15,12 @@ from pyc2ray.evolve import evolve3D
 from pyc2ray.parameters import (
     AbundancesParameters,
     BlackBodyParameters,
+    BPASSParameters,
     CGSParameters,
     CosmologyParameters,
     GridParameters,
     MaterialParameters,
+    MetallicityEvolutionParameters,
     OutputParameters,
     PhotoParameters,
     RaytracingParameters,
@@ -29,6 +31,7 @@ from pyc2ray.parameters import (
 from pyc2ray.radiation import (
     BlackBodyBase,
     BlackBodySource,
+    BPASSSource,
     YggdrasilModel,
     make_tau_table,
 )
@@ -727,6 +730,18 @@ This is Energy:           {freq_min / c.ev2fr:.3e} to {freq_max / c.ev2fr:.3e} e
 Spectrum Frequency Range: {freq_min:.3e} to {freq_max:.3e} Hz
 This is Energy:           {freq_min / c.ev2fr:.3e} to {freq_max / c.ev2fr:.3e} eV"""
             )
+        elif self.SourceType == "BPASS":
+            if self.bpass_params is None:
+                raise ValueError("SourceType is 'BPASS' but no BPASSSource section found in the parameter file")
+            freq_min = ion_freq_HI
+            freq_max = 10 * ion_freq_HeII
+
+            Z = self.bpass_params.metallicity
+            age = self.bpass_params.age
+            bpass_dir = self.bpass_params.bpass_dir
+            radsource = BPASSSource(Z, age, bpass_dir, self.grey, freq_min, self.cs_pl_idx_h)
+            logger.info(f"Recalculating BPASS source tables (Z={Z}, age={age}, bpass_dir={bpass_dir})")
+
         else:
             raise NameError("Unknown source type : ", self.SourceType)
 
@@ -887,6 +902,8 @@ This corresponds to %.3f grid cells.
         self.sinks_params = SinksParameters.from_dict(ld["Sinks"])
         self.blackbody_params = BlackBodyParameters.from_dict(ld["BlackBodySource"])
         self.sources_params = SourcesParameters.from_dict(ld["Sources"])
+        self.bpass_params = BPASSParameters.from_dict(ld["BPASSSource"]) if "BPASSSource" in ld else None
+        self.metallicity_params = MetallicityEvolutionParameters.from_dict(ld["MetallicityEvolution"]) if "MetallicityEvolution" in ld else None
 
     def _gpu_close(self) -> None:
         """Deallocate GPU memory"""
