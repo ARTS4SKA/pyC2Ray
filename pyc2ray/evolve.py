@@ -30,6 +30,7 @@ from typing import Sequence, cast
 import numpy as np
 from mpi4py import MPI
 
+import pyc2ray.constants as c
 from pyc2ray.asora_core import is_device_init, libasora
 from pyc2ray.load_extensions import libc2ray
 from pyc2ray.radiation.radiation_tables import RadiationTables
@@ -111,7 +112,7 @@ class FractionStats:
         """Compute the relative change between an old and new value"""
 
         def _rel_change(old: float, new: float) -> float:
-            return abs((new - old) / new) if new > 0.0 else 1.0
+            return abs(new - old) / (new if new > 0.0 else 1.0)
 
         return FractionStats(
             tuple(_rel_change(old, new) for old, new in zip(self.data, xh_new.data))
@@ -130,13 +131,13 @@ def _evolve3D_asora(
     ndens: FloatArray,
     clump: FloatArray,
     xh: tuple[FloatArray, FloatArray, FloatArray],
-    chems: ChemistryParams,
     logtau: tuple[float, float, int],
     logtemp: tuple[float, float, int],
     convergence_fraction: float,
     use_mpi: bool,
     rank: int,
     nprocs: int,
+    T_eff: float,
     **kwargs,
 ) -> tuple[
     tuple[FloatArray, FloatArray, FloatArray],  # xfrac
@@ -174,8 +175,6 @@ def _evolve3D_asora(
     xh :
         The initial ionized fraction of each cell for each species (HII, HeII,
         HeIII).
-    chems :
-        Parameters used by the chemistry solver.
     logtau :
         Tuple of (start, step, num) describing the log tau axis of the photo
         tables.
@@ -191,6 +190,8 @@ def _evolve3D_asora(
         The MPI rank of this process.
     nprocs :
         The total number of MPI processes.
+    T_eff:
+        The blackbody effective temperature.
 
     Returns
     -------
@@ -220,14 +221,16 @@ def _evolve3D_asora(
 
     # Convergence criteria.
     tot_xh = FractionStats((2.0 * num_cells,) * 6)
-    conv_criterion = min(int(convergence_fraction * num_cells), (num_src - 1) / 3)
+    # TODO: This criterion matches C2Ray now, but check if it's ok for pyc2ray
+    conv_criterion = min(int(convergence_fraction * num_cells), num_src)
     converged = False
 
     logger.info(f"""Calling evolve3D...
 dr [Mpc]: {dr / 3.086e24:.3e}
 dt [years]: {dt / 3.15576e07:.3e}
+cs [km / s]: {dr / dt / 1e5:.3e}
 Running on {num_src:n} source(s), total normalized ionizing flux: {src_flux.sum():.2e}
-Mean density (cgs): {ndens.mean():.3e}, Mean ionized fraction: HII = {xh[0].mean():.3e}, HeII = {xh[1].mean():.3e}, HeIII = {xh[2].mean():.3e},
+Mean density (cgs): {ndens.mean():.3e}, Mean ionized fraction: HII = {xh[0].mean():.3e}, HeII = {xh[1].mean():.3e}, HeIII = {xh[2].mean():.3e}, Mean temperature: {temp.mean():.3e}
 Convergence Criterion (Number of points): {conv_criterion: n}
 """)
 
@@ -278,10 +281,14 @@ Convergence Criterion (Number of points): {conv_criterion: n}
     rt = RadiationTables()
     sigmas = rt.cross_sections
     heat_factors = rt.factors
-    nfreq = len(sigmas[0])
+    # Calculate upper frequency limit for blackbody radiation
+    # TODO: TB ask Garrelt why 25. Not actually needed for convergence.
+    freq_limit = 25.0 * T_eff * c.k_B / c.h
+    nfreq = np.searchsorted(rt.freq_min, freq_limit, side="right").item()
 
     # Prepare other inputs
     temp = np.ravel(temp).astype(np.float64)
+    temp_av = temp.copy()
     temp_int = temp.copy()
     clump = np.ravel(clump).astype(np.float64)
 
@@ -350,6 +357,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
                 dt,
                 Hz,  # must get this from outside
                 temp,
+                temp_av,
                 temp_int,
                 xHII,
                 xHII_av,
@@ -379,15 +387,26 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             tot_xh_new = FractionStats.from_xh(xHII_int, xHeII_int, xHeIII_int)
             rel_change = tot_xh.relative_change(tot_xh_new)
 
+            logger.info(f"Intermediate result for mean HII: {xHII_int.mean()}")
+            logger.info(f"Intermediate result for mean HeII: {xHeII_int.mean()}")
+            logger.info(f"Intermediate result for mean HeIII: {xHeIII_int.mean()}")
             logger.info(
-                f"Number of non-converged points: {conv_flag} of {num_cells} ({conv_flag / num_cells:.3%}), "
-                f"Relative change in: HII ionfrac {rel_change.HII[0]:.2e}, "
-                f"HeII ionfrac {rel_change.HeII[0]:.2e}, HeIII ionfrac {rel_change.HeIII[0]:.2e}"
+                f"Intermediate result for photo-ion: {phion_HI.mean()}, {phion_HeI.mean()}, {phion_HeII.mean()}, {pheat.mean()}"
+            )
+            logger.info(f"Intermediate result for mean temperature: {temp_int.mean()}")
+
+            logger.info(
+                f"Number of non-converged points: {conv_flag} of {num_cells} ({conv_flag / num_cells:.3%})\n"
+                "Relative change in: "
+                f"HII ionfrac [{rel_change.HII[0]:.2%}, {rel_change.HII[1]:.2%}], "
+                f"HeII ionfrac [{rel_change.HeII[0]:.2%}, {rel_change.HeII[1]:.2%}], "
+                f"HeIII ionfrac [{rel_change.HeIII[0]:.2%}, {rel_change.HeIII[1]:.2%}]"
             )
 
             converged = (conv_flag < conv_criterion) or all(
                 xh < convergence_fraction for xh in rel_change.data
             )
+
             n_count += 1
             tot_xh = tot_xh_new
 
@@ -446,7 +465,6 @@ def _evolve3D_c2ray(
     photo_thick_table: FloatArray,
     convergence_fraction: float,
     sigma: float,
-    chems: ChemistryParams,
     logtau: tuple[float, float, int],
     use_mpi: bool,
     rank: int,
@@ -505,8 +523,6 @@ def _evolve3D_c2ray(
         performance (usually ~ 1e-4).
     sigma :
         Constant photoionization cross-section of hydrogen in cm^2.
-    chems :
-        Parameters used by the chemistry solver.
     logtau :
         Tuple of (start, step, num) describing the log tau axis of the photo
         tables.
