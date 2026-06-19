@@ -314,7 +314,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             MPI.COMM_WORLD.Bcast([xh_int, MPI.DOUBLE], root=0)
 
             # broadcast convergence
-            MPI.COMM_WORLD.bcast(converged, root=0)
+            converged = MPI.COMM_WORLD.bcast(converged, root=0)
 
     if rank == 0:
         logger.info(
