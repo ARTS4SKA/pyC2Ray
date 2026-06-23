@@ -172,8 +172,8 @@ Convergence Criterion (Number of points): {conv_criterion: n}
 """)
 
     # Prepare source data for GPU. If using MPI, use a subset of sources for each rank.
-    src_pos = src_pos.astype(np.int32)
-    src_flux = src_flux.astype(np.float64)
+    src_pos = src_pos.astype(np.int32, order="F")
+    src_flux = src_flux.astype(np.float64, order="F")
     if use_mpi:
         chunk = distribute_jobs(num_src, nprocs, rank)
 
