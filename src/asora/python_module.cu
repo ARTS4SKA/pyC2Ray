@@ -139,6 +139,19 @@ PyObject *asora_is_device_init([[maybe_unused]] PyObject *self, PyObject *args) 
     return asora::device::is_initialized() ? Py_True : Py_False;
 }
 
+/// Expose whether the extension was compiled with periodic boundary mode.
+PyObject *asora_is_periodic_mode_active(
+    [[maybe_unused]] PyObject *self, [[maybe_unused]] PyObject *args
+) {
+    if (!PyArg_ParseTuple(args, "")) return nullptr;
+
+#if defined(PERIODIC)
+    Py_RETURN_TRUE;
+#else
+    Py_RETURN_FALSE;
+#endif
+}
+
 /// Allocate and copy density grid to the device.
 PyObject *asora_density_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
     PyArrayObject *ndens;
@@ -232,6 +245,8 @@ static PyMethodDef asoraMethods[] = {
     {"device_close", asora_device_close, METH_VARARGS, "Close device and free memory"},
     {"is_device_init", asora_is_device_init, METH_VARARGS,
      "Check if the device is initialized"},
+    {"is_periodic_mode_active", asora_is_periodic_mode_active, METH_VARARGS,
+     "Check if libasora was compiled with PERIODIC"},
     {"density_to_device", asora_density_to_device, METH_VARARGS,
      "Copy density field to the device"},
     {"photo_table_to_device", asora_photo_table_to_device, METH_VARARGS,

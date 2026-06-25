@@ -5,7 +5,13 @@
 
 from .load_extensions import libasora
 
-__all__ = ["is_device_init", "device_init", "device_close", "photo_table_to_device"]
+__all__ = [
+    "is_device_init",
+    "is_periodic_mode_active",
+    "device_init",
+    "device_close",
+    "photo_table_to_device",
+]
 
 # This flag indicates whether GPU memory has been correctly allocated before calling any methods.
 # NOTE: there is no check if the allocated memory has the correct mesh size when calling a function,
@@ -25,6 +31,13 @@ def check_libasora(func):
 def is_device_init() -> bool:
     assert libasora is not None
     return libasora.is_device_init()
+
+
+@check_libasora
+def is_periodic_mode_active() -> bool:
+    """Return whether libasora was compiled with periodic boundary conditions"""
+    assert libasora is not None
+    return libasora.is_periodic_mode_active()
 
 
 @check_libasora
