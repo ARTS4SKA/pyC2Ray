@@ -2,7 +2,13 @@ from unittest.mock import patch
 
 import pytest
 
-from pyc2ray.asora_core import check_libasora, device_close, device_init, is_device_init
+from pyc2ray.asora_core import (
+    check_libasora,
+    device_close,
+    device_init,
+    is_device_init,
+    is_periodic_mode_active,
+)
 from pyc2ray.load_extensions import libasora
 
 if libasora is None:
@@ -30,3 +36,7 @@ def test_device():
     assert is_device_init()
     device_close()
     assert not is_device_init()
+
+
+def test_is_periodic_mode_active():
+    assert isinstance(is_periodic_mode_active(), bool)
