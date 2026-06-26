@@ -172,8 +172,12 @@ Convergence Criterion (Number of points): {conv_criterion: n}
 """)
 
     # Prepare source data for GPU. If using MPI, use a subset of sources for each rank.
-    src_pos = src_pos.astype(np.int32)
-    src_flux = src_flux.astype(np.float64)
+    # If src_pos is 3xN, we need to transpose it to Nx3 for ASORA
+    if len(src_pos) == 3:
+        src_pos = src_pos.T
+
+    src_pos = np.ascontiguousarray(src_pos, dtype=np.int32)
+    src_flux = np.ascontiguousarray(src_flux, dtype=np.float64)
     if use_mpi:
         chunk = distribute_jobs(num_src, nprocs, rank)
 
