@@ -31,9 +31,6 @@ Material:
   temp0: 1e4
   # Initial Ionized fraction of the grid
   xh0: 1.2e-3
-  # Constant average density, comoving value. Used only by the test case
-  # this value is scaled to zred_0 (even in non-cosmological mode)
-  avg_dens: 1.87e-7
 
 # --------------------------------
 # Miscellaneous physical constants
@@ -96,7 +93,7 @@ Sinks:
   # define the mean-free-path model to use (can be 'constant', 'Choudhury09')
   mfp_model: 'constant' #'Choudhury09'
   # Value of maximum comoving distance for photons from source, Type 3 LLS in original C2Ray (to not use this, set to a value >> boxsize)
-  R_max_cMpc: 15.0
+  R_max_cMpc: 2.0
   # free parameter for the Choudhury09 mean-free-path model in cMpc units
   A_mfp: 175.0
   # spectral index of the Choudhury09 mean-free-path model redshift evolution
@@ -132,8 +129,8 @@ Cosmology:
 # Output setup
 # ------------
 Output:
-  # Directory where results and log files are stored (don't forget slash at end)
-  results_basename: ./test_results/
+  # Directory where results and log files are stored
+  results_basename: results
   # Name of the log file to write
   logfile: pyC2Ray.log
 

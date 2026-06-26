@@ -1,8 +1,11 @@
 import argparse
 import logging
 import os
+import shutil
 import sys
 from pathlib import Path
+
+import numpy as np
 
 import pyc2ray as pc2r
 
@@ -13,19 +16,24 @@ logger = logging.getLogger("pyc2ray")
 
 def main(
     paramfile: PathType,
-    source_file: Path,
     numzred: int,
     t_evol: float = 5e8,
+    flux_strength: float = 1e54,
+    avg_dens: float = 1.87e-7,
     num_steps_between_slices: int = 1,
-) -> None:
+) -> int:
     # Create C2Ray object
     sim = pc2r.C2Ray_Test(paramfile)
+    shutil.copy(paramfile, sim.results_basename / Path(paramfile).name)
 
     # Generate redshift list (test case)
     zreds = sim.generate_redshift_array(numzred + 1, t_evol / numzred)
 
-    # Read sources
-    srcpos, srcstrength = sim.read_sources(source_file, 1)
+    src_pos = np.expand_dims(sim.shape, 1) // 2
+    src_flux = np.array([flux_strength]) / 1e48
+    logger.info(
+        f"Placing a single source at the center of the box ({src_pos.ravel()}) with flux {flux_strength}"
+    )
 
     # Measure time
     timer = pc2r.Timer()
@@ -46,7 +54,7 @@ def main(
         sim.write_output(zi)
 
         # Set density (when cosmological is false, zi has no effect)
-        sim.density_init(zi)
+        sim.set_constant_average_density(avg_dens, zi)
 
         # Set redshift to current slice redshift
         sim.zred = zi
@@ -67,7 +75,7 @@ def main(
             sim.cosmo_evolve(dt)
 
             # Evolve the simulation: raytrace -> photoionization rates -> chemistry -> until convergence
-            sim.evolve3D(dt, srcstrength, srcpos)
+            sim.evolve3D(dt, src_flux, src_pos)
 
     # Write final output
     sim.write_output(zf)
@@ -75,19 +83,14 @@ def main(
     timer.stop()
     logger.info(timer.summary)
 
+    return 0
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("parameters", type=Path, help="Path to parameter file")
     source_default = Path(__file__).parent / "source.txt"
     source_default_rel = source_default.relative_to(Path.cwd(), walk_up=True)
-    parser.add_argument(
-        "-s",
-        "--source-file",
-        type=Path,
-        default=source_default,
-        help=f"Path to source file (default: {source_default_rel})",
-    )
     parser.add_argument(
         "-z",
         "--numzred",
@@ -102,6 +105,22 @@ if __name__ == "__main__":
         default=5e8,
         help="Total evolution time in years (default: 5e8)",
     )
+    parser.add_argument(
+        "-f",
+        "--flux",
+        type=float,
+        default=1e54,
+        help="Flux strength of the single source (default: 1e54)",
+    )
+    parser.add_argument(
+        "-n",
+        "--avg-density",
+        type=float,
+        default=1.87e-7,
+        help="Average number density in cm^-3 (default: 1.87e-7)",
+    )
     args = parser.parse_args()
 
-    sys.exit(main(args.paramfile, args.source_file, args.numzred, args.tevolve))
+    sys.exit(
+        main(args.parameters, args.numzred, args.tevolve, args.flux, args.avg_density)
+    )
