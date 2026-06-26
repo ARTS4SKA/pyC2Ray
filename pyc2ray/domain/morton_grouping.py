@@ -107,8 +107,12 @@ class MortonSourceGrouping(SourceGrouping):
         # TODO: this estimate of n_cells_per_side is not correct in case of non periodic conditions
         n_cells_in_box = grid.find_num_cells_in_box(bbox_min, bbox_max)
         n_cells_per_side = max(1, int(np.ceil(n_cells_in_box ** (1.0 / 3.0))))
+        # The cost model expects the radius of influence in grid units, while the source radius is
+        # stored as a physical length. Convert it using the local cell size around the group center
+        # (constant for regular grids, position dependent for non-uniform grids such as AMR).
+        radius_in_grid_units = group_sources[0].radius / grid.get_average_cell_size(c)
         mem_cost, comp_cost = cost_model.compute_group_costs(
-            group_sources[0].radius,
+            radius_in_grid_units,
             n_cells_per_side,
             len(group_sources),
         )

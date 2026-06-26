@@ -62,6 +62,22 @@ class RegularGrid(Grid):
         """
         return (self.offset + self.num_cells) * self.cell_size
 
+    def get_average_cell_size(self, position: np.ndarray) -> float:
+        """Get a representative (average) cell size of the grid in the neighbourhood of a position.
+
+        For a regular grid the cell size is uniform, so the provided position is ignored and the
+        constant cell size is returned.
+
+        Parameters
+        ----------
+        position : The position in domain coordinates at which to evaluate the cell size (shape `(3,)`).
+
+        Returns
+        -------
+        The (constant) cell size of the regular grid.
+        """
+        return self.cell_size
+
     def _periodic_global_indices(
         self, global_grid_size: int
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
