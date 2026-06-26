@@ -51,6 +51,24 @@ class Grid(ABC):
         pass
 
     @abstractmethod
+    def get_average_cell_size(self, position: np.ndarray) -> float:
+        """Get a representative (average) cell size of the grid in the neighbourhood of a position.
+
+        This is meant to convert physical lengths (e.g. a source radius of influence) into a number
+        of grid cells. For uniform grids the result is constant; for non-uniform grids (e.g. adaptive
+        mesh refinement) it depends on the local resolution around the provided position.
+
+        Parameters
+        ----------
+        position : The position in domain coordinates at which to evaluate the cell size (shape `(3,)`).
+
+        Returns
+        -------
+        The representative cell size of the grid around the provided position.
+        """
+        pass
+
+    @abstractmethod
     def global_to_local_map(
         self, global_field: np.ndarray, local_field: np.ndarray
     ) -> None:
