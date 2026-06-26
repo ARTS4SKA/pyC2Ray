@@ -69,7 +69,7 @@ class StellarToHaloRelation:
 
     def source_lifetime(self, z: float) -> float:
         assert self.cosmo is not None
-        ts = 1.0 / (self.alph_h * (1 + z) * self.cosmo.H(z=z).cgs.value)
+        ts = 1.0 / (self.alph_h * (1 + z) * self.cosmo.H(z).cgs.value)
         return ts
 
     def deterministic(self, Mhalo: FloatLike) -> FloatLike:
