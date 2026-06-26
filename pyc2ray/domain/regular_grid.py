@@ -324,7 +324,7 @@ class RegularGrid(Grid):
         target_shape = (self.num_cells, self.num_cells, self.num_cells)
         if local_field.shape != target_shape:
             try:
-                local_field.resize(target_shape)
+                local_field.resize(target_shape, refcheck=False)
             except ValueError as e:
                 raise ValueError(
                     f"Unable to resize local_field to match local grid shape: {e}"
