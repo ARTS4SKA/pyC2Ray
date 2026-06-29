@@ -12,8 +12,10 @@ name = "pyc2ray"
 version = "0.1.0"
 description = "Python-wrapped and Accelerated version of C2Ray"
 maintainers = [
-  { name = "Patrick Hirling & Michele Bianco" },
+  {name = "Michele Bianco", email = "mbianc@ethz.ch"},
+  {name = "Tommaso Boschi", email = "tboschi@phys.ethz.ch"}
 ]
+
 requires-python = ">=3.10"
 classifiers = [
   "Programming Language :: Python :: 3 :: Only",
