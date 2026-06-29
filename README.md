@@ -90,32 +90,6 @@ The relevant script is located at `paper_tests/raytracing_benchmark/run_test.py`
 A `pyc2ray` simulation is set up by creating an instance of a subclass of `C2Ray`. A few examples are provided, but in principle the idea is to create a new subclass and tailor it for the specific requirements of the simulation you wish to perform. The core functions (e.g. time evolution, raytracing, chemistry) are defined in the `C2Ray` base class, while auxilary methods specific to your use case are free to be overloaded as you wish.
 -->
 
-## TODO list
-Here we list a series of numerical and astrophysical implementations we would like to include in future version of `pyc2ray`.
-- Helium ionization, HeII and HeIII
-- Sources radiative feedback
-- Sources X-ray heating
-- GPU implementation of the chemistry solver
-- multi-frequency UV radiation
-
-## CONTRIBUTING
-
-If you find any bugs or unexpected behavior in the code, please feel free to open a [Github issue](https://github.com/cosmic-reionization/pyC2Ray/issues).
-The issue page is also good if you seek help or have suggestions for us.
-
-### Submitting changes to the code
-
-Please follow these instructions to ensure a smooth integration, at least until a CI system is put into place:
-
-0. **Only the first time**, install `pre-commit` in your enviornment and the pre-commit hooks with `pre-commit install`.
-1. Create a new branch off the main trunk and make your modifications there.
-2. Commit your changes and fix any issue highlighted by the pre-commit hooks; code format is automatically fixed.
-3. Push your branch to the remote repository.
-4. Open a Pull Request on GitHub to the main branch.
-5. It is strongly suggested to squash all the commits into one.
-6. In the PR's description on GitHub, specify blocking dependencies with the message "Depends on #..." and close issues with "Closes #...".
-7. Ask the code to be reviewed before merging.
-
-## AKNOWLEDGMENT
+## Aknowledgements
 
 This project was initially developed by [Patrick Hirling](https://github.com/phirling) as part of the astrophysics practical workshop supervised by Michele Bianco during his master's degree at EPFL. You can find the original version of the code on his GitHub page: [asora](https://github.com/phirling/pyc2ray).
