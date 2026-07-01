@@ -166,3 +166,31 @@ class TestLibasora:
         libasora.source_data_to_device(*create_source_data(50))
         libasora.source_data_to_device(*create_source_data(100))
         libasora.source_data_to_device(*create_source_data(80))
+
+    def test_prepare_grid_buffers(self, init_device):
+        # One argument required
+        with pytest.raises(TypeError):
+            libasora.prepare_grid_buffers()
+
+        # More than two arguments is invalid
+        with pytest.raises(TypeError):
+            libasora.prepare_grid_buffers(16, False, 0)
+
+        # Exercise both default mode and exact-size-forcing mode.
+        libasora.prepare_grid_buffers(16)
+        libasora.prepare_grid_buffers(16, True)
+        libasora.prepare_grid_buffers(24, False)
+
+        # Verify subsequent number-density upload remains functional.
+        dens = np.full(24**3, 0.5, dtype=np.float64)
+        libasora.density_to_device(dens)
+
+    def test_prepare_grid_buffers_forced_mode_idempotent(self, init_device):
+        # Repeated exact-size enforcement should be idempotent and not raise.
+        libasora.prepare_grid_buffers(20, True)
+        libasora.prepare_grid_buffers(20, True)
+        libasora.prepare_grid_buffers(20, True)
+
+        # Keep integration-level sanity check with a matching density upload.
+        dens = np.full(20**3, 0.5, dtype=np.float64)
+        libasora.density_to_device(dens)

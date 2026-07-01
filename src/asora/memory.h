@@ -208,6 +208,8 @@ namespace asora {
          *
          * It behaves like 'transfer', except that a new buffer device of the right size
          * is allocated if the existing one is smaller than the required size.
+         * If force_matching_size is true, the existing buffer must have exactly the
+         * required size, otherwise reallocation is triggered.
          *
          * @tparam T Element type
          * @param[in] tag Buffer identifier
@@ -215,8 +217,12 @@ namespace asora {
          * @param[in] items Number of elements to copy
          */
         template <typename T>
-        static void ensure_transfer(buffer_tag tag, const T *src, size_t items) {
-            instance().allocate_or_copy(tag, items * sizeof(T), src, true);
+        static void ensure_transfer(
+            buffer_tag tag, const T *src, size_t items, bool force_matching_size = false
+        ) {
+            instance().allocate_or_copy(
+                tag, items * sizeof(T), src, true, force_matching_size
+            );
         }
 
         /* @brief Allocate an empty buffer on device and add it to the pool.
@@ -232,14 +238,22 @@ namespace asora {
         }
 
         /* @brief Ensure there is a buffer with the given tag and the required size.
+         * If force_matching_size is true, the existing buffer must have exactly the
+         * required size.
          *
          * @tparam T Element type
          * @param[in] tag Buffer identifier
          * @param[in] items Number of elements to allocate
+         * @param[in] force_matching_size If true, the existing buffer must have exactly
+         * the required size
          */
         template <typename T>
-        static void ensure(buffer_tag tag, size_t items) {
-            instance().allocate_or_copy(tag, items * sizeof(T), nullptr, true);
+        static void ensure(
+            buffer_tag tag, size_t items, bool force_matching_size = false
+        ) {
+            instance().allocate_or_copy(
+                tag, items * sizeof(T), nullptr, true, force_matching_size
+            );
         }
 
         /* @brief Retrieve a buffer from the device.
@@ -269,13 +283,16 @@ namespace asora {
          * @param[in] tag Buffer identifier
          * @param[in] nbytes Size in bytes
          * @param[in] src Optional host source pointer for copying
-         * @param[in] ensure Overwrite existing buffer if it is't large enough
-         * @throw std::runtime_error if tag exists but no copy requested and ensure is
-         * false
+         * @param[in] ensure Ensure a buffer exists according to sizing policy.
+         * @param[in] force_matching_size If ensure is true, enforce
+         * exact size match; when false, reuse existing buffers that are large
+         * enough and only reallocate when they are too small. Default is false.
+         * @throw std::runtime_error if tag exists but no copy requested and
+         * ensure is false
          */
         void allocate_or_copy(
             buffer_tag tag, size_t nbytes, const void *src = nullptr,
-            bool ensure = false
+            bool ensure = false, bool force_matching_size = false
         );
 
         /// Device ID (-1 means uninitialized)
