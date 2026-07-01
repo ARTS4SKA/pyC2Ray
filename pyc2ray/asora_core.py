@@ -10,6 +10,7 @@ __all__ = [
     "is_periodic_mode_active",
     "device_init",
     "device_close",
+    "prepare_grid_buffers",
     "photo_table_to_device",
 ]
 
@@ -59,6 +60,27 @@ def device_close() -> None:
     assert libasora is not None
     if libasora.is_device_init():
         libasora.device_close()
+
+
+@check_libasora
+def prepare_grid_buffers(
+    grid_edge_length: int, force_matching_size: bool = False
+) -> None:
+    """Ensure mesh-dependent device buffers exist for an m1^3 grid
+
+    Parameters
+    ----------
+    grid_edge_length : int
+        Grid edge length; buffers are sized for grid_edge_length**3 cells
+    force_matching_size : bool
+        If True, reallocate buffers when their current size does not match
+    """
+    assert libasora is not None
+    if not libasora.is_device_init():
+        raise RuntimeError(
+            "GPU not initialized. Please initialize it by calling device_init"
+        )
+    libasora.prepare_grid_buffers(grid_edge_length, force_matching_size)
 
 
 @check_libasora
