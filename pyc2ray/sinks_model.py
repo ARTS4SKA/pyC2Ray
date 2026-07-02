@@ -7,8 +7,8 @@ import numpy.typing as npt
 from .parameters import SinksParameters
 from .utils.other_utils import find_bins
 
-FloatNDArray = npt.NDArray[np.float64]
-IntNDArray = npt.NDArray[np.int32]
+FloatArray = npt.NDArray[np.float64]
+IntArray = npt.NDArray[np.int32]
 
 
 class SinksPhysics:
@@ -34,7 +34,7 @@ class SinksPhysics:
         else:
             raise ValueError(" MFP model not implemented : %s" % self.mfp_model)
 
-        self.clumping_factor: FloatNDArray
+        self.clumping_factor: FloatArray
         # Clumping factor parameters
         if self.clumping_model == "constant":
             assert sinks_params.clumping is not None
@@ -76,11 +76,11 @@ class SinksPhysics:
         R_mfp = R_mfp * (1 + ((1 + z) / (1 + self.z1_mfp)) ** self.eta1_mfp)
         return R_mfp
 
-    def biashomogeneous_clumping(self, z: float) -> FloatNDArray:
+    def biashomogeneous_clumping(self, z: float) -> FloatArray:
         clump_fact = self.C0 * np.exp(self.c1 * z + self.c2 * z**2) + 1.0
         return np.full((self.N, self.N, self.N), clump_fact, dtype=np.float64)
 
-    def inhomogeneous_clumping(self, z: float, ndens: FloatNDArray) -> FloatNDArray:
+    def inhomogeneous_clumping(self, z: float, ndens: FloatArray) -> FloatArray:
         redshift = self.clumping_params[:, 0]
 
         # find nearest redshift bin

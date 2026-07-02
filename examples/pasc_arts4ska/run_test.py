@@ -1,9 +1,11 @@
+import os
 import sys
-import numpy as np, os
 import time
-import pyc2ray as pc2r
 
+import numpy as np
 from c2ray_pasc import C2Ray_PASC
+
+import pyc2ray as pc2r
 
 # ======================================================================
 # Example for pyc2ray: Cosmological simulation from N-body

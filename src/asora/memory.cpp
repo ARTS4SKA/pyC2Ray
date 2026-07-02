@@ -34,17 +34,19 @@ namespace asora {
 
     void device_buffer::copyFromHost(const void *src, size_t nbytes) {
         if (size() < nbytes)
-            throw std::invalid_argument(
-                "requested more bytes to copy than the buffer size"
-            );
+            throw std::invalid_argument(std::format(
+                "copyFromHost size mismatch: device buffer has {} bytes, requested {} bytes",
+                size(), nbytes
+            ));
         safe_cuda(cudaMemcpy(data(), src, nbytes, cudaMemcpyHostToDevice));
     }
 
     void device_buffer::copyToHost(void *dst, size_t nbytes) const {
         if (size() < nbytes)
-            throw std::invalid_argument(
-                "requested more bytes to copy than the buffer size"
-            );
+            throw std::invalid_argument(std::format(
+                "copyToHost size mismatch: device buffer has {} bytes, requested {} bytes",
+                size(), nbytes
+            ));
         safe_cuda(cudaMemcpy(dst, data(), nbytes, cudaMemcpyDeviceToHost));
     }
 

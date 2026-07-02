@@ -30,10 +30,6 @@ class C2Ray_Test(C2Ray):
         ----------
         paramfile : str
             Name of a YAML file containing parameters for the C2Ray simulation
-        Nmesh : int
-            Mesh size (number of cells in each dimension)
-        use_gpu : bool
-            Whether to use the GPU-accelerated ASORA library for raytracing
         """
         super().__init__(paramfile)
         if self.rank == 0:
