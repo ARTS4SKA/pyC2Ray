@@ -41,7 +41,7 @@ if get_option('buildtype') in ['release', 'minsize']
 endif
 
 # CUDA sources for ASORA
-asora_sources = ['memory.cpp', 'rates.cu', 'raytracing.cu', 'utils.cu', 'chemistry.cu']
+asora_sources = ['memory.cpp', 'raytracing.cu', 'utils.cu', 'chemistry.cu']
 cuda_dep = dependency('cuda', version: '>=12', static: false)
 asora_core = static_library(
     'asora_core',

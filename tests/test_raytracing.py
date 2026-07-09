@@ -35,10 +35,7 @@ def setup_do_all_sources(
     # Read cross section
     rt = RadiationTables()
     sigmas = rt.cross_sections
-
-    # number of frequency bin
-    nbins = rt.NB1, rt.NB2, rt.NB3
-    nfreq = sum(nbins)
+    nfreq = len(sigmas[0])
 
     assert photo_thin_table.shape == (nfreq, num_tau + 1)
 
@@ -89,7 +86,6 @@ def setup_do_all_sources(
     yield (
         radius,
         *sigmas,
-        *nbins,
         nfreq,
         dr,
         xHII,
@@ -115,12 +111,12 @@ def test_do_all_sources(data_dir, init_device):
     with setup_do_all_sources(data_dir) as args:
         libasora.do_all_sources(*args)
 
-        phion_HI = args[12] * 1e48
-        phion_HeI = args[13] * 1e48
-        phion_HeII = args[14] * 1e48
-        pheat_HI = args[15] * 1e48
-        pheat_HeI = args[16] * 1e48
-        pheat_HeII = args[17] * 1e48
+        phion_HI = args[9] * 1e48
+        phion_HeI = args[10] * 1e48
+        phion_HeII = args[11] * 1e48
+        pheat_HI = args[12] * 1e48
+        pheat_HeI = args[13] * 1e48
+        pheat_HeII = args[14] * 1e48
 
         expected_rates = np.load(data_dir / "photo_rates_with_helium.npz")
 
