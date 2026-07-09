@@ -6,11 +6,10 @@ import numpy as np
 import tools21cm as t2c
 
 import pyc2ray.constants as c
-
-from .c2ray_base import C2Ray
-from .utils import get_source_redshifts
-from .utils.other_utils import find_bins, get_redshifts_from_output
-from .utils.sourceutils import FloatArray, IntArray, PathType
+from pyc2ray.c2ray_base import C2Ray
+from pyc2ray.utils import get_source_redshifts
+from pyc2ray.utils.other_utils import find_bins, get_redshifts_from_output
+from pyc2ray.utils.sourceutils import FloatArray, IntArray, PathType
 
 __all__ = ["C2Ray_244Test"]
 
@@ -194,7 +193,7 @@ class C2Ray_244Test(C2Ray):
         # TODO: automatic selection of low mass or high mass.
         # For the moment only high mass:
         # mass2phot = (
-        #     c.msun2g
+        #     c.M_sun
         #     * self.fgamma_hm
         #     * self.cosmology.Ob0
         #     / (self.mean_molecular * c.m_p.cgs.value * self.ts * self.cosmology.Om0)
@@ -202,7 +201,7 @@ class C2Ray_244Test(C2Ray):
         # TODO: for some reason the difference with the orginal Fortran run is of
         # the molecular weight: logger.info(str(self.mean_molecular))
         mass2phot = (
-            c.msun2g
+            c.M_sun
             * self.fgamma_hm
             * self.cosmology.Ob0
             / (c.m_p * ts * self.cosmology.Om0)

@@ -129,7 +129,8 @@ namespace {
             // the if else condition (look at the radiation_tables.f90 line 322)
             auto heat = asora::photo_rates_gpu(
                 tau_tot.first, tau_tot.second,
-                {heat_tables.thin + nf_offset, heat_tables.thick + nf_offset}, logtau
+                {heat_tables.thin + 3 * nf_offset, heat_tables.thick + 3 * nf_offset},
+                logtau
             );
             heat *= norm;
 
