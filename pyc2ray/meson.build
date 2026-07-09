@@ -20,11 +20,11 @@ pyc2ray_sources = [
     'radiation/blackbody.py',
     'radiation/common.py',
     'radiation/spectra.py',
+    'radiation/radiation_tables.py',
     'solver/__init__.py',
     'solver/chemistry.py',
     'solver/hydrogen.py',
     'solver/helium.py',
-    'tables/multifreq/cross_section_index.py',
     'utils/__init__.py',
     'utils/check_source_formalism.py',
     'utils/logutils.py',
@@ -69,8 +69,6 @@ pyc2ray_tables = [
     'tables/cooling/HeIII_cool.txt',
     'tables/cooling/HI_cool.txt',
     'tables/cooling/HII_coolB.txt',
-    'tables/multifreq/Verner1996_crossect.txt',
-    'tables/multifreq/Verner1996_spectidx.txt',
 ]
 
 py.install_sources(

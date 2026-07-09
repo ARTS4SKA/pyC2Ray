@@ -55,7 +55,6 @@ from pathlib import Path
 from typing import Sequence, TypeAlias
 
 import numpy as np
-from astropy import constants as cst
 from astropy import units as u
 from astropy.cosmology import FlatLambdaCDM, z_at_value
 from mpi4py import MPI
@@ -503,16 +502,16 @@ This corresponds to %.3f grid cells.""",
         return bool(self.grid_params.resume)
 
     @property
-    def eth0(self) -> float:
-        return self.cgs_params.eth0
+    def ion_freq_HI(self) -> float:
+        return c.ev2hz * self.cgs_params.eth0
 
     @property
-    def ethe0(self) -> float:
-        return self.cgs_params.ethe0
+    def ion_freq_HeI(self) -> float:
+        return c.ev2hz * self.cgs_params.ethe0
 
     @property
-    def ethe1(self) -> float:
-        return self.cgs_params.ethe1
+    def ion_freq_HeII(self) -> float:
+        return c.ev2hz * self.cgs_params.ethe1
 
     @property
     def fh0(self) -> float:
@@ -667,56 +666,55 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}""")
             self.minlogtau, self.maxlogtau, self.num_tau
         )
 
-        ion_freq_HI = c.ev2fr * self.eth0
-        ion_freq_HeII = c.ev2fr * self.ethe1
-
         radsource: BlackBodyBase
         # Black-Body source type
         if self.SourceType == "blackbody":
-            freq_min = ion_freq_HI
-            freq_max = 10 * ion_freq_HeII
-
             # Initialize spectrum parameters
-            radsource = BlackBodySource_Multifreq(self.bb_Teff, self.grey)
+            radsource = BlackBodySource_Multifreq(self.bb_Teff, grey=self.grey)
 
-            logger.info(f"""Using Black-Body sources with effective temperature T = {radsource.temp:.1e} K and Radius {(radsource.R_star / cst.R_sun.to("cm")).value: .3e} rsun
+            logger.info(
+                f"Using Black-Body sources with effective temperature "
+                f"T = {radsource.temp:.1e} K and Radius {np.sqrt(radsource.R_star2) / c.R_sun:.3e} rsun"
+                """
 Spectrum Frequency Range: {freq_min:.3e} to {freq_max:.3e} Hz
-This is Energy:           {freq_min / c.ev2fr:.3e} to {freq_max / c.ev2fr:.3e} eV""")
+This is Energy:           {freq_min / c.ev2hz:.3e} to {freq_max / c.ev2hz:.3e} eV"""
+            )
         elif self.SourceType == "powerlaw":
             # TODO: power law spectra is already implemented in radiation folder
             pass
         elif self.SourceType == "Zackrisson2011":
-            freq_min = ion_freq_HI
-            freq_max = 10 * ion_freq_HI  # maximum frequency in Zackrisson tables
-
             fname = self.photo_params.sed_table
             radsource = YggdrasilModel(
                 tabname=fname,
                 grey=self.grey,
-                freq0=ion_freq_HI,
+                freq_range=(  # maximum frequency in Zackrisson tables
+                    self.ion_freq_HI,
+                    10 * self.ion_freq_HI,
+                ),
+                ion_freq=self.ion_freq_HI,
                 pl_index=self.cs_pl_idx_h,
-                S_star_ref=1e48,
             )
 
             logger.info(
                 """Using Yggdrasil Models for SED, Zackrisson et al (2011), for PopIII or PopII sources
 Spectrum Frequency Range: {freq_min:.3e} to {freq_max:.3e} Hz
-This is Energy:           {freq_min / c.ev2fr:.3e} to {freq_max / c.ev2fr:.3e} eV"""
+This is Energy:           {freq_min / c.ev2hz:.3e} to {freq_max / c.ev2hz:.3e} eV"""
             )
         else:
             raise NameError("Unknown source type : ", self.SourceType)
 
         # Integrate table
         logger.info("Integrating photoionization rate tables...")
-        self.photo_thin_table, self.photo_thick_table = radsource.make_photo_table(
-            self.tau, freq_min, freq_max, 1e48
+        self.photo_thin_table, self.photo_thick_table = radsource.make_photo_tables(
+            self.tau
         )
 
         if self.compute_heating_rates:
             logger.info("Integrating photoheating rate tables...")
-            self.heat_thin_table, self.heat_thick_table = radsource.make_heat_table(
-                self.tau, freq_min, freq_max, 1e48
-            )  # nb integration bounds are given in log10(freq/freq_HI)
+            self.heat_thin_table, self.heat_thick_table = radsource.make_heat_tables(
+                self.tau
+            )
+            # nb integration bounds are given in log10(freq/freq_HI)
         else:
             logger.warning("No heating rates")
             self.heat_thin_table = np.zeros_like(self.photo_thin_table)
