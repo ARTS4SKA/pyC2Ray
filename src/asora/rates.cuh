@@ -1,7 +1,6 @@
 #pragma once
 
 #include <concepts>
-#include <cuda/std/tuple>
 
 /* @file rates.cuh
  * @brief Photoionization rate calculations for radiative transfer on GPU
@@ -19,7 +18,7 @@ namespace asora {
      * Collect parameters to describe a linearly-spaced grid used to index
      * logarithmically-spaced lookup tables.
      */
-    template <std::floating_point T>
+    template <std::floating_point T = double>
     struct linspace {
         /// Starting value of the linear space
         T start = 0;
@@ -34,9 +33,6 @@ namespace asora {
         __host__ __device__ T stop() const { return start + num * step; }
     };
 
-    /// Optical depth threshold to distinguish between optically thin and thick cells.
-    constexpr double tau_photo_limit = 1.e-7;
-
     /* @brief Container for photoionization lookup tables.
      *
      * Holds pointers to pre-computed tables for optically thin and thick regimes.
@@ -45,28 +41,69 @@ namespace asora {
      * The tables store values of the integral ∫L_ν*e^(-τ_ν)/hν computed over
      * the source spectrum.
      */
+    template <std::floating_point T = double>
     struct photo_tables {
-        const double *__restrict__ thin;
-        const double *__restrict__ thick;
+        const T *__restrict__ thin;
+        const T *__restrict__ thick;
     };
 
-    // Utility function to perform interpolation between data points of a log-scale
-    // lookup table.
-    __host__ __device__ cuda::std::tuple<size_t, size_t, double> log_table_index(
-        double x, const asora::linspace<double> &logscale
-    );
-
-    // Utility function to read the value of a log-scale table by doing linear
-    // interpolation between data points.
-    __host__ __device__ double log_table_lookup(
-        double x, const double *table, const asora::linspace<double> &logscale
-    );
-
-    // Photoionization rate from tables
-
-    /* @brief Compute photoionization rate from optical depths using lookup tables.
+    /* @brief Structure to hold interpolation indices and weights for log-scale tables.
      *
-     * Calculates the photoionization rate for a ray segment through a cell by
+     * Contains the indices of the two nearest data points in a lookup table and
+     * the interpolation weight for linear interpolation between them.
+     */
+    template <std::floating_point T = double>
+    struct tau_pos {
+        size_t i0;
+        size_t i1;
+        T p;
+
+        __host__ __device__ T interp(const T *table) const {
+            return (1 - p) * table[i0] + p * table[i1];
+        }
+    };
+
+    /* @brief Compute interpolation indices and weights for log-scale tables.
+     *
+     * Given a value x, this function computes the indices of the two nearest
+     * data points in a logarithmically-spaced lookup table and the interpolation
+     * weight for linear interpolation between them.
+     *
+     * @param[in] x        Value to interpolate (e.g., optical depth)
+     * @param[in] logscale Linear space specification for the logarithmic τ-grid
+     * @param[in] base     Base of the logarithm used for the grid (default: 10)
+     *
+     * @return Structure containing indices and interpolation weight
+     */
+    template <std::floating_point T = double>
+    __host__ __device__ tau_pos<T> log_table_index(
+        T x, const asora::linspace<T> &logscale, T base = 10.0
+    ) {
+        // Clamp the log(tau) to be within the table range
+        auto lx = max(logscale.start, log2(x) / log2(base));
+
+        // Map lx to its position in the table
+        auto interp =
+            min(static_cast<T>(logscale.num),
+                max(static_cast<T>(0.0), (lx - logscale.start) / logscale.step));
+
+        // Split the continuous index into integer and fractional parts
+        // integral = floor of the index, used for table lookup
+        // residual = fractional part, used for interpolation weight
+        T integral;
+        auto residual = modf(interp, &integral);
+
+        // Determine the two table indices for linear interpolation and perform the
+        // interpolation
+        auto i0 = static_cast<size_t>(integral);
+        auto i1 = min(logscale.num, i0 + 1);
+
+        return {i0, i1, residual};
+    }
+
+    /* @brief Compute photo rate from optical depths using lookup tables.
+     *
+     * Calculates the photo rate for a ray segment through a cell by
      * interpolating pre-computed tables. The method automatically selects between
      * optically thin and thick approximations based on the optical depth
      * difference:
@@ -74,37 +111,47 @@ namespace asora {
      * - Thick regime (|τ_out - τ_in| > 10^-7): Uses difference of cumulative
      * integrals
      *
-     * @param[in] tau_in   Optical depth at ray entry into the cell
-     * @param[in] tau_out  Optical depth at ray exit from the cell
+     * @param[in] tpos_in   Optical depth at ray entry into the cell
+     * @param[in] tpos_out  Optical depth at ray exit from the cell
+     * @param[in] tau_cell  Optical depth difference (tau_out - tau_in) across the cell
      * @param[in] tables   Structure containing pointers to thin and thick lookup
      * tables
      * @param[in] logtau   Linear space specification for the logarithmic τ-grid
      *
-     * @return Photoionization rate for this cell segment
+     * @return Photo rate for this cell segment
      */
-    __device__ double photo_rates_gpu(
-        double tau_in, double tau_out, const photo_tables &tables,
-        const linspace<double> &logtau
-    );
+    template <std::floating_point T = double>
+    __host__ __device__ T photo_table_lookup(
+        const tau_pos<T> &tpos_in, const tau_pos<T> &tpos_out, T tau_cell,
+        const photo_tables<T> &tables
+    ) {
+        /// Optical depth threshold to distinguish between thin and thick cells.
+        constexpr T tau_photo_limit = 1.e-7;
 
-#ifdef GREY_NOTABLES
-    // Reference ionizing flux normalization factor.
-    constexpr double s_star_ref = 1e48;
+        // Check if the cell is optically thin - simplified calculation
+        if (abs(tau_cell) <= tau_photo_limit)
+            return tau_cell * tpos_out.interp(tables.thin);
 
-    /* @brief Analytical photoionization rate for grey-opacity test cases.
+        // Cell is optically thick - use both tables
+        auto rate_in = tpos_in.interp(tables.thick);
+        auto rate_out = tpos_out.interp(tables.thick);
+        return rate_in - rate_out;
+    }
+
+    /* @see photo_table_lookup(const tau_pos<T> &, const tau_pos<T> &, T, const
+     * photo_tables<T> &)
      *
-     * Computes photoionization rate using an analytical formula that assumes
-     * monochromatic radiation. This version bypasses lookup tables and is used for
-     * code validation and testing
-     *
-     * @param[in] tau_in   Optical depth at ray entry into the cell
-     * @param[in] tau_out  Optical depth at ray exit from the cell
-     *
-     * @return Photoionization rate for this cell segment
-     *
-     * @note Uses s_star_ref as reference flux normalization
+     * This overload computes the interpolation indices and weights for the
+     * input and output optical depths before calling the main lookup function.
      */
-    __device__ double photo_rates_test_gpu(double tau_in, double tau_out);
-#endif  // GREY_NOTABLES
+    template <std::floating_point T = double>
+    __host__ __device__ T photo_table_lookup(
+        T tau_in, T tau_out, const photo_tables<T> &tables, const linspace<T> &logtau
+    ) {
+        return photo_table_lookup(
+            log_table_index(tau_in, logtau), log_table_index(tau_out, logtau),
+            tau_out - tau_in, tables
+        );
+    }
 
 }  // namespace asora

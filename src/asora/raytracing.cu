@@ -34,7 +34,7 @@ namespace {
     __device__ void update_photo_rates(
         element_data &data_HI, size_t cd_index, size_t ph_index, double coldens_in,
         double nHI, double path, double strength, double vol,
-        const photo_tables &ion_tables, const linspace<double> &logtau
+        const photo_tables<> &ion_tables, const linspace<> &logtau
     ) {
         // Compute outgoing column density and add to array for subsequent
         // interpolations
@@ -44,11 +44,7 @@ namespace {
         auto tau_in = coldens_in * data_HI.cross_section;
         auto tau_out = coldens_out * data_HI.cross_section;
 
-#if defined(GREY_NOTABLES)
-        auto phion = asora::photo_rates_test_gpu(tau_in, tau_out);
-#else
-        auto phion = asora::photo_rates_gpu(tau_in, tau_out, ion_tables, logtau);
-#endif
+        auto phion = photo_table_lookup(tau_in, tau_out, ion_tables, logtau);
         // Rescale the photo-ionization rate by the flux strength normalized per volume
         // and per neutral density (part of the photon-conserving rate prescription) and
         // add it to the global array
@@ -61,7 +57,7 @@ namespace {
     __device__ void raytrace(
         int q, int s, int i0, int j0, int k0, double strength, element_data &data_HI,
         double dr, double R_max, const density_maps &densities, size_t m1,
-        const photo_tables &ion_tables, const linspace<double> &logtau
+        const photo_tables<> &ion_tables, const linspace<> &logtau
     ) {
         auto &&[di, dj, dk] = linthrd2cart(q, s);
 
@@ -170,12 +166,12 @@ namespace asora {
             phi_d, get_data_view<double>(buffer_tag::column_density_HI), sigma
         };
 
-        photo_tables ion_tables{
+        photo_tables<> ion_tables{
             get_data_view<double>(buffer_tag::photo_ion_thin_table),
             get_data_view<double>(buffer_tag::photo_ion_thick_table)
         };
 
-        linspace<double> logtau{minlogtau, dlogtau, static_cast<size_t>(num_tau)};
+        linspace<> logtau{minlogtau, dlogtau, static_cast<size_t>(num_tau)};
 
         // Loop over batches of sources
         for (size_t ns = 0; ns < num_src; ns += grid_size) {
@@ -201,7 +197,7 @@ namespace asora {
     __global__ void evolve0D_gpu(
         size_t m1, double dr, double R_max, int q_max, size_t ns_start, size_t num_src,
         int *src_pos, double *__restrict__ src_flux, element_data data_HI,
-        density_maps densities, photo_tables ion_tables, linspace<double> logtau
+        density_maps densities, photo_tables<> ion_tables, linspace<> logtau
     ) {
         /* The raytracing kernel proceeds as follows:
          * 1. Select the source based on the thread-block number

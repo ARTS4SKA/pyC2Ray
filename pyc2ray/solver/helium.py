@@ -53,11 +53,10 @@ class CoolingTables:
         }
 
         logT, _ = np.loadtxt(table_filenames["HI"], unpack=True)
-        logtemp = logT[0].item(), np.round(logT[1] - logT[0], 6).item(), len(logT)
+        logtemp = logT[0].item(), np.round(logT[1] - logT[0], 6).item(), len(logT) - 1
 
         def load_table(filename: PathType) -> np.ndarray:
-            data = np.pow(10, np.loadtxt(filename, unpack=True)[1])
-            return np.insert(data, 0, 0.0)
+            return np.pow(10, np.loadtxt(filename, unpack=True)[1])
 
         kwargs: dict[str, Any] = {x: load_table(f) for x, f in table_filenames.items()}
         kwargs["logtemp"] = logtemp
@@ -111,14 +110,12 @@ def cooling_rate(
     tstart, tstep, tnum = tables.logtemp
 
     # Find the position of the temperature in the table
-    # NOTE(TB): Using the same interpolating formula as in rates.cu, which is different from MB notes from 20.05.26;
-    # it instead reads: interp = min(tnum - 1, (ltemp - tstart) / tstep)
     ltemp = max(tstart, math.log10(temp))
-    interp = (ltemp - tstart) / tstep
+    interp = min(float(tnum), max(0.0, (ltemp - tstart) / tstep))
     p, r = math.modf(interp)
     q = 1 - p
-    i0 = max(0, min(tnum - 1, int(r))) + 1
-    i1 = i0 + 1
+    i0 = int(r)
+    i1 = min(tnum, i0 + 1)
 
     xHII = 1.0 - xHI
     xHeIII = 1.0 - xHeI - xHeII

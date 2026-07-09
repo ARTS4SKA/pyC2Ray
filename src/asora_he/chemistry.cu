@@ -29,18 +29,17 @@ namespace {
         const cuda::std::array<double, 3>& xh, const cooling_tables& rates,
         const linspace<double>& logtemp, double abu_h, double abu_he
     ) {
-        auto&& [i0, i1, p] = log_table_index(temp, logtemp);
-        auto q = 1 - p;
+        auto temp_pos = log_table_index(temp, logtemp);
 
         auto& [xHI, xHeI, xHeII] = xh;
         auto xHII = 1.0 - xHI;
         auto xHeIII = 1.0 - xHeI - xHeII;
 
-        auto rHI = xHI * (rates.HI[i0] * q + rates.HI[i1] * p);
-        auto rHII = xHII * (rates.HII[i0] * q + rates.HII[i1] * p);
-        auto rHeI = xHeI * (rates.HeI[i0] * q + rates.HeI[i1] * p);
-        auto rHeII = xHeII * (rates.HeII[i0] * q + rates.HeII[i1] * p);
-        auto rHeIII = xHeIII * (rates.HeIII[i0] * q + rates.HeIII[i1] * p);
+        auto rHI = xHI * temp_pos.interp(rates.HI);
+        auto rHII = xHII * temp_pos.interp(rates.HII);
+        auto rHeI = xHeI * temp_pos.interp(rates.HeI);
+        auto rHeII = xHeII * temp_pos.interp(rates.HeII);
+        auto rHeIII = xHeIII * temp_pos.interp(rates.HeIII);
 
         return ndens_atom * ndens_elec *
                ((rHI + rHII) * abu_h + (rHeI + rHeII + rHeIII) * abu_he);
