@@ -10,7 +10,7 @@ from mpi4py import MPI
 
 from pyc2ray.evolve import ChemistryParams, evolve3D
 from pyc2ray.load_extensions import libasora_He as libasora
-from pyc2ray.radiation.blackbody import BlackBodySource, BlackBodySource_Multifreq
+from pyc2ray.radiation.blackbody import BlackBodySource_Multifreq
 from pyc2ray.radiation.common import make_tau_table
 from pyc2ray.solver.helium import CoolingTables
 
@@ -71,15 +71,9 @@ def setup_evolve_mock(use_gpu: bool = False, rank: int = 0):
     minlogtau, maxlogtau, num_tau = -20.0, 4.0, 20000
     tau, dlogtau = make_tau_table(minlogtau, maxlogtau, num_tau)
     logtau = minlogtau, dlogtau, num_tau
-    freq_min, freq_max = (
-        (13.598 * u.eV / cst.h).to("Hz").value,
-        (54.416 * u.eV / cst.h).to("Hz").value,
-    )
-    sigma = 6.30e-18
-    radsource = BlackBodySource(1e5, False, freq_min, sigma)
-    photo_thin_table, photo_thick_table = radsource.make_photo_table(
-        tau, freq_min, freq_max, 1e48
-    )
+    sigma = 6.3e-18
+    photo_thin_table = np.zeros(num_tau, dtype=np.float64)
+    photo_thick_table = np.zeros(num_tau, dtype=np.float64)
 
     yield dict(
         Hz=Hz,
@@ -146,20 +140,10 @@ def setup_evolve_asora(
     tau, dlogtau = make_tau_table(minlog_tau, maxlog_tau, num_tau)
     logtau = minlog_tau, dlogtau, num_tau
 
-    # Min and max frequency of the integral
-    freq_min, freq_max = (
-        (13.598 * u.eV / cst.h).to("Hz").value,
-        (54.416 * u.eV / cst.h).to("Hz").value,
-    )
-
     # Calculate the table
-    radsource = BlackBodySource_Multifreq(1e5, False)
-    photo_thin_table, photo_thick_table = radsource.make_photo_table(
-        tau, freq_min, freq_max, 1e48
-    )
-    heat_thin_table, heat_thick_table = radsource.make_heat_table(
-        tau, freq_min, freq_max, 1e48
-    )
+    radsource = BlackBodySource_Multifreq(1e5)
+    photo_thin_table, photo_thick_table = radsource.make_photo_tables(tau)
+    heat_thin_table, heat_thick_table = radsource.make_heat_tables(tau)
 
     cool_tables = CoolingTables.from_dir()
 
