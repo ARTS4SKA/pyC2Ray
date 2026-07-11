@@ -11,6 +11,7 @@ pyc2ray_sources = [
     'constants.py',
     'domain/__init__.py',
     'domain/cost_model.py',
+    'domain/domain_decomposition_handler.py',
     'domain/grid.py',
     'domain/morton_grouping.py',
     'domain/regular_grid.py',
