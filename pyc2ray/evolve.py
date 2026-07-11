@@ -107,7 +107,7 @@ def _evolve3D_asora(
     src_flux
         Array containing the total ionizing flux of each source, normalized by S_star (1e48 by default).
     src_pos
-        Array containing the 3D grid position of each source, in Fortran indexing (from 1).
+        Array containing the 3D grid position of each source.
     max_subbox
         Maximum subbox to raytrace when using CPU cubic raytracing. Has no effect when use_gpu is true.
     subboxsize
