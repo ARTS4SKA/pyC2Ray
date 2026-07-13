@@ -35,6 +35,7 @@ def setup_do_all_sources(
     # Read cross section
     rt = RadiationTables()
     sigmas = rt.cross_sections
+    heat_factors = rt.factors
     nfreq = len(sigmas[0])
 
     assert photo_thin_table.shape == (nfreq, num_tau + 1)
@@ -53,14 +54,12 @@ def setup_do_all_sources(
     phion_HI = np.empty(size, dtype=np.float64)
     phion_HeI = np.empty(size, dtype=np.float64)
     phion_HeII = np.empty(size, dtype=np.float64)
-    pheat_HI = np.empty(size, dtype=np.float64)
-    pheat_HeI = np.empty(size, dtype=np.float64)
-    pheat_HeII = np.empty(size, dtype=np.float64)
+    pheat = np.empty(size, dtype=np.float64)
 
-    ndens = np.full(size, 1.87e-7, dtype=np.float64)
-    xHII = np.full(size, 1.2e-3, dtype=np.float64)
-    xHeII = np.full(size, 1e-3, dtype=np.float64)
-    xHeIII = np.full(size, 1e-3, dtype=np.float64)
+    ndens = np.full(size, 1.0e-6, dtype=np.float64)
+    xHII = np.full_like(ndens, 1.0e-3)
+    xHeII = np.full_like(ndens, 1.0e-3)
+    xHeIII = np.full_like(ndens, 1.0e-3)
 
     # Copy density field to GPU device
     assert libasora is not None
@@ -80,12 +79,13 @@ def setup_do_all_sources(
     libasora.source_data_to_device(src_pos, norm_flux)
 
     # Size of a cell
-    boxsize = 1.62022035 * u.Mpc
+    boxsize = 1.5 * u.Mpc
     dr = (boxsize / mesh_size).cgs.value
 
     yield (
         radius,
         *sigmas,
+        heat_factors,
         nfreq,
         dr,
         xHII,
@@ -94,9 +94,7 @@ def setup_do_all_sources(
         phion_HI,
         phion_HeI,
         phion_HeII,
-        pheat_HI,
-        pheat_HeI,
-        pheat_HeII,
+        pheat,
         num_sources,
         mesh_size,
         minlog_tau,
@@ -111,18 +109,14 @@ def test_do_all_sources(data_dir, init_device):
     with setup_do_all_sources(data_dir) as args:
         libasora.do_all_sources(*args)
 
-        phion_HI = args[9] * 1e48
-        phion_HeI = args[10] * 1e48
-        phion_HeII = args[11] * 1e48
-        pheat_HI = args[12] * 1e48
-        pheat_HeI = args[13] * 1e48
-        pheat_HeII = args[14] * 1e48
+        phion_HI = args[10] * 1e48
+        phion_HeI = args[11] * 1e48
+        phion_HeII = args[12] * 1e48
+        pheat = args[13] * 1e48
 
         expected_rates = np.load(data_dir / "photo_rates_with_helium.npz")
 
         assert np.allclose(phion_HI, expected_rates["ion_HI"])
         assert np.allclose(phion_HeI, expected_rates["ion_HeI"])
         assert np.allclose(phion_HeII, expected_rates["ion_HeII"])
-        assert np.allclose(pheat_HI, expected_rates["heat_HI"], equal_nan=True)
-        assert np.allclose(pheat_HeI, expected_rates["heat_HeI"], equal_nan=True)
-        assert np.allclose(pheat_HeII, expected_rates["heat_HeII"], equal_nan=True)
+        assert np.allclose(pheat, expected_rates["heat"])

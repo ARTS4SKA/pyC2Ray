@@ -123,7 +123,7 @@ class C2Ray:
         self.dr: float
         self.xh: tuple[FloatArray, FloatArray, FloatArray]
         self.phion: tuple[FloatArray, FloatArray, FloatArray]
-        self.pheat: tuple[FloatArray, FloatArray, FloatArray]
+        self.pheat: FloatArray
         self.temp_av: FloatArray
         self.clumping_factor: FloatArray
         self.tot_phots: float
@@ -373,13 +373,14 @@ This corresponds to %.3f grid cells.""",
         def save_npz(
             prefix: str, data: Sequence[FloatArray], labels: Sequence[str]
         ) -> None:
+            assert len(data) == len(labels)
             nonlocal z
             filename = self.results_basename / f"{prefix}_z{z:.3f}.npz"
             np.savez(filename, **dict(zip(labels, data)))  # type: ignore
 
         save_npz(C2Ray.XH_PREFIX, self.xh, ("HII", "HeII", "HeIII"))
         save_npz(C2Ray.PHION_PREFIX, self.phion, ("HI", "HeI", "HeII"))
-        save_npz(C2Ray.PHEAT_PREFIX, self.pheat, ("HI", "HeI", "HeII"))
+        save_npz(C2Ray.PHEAT_PREFIX, (self.pheat,), ("heat",))
         save_npz(C2Ray.TEMP_AV_PREFIX, (self.temp_av,), ("temp_av",))
 
     def _log_history(self) -> None:
@@ -854,11 +855,7 @@ This corresponds to %.3f grid cells.
             np.zeros_like(self.ndens),
             np.zeros_like(self.ndens),
         )
-        self.pheat = (
-            np.zeros_like(self.ndens),
-            np.zeros_like(self.ndens),
-            np.zeros_like(self.ndens),
-        )
+        self.pheat = np.zeros_like(self.ndens)
         self.temp_av = np.full_like(self.ndens, self.material_params.temp0)
 
     def _sources_init(self) -> None:
