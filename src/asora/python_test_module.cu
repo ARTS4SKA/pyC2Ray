@@ -155,7 +155,7 @@ PyObject *asora_test_log_table_index([[maybe_unused]] PyObject *self, PyObject *
     PyObject *logtau_arg;
 
     // Error checking
-    if (!PyArg_ParseTuple(args, "dO|d", &tau, &logtau_arg)) return nullptr;
+    if (!PyArg_ParseTuple(args, "dO|d", &tau, &logtau_arg, &base)) return nullptr;
 
     asora::linspace<double> logtau;
     if (!PyArg_ParseTuple(
@@ -166,7 +166,7 @@ PyObject *asora_test_log_table_index([[maybe_unused]] PyObject *self, PyObject *
     }
 
     try {
-        auto [i0, i1, residual] = asora::log_table_index(tau, logtau);
+        auto [i0, i1, residual] = asora::log_table_index(tau, logtau, base);
         return Py_BuildValue("iid", i0, i1, residual);
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());

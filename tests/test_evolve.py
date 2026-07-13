@@ -227,9 +227,5 @@ def test_evolve_asora(init_device, chem_params):
     assert phion[1].shape == shape
     assert phion[2].shape == shape
 
-    assert len(pheat) == 3
-    assert pheat[0].shape == shape
-    assert pheat[1].shape == shape
-    assert pheat[2].shape == shape
-
+    assert pheat.shape == shape
     assert temp.shape == shape

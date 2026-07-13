@@ -131,35 +131,34 @@ namespace asora {
      * allowing type-safe access to simulation data structures.
      */
     enum class buffer_tag {
-        number_density,          ///< Matter number density (0)
-        fraction_HII,            ///< Hydrogen II fraction (1)
-        fraction_HeII,           ///< Helium II fraction (2)
-        fraction_HeIII,          ///< Helium III fraction (3)
-        cross_section_HI,        ///< Ionization cross-section for HI (4)
-        cross_section_HeI,       ///< Ionization cross-section for HeI (5)
-        cross_section_HeII,      ///< Ionization cross-section for HeII (6)
-        photo_ionization_HI,     ///< Photoionization rates for HI (7)
-        photo_ionization_HeI,    ///< Photoionization rates for HeI (8)
-        photo_ionization_HeII,   ///< Photoionization rates for HeII (9)
-        photo_heating_HI,        ///< Photoheating rates for HI (10)
-        photo_heating_HeI,       ///< Photoheating rates for HeI (11)
-        photo_heating_HeII,      ///< Photoheating rates for HeII (12)
-        column_density_HI,       ///< Column density along rays for HI (13)
-        column_density_HeI,      ///< Column density along rays for HeI (14)
-        column_density_HeII,     ///< Column density along rays for HeII (15)
-        photo_ion_thin_table,    ///< Lookup table for optically thin photoion. (16)
-        photo_ion_thick_table,   ///< Lookup table for optically thick photoion. (17)
-        photo_heat_thin_table,   ///< Lookup table for optically thin photoheating (18)
-        photo_heat_thick_table,  ///< Lookup table for optically thick photoheating (19)
-        source_flux,             ///< Source flux array (20)
-        source_position,         ///< Source position array (21)
-        temperature,             ///< Gas temperature array (22)
-        clumping_factor,         ///< Clumping factor array (23)
-        cooling_HI_table,        ///< Lookup table for HI cooling rates. (24)
-        cooling_HII_table,       ///< Lookup table for HII cooling rates. (25)
-        cooling_HeI_table,       ///< Lookup table for HeI cooling rates (26)
-        cooling_HeII_table,      ///< Lookup table for HeII cooling rates (27)
-        cooling_HeIII_table,     ///< Lookup table for HeIII cooling rates (28)
+        number_density,          ///< Matter number density.
+        fraction_HII,            ///< Hydrogen II fraction.
+        fraction_HeII,           ///< Helium II fraction.
+        fraction_HeIII,          ///< Helium III fraction.
+        photo_ionization_HI,     ///< Photoionization rates for HI.
+        photo_ionization_HeI,    ///< Photoionization rates for HeI.
+        photo_ionization_HeII,   ///< Photoionization rates for HeII.
+        photo_heating,           ///< Photoheating rates.
+        column_density_HI,       ///< Column density for HI.
+        column_density_HeI,      ///< Column density for HeI.
+        column_density_HeII,     ///< Column density for HeII.
+        source_flux,             ///< Source flux array.
+        source_position,         ///< Source position array.
+        temperature,             ///< Gas temperature array.
+        clumping_factor,         ///< Clumping factor array.
+        photo_ion_thin_table,    ///< Lookup table for optically thin photoionization.
+        photo_ion_thick_table,   ///< Lookup table for optically thick photoionization.
+        photo_heat_thin_table,   ///< Lookup table for optically thin photoheating.
+        photo_heat_thick_table,  ///< Lookup table for optically thick photoheating.
+        cross_section_HI,        ///< Ionization cross-section for HI.
+        cross_section_HeI,       ///< Ionization cross-section for HeI.
+        cross_section_HeII,      ///< Ionization cross-section for HeII.
+        heating_form_factors,    ///< Lookup table for photoheating form factors.
+        cooling_HI_table,        ///< Lookup table for HI cooling rates.
+        cooling_HII_table,       ///< Lookup table for HII cooling rates.
+        cooling_HeI_table,       ///< Lookup table for HeI cooling rates.
+        cooling_HeII_table,      ///< Lookup table for HeII cooling rates.
+        cooling_HeIII_table,     ///< Lookup table for HeIII cooling rates.
     };
 
     /* @brief Singleton managing only one GPU device and its memory pool.
