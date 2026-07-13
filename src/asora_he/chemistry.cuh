@@ -120,7 +120,7 @@ namespace asora {
      * @param xh Current ionization fractions
      * @param xh_av Current average ionization fractions
      * @param phi_ion Photo-ionization rates
-     * @param phi_heat Photo-heating rates
+     * @param heating Photo-heating rate
      * @param clump Clumping factor
      * @param tables Cooling rate lookup tables
      * @param logtemp Log-scale temperature range for cooling rate interpolation
@@ -132,7 +132,7 @@ namespace asora {
 
     __device__ cuda::std::tuple<double3, double3, double2> do_chemistry(
         double dt, double Hz, double temp, double ndens, const double3& xh,
-        double3 xh_av, const double3& phi_ion, const double3& phi_heat, double clump,
+        double3 xh_av, const double3& phi_ion, double heating, double clump,
         const cooling_tables& rates, const linspace<double>& logscale,
         const parameters& p = {}, size_t max_iterations = 400
     );
@@ -175,17 +175,19 @@ namespace asora {
     __global__ void evolve0D_gpu(
         double dt, double Hz, const double* __restrict__ temp,
         double* __restrict__ temp_int, const double* __restrict__ ndens, double3ptr xh,
-        double3ptr xh_av, double3ptr xh_int, double3ptr phi_ion, double3ptr phi_heat,
-        const double* __restrict__ clump, cooling_tables tables,
-        linspace<double> logtemp, bool* conv_flag, parameters p, size_t size
+        double3ptr xh_av, double3ptr xh_int, double3ptr phi_ion,
+        const double* __restrict__ phi_heat, const double* __restrict__ clump,
+        cooling_tables tables, linspace<double> logtemp, bool* conv_flag, parameters p,
+        size_t size
     );
 
     size_t global_pass(
         double dt, double Hz, const double* __restrict__ temp,
         double* __restrict__ temp_int, double3ptr xh, double3ptr xh_av,
-        double3ptr xh_int, const double3ptr& phi_ion, const double3ptr& phi_heat,
-        const double* __restrict__ clump, const linspace<double>& logtemp,
-        const parameters& p, size_t n_cells, size_t block_size
+        double3ptr xh_int, const double3ptr& phi_ion,
+        const double* __restrict__ phi_heat, const double* __restrict__ clump,
+        const linspace<double>& logtemp, const parameters& p, size_t n_cells,
+        size_t block_size
     );
 
 }  // namespace asora
