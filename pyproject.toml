@@ -38,7 +38,7 @@ dependencies = [
 lint = [
   "pre-commit",
   "ruff",
-  "clang-format==21.1.2",
+  "clang-format==22.1.5",
   "mypy",
   "meson",
   "types-PyYAML",
