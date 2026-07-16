@@ -183,7 +183,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
 
         # Overwrite number of sources
         num_src = chunk.stop - chunk.start
-        src_pos = src_pos[:, chunk]
+        src_pos = src_pos[chunk, :]
         src_flux = src_flux[chunk]
 
         with allow_rank_logging(rank):
