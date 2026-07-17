@@ -45,7 +45,7 @@ def check_data_files(
     mesh_size = data["Grid"]["meshsize"]
     expected_size = 128 + mesh_size**3 * 8
 
-    checkpoints = Path(data["Output"]["inputs_basename"], "redshift_checkpoints.txt")
+    checkpoints = Path(data["InputOutput"]["inputs_dir"], "redshift_checkpoints.txt")
     zreds = expected_redshifts(checkpoints, z_start, z_end)
 
     errors: list[str] = []

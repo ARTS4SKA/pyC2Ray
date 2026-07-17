@@ -2,11 +2,16 @@ import datetime
 import re
 import time
 from pathlib import Path
+from typing import NoReturn
 
 import numpy as np
 from scipy import stats
 
 from pyc2ray.utils.logutils import PathType
+
+
+def assert_never() -> NoReturn:
+    raise AssertionError("Expected code to be unreachable")
 
 
 def get_extension_in_folder(output_dir: PathType, prefix: str) -> str | None:

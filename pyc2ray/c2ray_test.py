@@ -79,8 +79,8 @@ class C2Ray_Test(C2Ray):
         if self.rank != 0:
             return
 
-        np.save(f"{self.results_basename}/xfrac_z{z:.3f}.npy", self.xh)
-        np.save(f"{self.results_basename}/IonRates_z{z:.3f}.npy", self.phi_ion)
+        np.save(f"{self.results_dir}/xfrac_z{z:.3f}.npy", self.xh)
+        np.save(f"{self.results_dir}/IonRates_z{z:.3f}.npy", self.phi_ion)
 
     def write_output_numbered(self, n: int) -> None:
         """Write ionization fraction & ionization rates as pickle files with number rather than redshift
@@ -94,9 +94,9 @@ class C2Ray_Test(C2Ray):
             return
 
         suffix = f"_{n:n}.pkl"
-        with open(self.results_basename / f"xfrac{suffix}", "wb") as f:
+        with open(self.results_dir / f"xfrac{suffix}", "wb") as f:
             pkl.dump(self.xh, f)
-        with open(self.results_basename / f"IonRates{suffix}", "wb") as f:
+        with open(self.results_dir / f"IonRates{suffix}", "wb") as f:
             pkl.dump(self.phi_ion, f)
 
     def set_constant_average_density(self, ndens: float, z: float) -> None:
@@ -148,7 +148,3 @@ class C2Ray_Test(C2Ray):
     def _redshift_init(self) -> None:
         """Initialize time and redshift counter"""
         self.zred = self.zred_0
-
-    @property
-    def avg_dens(self) -> float:
-        return self.material_params.avg_dens
