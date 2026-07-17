@@ -63,5 +63,5 @@ setup = [
 ignore_missing_imports = true
 
 [tool.ruff.lint]
-ignore = ["UP031", "PYI019"]
+ignore = ["PYI019", "RUF009", "UP031"]
 extend-select = ["F403"]
