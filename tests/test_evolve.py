@@ -169,11 +169,13 @@ def test_evolve3D_yes_gpu_domain_decomposition_root_rank(
 ):
     mock_asora = mock_asora_domain_decomposition
 
-    domain_decomposition_params = DomainDecompositionParameters(
-        enabled=True,
-        grouping_algorithm="morton",
-        max_num_sources_per_group=4,
-        morton_bits=10,
+    domain_decomposition_params = DomainDecompositionParameters.from_dict(
+        {
+            "enabled": True,
+            "grouping_algorithm": "morton",
+            "max_num_sources_per_group": 4,
+            "morton_bits": 10,
+        }
     )
 
     xh_int, phi_ion = call_evolve3D(
