@@ -6,11 +6,11 @@ import numpy as np
 import tools21cm as t2c
 
 import pyc2ray.constants as c
-
-from .c2ray_base import C2Ray
-from .utils import get_source_redshifts
-from .utils.other_utils import find_bins, get_redshifts_from_output
-from .utils.sourceutils import FloatArray, IntArray, PathType
+from pyc2ray.c2ray_base import C2Ray
+from pyc2ray.parameters import ConstantMfpParameters, FgammaSourceParameters
+from pyc2ray.utils import get_source_redshifts
+from pyc2ray.utils.other_utils import find_bins, get_redshifts_from_output
+from pyc2ray.utils.sourceutils import FloatArray, IntArray, PathType
 
 __all__ = ["C2Ray_244Test"]
 
@@ -156,8 +156,8 @@ class C2Ray_244Test(C2Ray):
         # self.dr = self.cosmology.scale_factor(self.zred_0) * self.dr_c
         self.dr = self.dr_c / (1 + self.zred_0)
 
-        H0 = 100 * self.cosmology_params.h
-        Om0 = self.cosmology_params.Omega0
+        H0 = 100 * self.parameters.cosmology.h
+        Om0 = self.parameters.cosmology.Omega0
         # H0 *= 1e5/c.Mpc
 
         # self.age_0 = 2.*(1.+self.zred_0)**(-1.5)/(3.*H0*np.sqrt(Om0))
@@ -383,7 +383,7 @@ class C2Ray_244Test(C2Ray):
                 order="F",
             )
             # TODO: implement heating
-            self.temp = np.full(self.shape, self.material_params.temp0, order="F")
+            self.temp = np.full(self.shape, self.parameters.material.temp0, order="F")
             self.phi_ion = t2c.read_cbin(
                 filename="%sIonRates_%.3f.dat" % (self.results_basename, self.zred),
                 bits=32,
@@ -394,18 +394,20 @@ class C2Ray_244Test(C2Ray):
 
     @property
     def fgamma_hm(self) -> float:
-        assert self.sources_params.fgamma_hm is not None
-        return self.sources_params.fgamma_hm
+        assert isinstance(self.parameters.sources.fstar, FgammaSourceParameters)
+        assert self.parameters.sources.fstar.fgamma_hm is not None
+        return self.parameters.sources.fstar.fgamma_hm
 
     @property
     def fgamma_lm(self) -> float:
-        assert self.sources_params.fgamma_lm is not None
-        return self.sources_params.fgamma_lm
+        assert isinstance(self.parameters.sources.fstar, FgammaSourceParameters)
+        assert self.parameters.sources.fstar.fgamma_lm is not None
+        return self.parameters.sources.fstar.fgamma_lm
 
     @property
     def ts(self) -> float:
-        assert self.sources_params.ts is not None
-        return self.sources_params.ts * c.year2s * 1e6
+        assert self.parameters.sources.ts is not None
+        return self.parameters.sources.ts * c.year2s * 1e6
 
     def _sources_init(self) -> None:
         """Initialize settings to read source files"""
@@ -417,7 +419,7 @@ class C2Ray_244Test(C2Ray):
     def _grid_init(self) -> None:
         """Set up grid properties"""
         # Comoving quantities
-        self.boxsize_c = self.boxsize * c.Mpc / self.cosmology_params.h
+        self.boxsize_c = self.boxsize * c.Mpc / self.parameters.cosmology.h
         self.dr_c = self.boxsize_c / self.N
 
         logger.info(f"Welcome! Mesh size is N = {self.N:n}.")
@@ -428,13 +430,13 @@ class C2Ray_244Test(C2Ray):
         self.dr = self.dr_c
 
         # Set R_max (LLS 3) in cell units
-        assert self.sinks_params.R_max_cMpc is not None
+        assert isinstance(self.parameters.sinks.mfp, ConstantMfpParameters)
+        R_max_cMpc = self.parameters.sinks.mfp.R_max_cMpc
         self.R_max_LLS = (
-            self.sinks_params.R_max_cMpc
+            R_max_cMpc
             * self.N
-            * self.cosmology_params.h
-            / self.grid_params.boxsize
+            * self.parameters.cosmology.h
+            / self.parameters.grid.boxsize
         )
         logger.info(f"""Maximum comoving distance for photons from source (type 3 LLS): 
-{self.sinks_params.R_max_cMpc: .3e} comoving Mpc
-This corresponds to {self.R_max_LLS: .3f} grid cells.""")
+{R_max_cMpc: .3e} comoving Mpc, corresponds to {self.R_max_LLS: .3f} grid cells.""")
