@@ -36,11 +36,11 @@ def main(
 
     # Copy parameter file into the output directory
     if sim.rank == 0:
-        shutil.copy(parameters, sim.results_basename)
+        shutil.copy(parameters, sim.results_dir)
 
     # Get list of redshift slices to simulate
     zred_idx, zred_array = np.loadtxt(
-        sim.inputs_basename / "redshift_checkpoints.txt", unpack=True
+        sim.inputs_dir / "redshift_checkpoints.txt", unpack=True
     )
 
     start_idx = 0
