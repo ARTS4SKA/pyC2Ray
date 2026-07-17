@@ -7,10 +7,10 @@ import tools21cm as t2c
 from astropy import units as u
 
 import pyc2ray.constants as c
-
-from .c2ray_base import C2Ray
-from .utils.other_utils import find_bins, get_redshifts_from_output
-from .utils.sourceutils import FloatArray, IntArray, PathType
+from pyc2ray.c2ray_base import C2Ray
+from pyc2ray.parameters import FgammaSourceParameters
+from pyc2ray.utils.other_utils import find_bins, get_redshifts_from_output
+from pyc2ray.utils.sourceutils import FloatArray, IntArray, PathType
 
 __all__ = ["C2Ray_CubeP3M"]
 
@@ -247,7 +247,7 @@ class C2Ray_CubeP3M(C2Ray):
                 order="F",
             )
             # TODO: implement heating
-            self.temp = np.full(self.shape, self.material_params.temp0, order="F")
+            self.temp = np.full(self.shape, self.parameters.material.temp0, order="F")
             self.phi_ion = t2c.read_cbin(
                 filename="%sIonRates_%.3f.dat" % (self.results_basename, self.zred),
                 bits=32,
@@ -258,14 +258,17 @@ class C2Ray_CubeP3M(C2Ray):
 
     @property
     def fgamma_hm(self) -> float:
-        assert self.sources_params.fgamma_hm is not None
-        return self.sources_params.fgamma_hm
+        assert isinstance(self.parameters.sources.fstar, FgammaSourceParameters)
+        assert self.parameters.sources.fstar.fgamma_hm is not None
+        return self.parameters.sources.fstar.fgamma_hm
 
     @property
     def fgamma_lm(self) -> float:
-        assert self.sources_params.fgamma_lm is not None
-        return self.sources_params.fgamma_lm
+        assert isinstance(self.parameters.sources.fstar, FgammaSourceParameters)
+        assert self.parameters.sources.fstar.fgamma_lm is not None
+        return self.parameters.sources.fstar.fgamma_lm
 
     @property
     def ts(self) -> float:
-        return (self.sources_params.ts * u.Myr).cgs.value
+        assert self.parameters.sources.ts is not None
+        return (self.parameters.sources.ts * u.Myr).cgs.value
