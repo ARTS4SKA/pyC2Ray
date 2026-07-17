@@ -122,6 +122,8 @@ class RaytracingParameters(YmlParameters):
     convergence_fraction: float = 1.0e-4
 
 
+# TODO: morton_bits is a morton specific parameter, should be moved to a morton grouping
+# parameter class
 @dataclass
 class DomainDecompositionParameters(YmlParameters):
     """Parameters for domain decomposition and source grouping."""

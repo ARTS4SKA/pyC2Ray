@@ -82,6 +82,11 @@ class RegularGrid(Grid):
         self, global_grid_size: int
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return wrapped global index vectors for each local-grid axis."""
+        if self.num_cells > global_grid_size:
+            raise ValueError(
+                "Periodic local grids larger than the global grid would map "
+                "multiple local cells to the same global cell, which is not supported."
+            )
         gijk = (
             np.arange(self.num_cells, dtype=np.int64) + self.offset[:, None]
         ) % global_grid_size

@@ -12,7 +12,13 @@ from astropy.cosmology import FlatLambdaCDM, z_at_value
 from mpi4py import MPI
 
 import pyc2ray.constants as c
-from pyc2ray.asora_core import device_close, device_init, photo_table_to_device
+from pyc2ray.asora_core import (
+    device_close,
+    device_init,
+    is_periodic_mode_active,
+    photo_table_to_device,
+)
+from pyc2ray.domain.domain_decomposition_handler import DomainDecompositionHandler
 from pyc2ray.evolve import ChemistryParams, evolve3D
 from pyc2ray.parameters import (
     AbundancesParameters,
@@ -172,11 +178,22 @@ class C2Ray:
                     "Domain decomposition is only implemented for GPU raytracing. Disabling domain decomposition."
                 )
                 self.domain_decomposition_params.enabled = False
-            elif not self.mpi:
+            if not self.mpi:
                 logger.warning(
                     "Domain decomposition is only implemented for MPI runs. Disabling domain decomposition."
                 )
                 self.domain_decomposition_params.enabled = False
+            if not is_periodic_mode_active():
+                raise NotImplementedError(
+                    "Domain decomposition is only supported with a periodic domain "
+                    "(libasora compiled with PERIODIC)."
+                )
+
+        # Persistent domain decomposition handler holding the subdomains assigned to this
+        # rank. It is created on the first evolve3D call and reused across timesteps;
+        # the handler itself decides when to rebuild its decomposition (see
+        # DomainDecompositionHandler.update_decomposition). None until the first call.
+        self._decomposition_handler: DomainDecompositionHandler | None = None
 
         # Initialize output and logger. Waits for all ranks to reach this point.
         self._output_init()
@@ -265,13 +282,12 @@ class C2Ray:
         dt : Timestep in seconds (typically generated using set_timestep method)
         src_flux : 1D array of shape (numsrc, ) containing the total ionizing flux of each source,
                    normalized by S_star (1e48 by default)
-        src_pos : 2D array of shape (3, numsrc) containing the 3D grid position of each source,
-                  in Fortran indexing (from 1)
+        src_pos : 2D array of shape (3, numsrc) containing the 3D grid position of each source
         """
         if src_pos.shape[0] != 3:
             src_pos = src_pos.T
         if len(src_flux) != src_pos.shape[1]:
-            ValueError(
+            raise ValueError(
                 "ASORA requires the shape of src_pos to be (3, num_src) and the shape of src_num to be (num_src, )."
             )
 
@@ -280,7 +296,27 @@ class C2Ray:
         # then call the evolve designed for the MPI source splitting.
         # Otherwise all ranks are calling (independently) the evolve
         # with no source splitting until the condition above is meet.
-        use_mpi = NumSrc >= self.nprocs and self.mpi
+        if not self.domain_decomposition_params.enabled:
+            use_mpi = NumSrc >= self.nprocs and self.mpi
+        else:
+            use_mpi = self.mpi
+
+        # Update the persistent domain decomposition handler.
+        if self.domain_decomposition_params.enabled:
+            if self._decomposition_handler is None:
+                self._decomposition_handler = DomainDecompositionHandler(MPI.COMM_WORLD)
+            self._decomposition_handler.update_decomposition(
+                cell_size=self.dr,
+                src_pos=src_pos.T,
+                src_flux=src_flux,
+                N=self.N,
+                R_max_LLS=self.R_max_LLS,
+                src_batch_size=self.raytracing_params.source_batch_size,
+                num_tau=self.photo_thin_table.shape[0],
+                is_domain_periodic=bool(is_periodic_mode_active()),
+                domain_decomposition_params=self.domain_decomposition_params,
+            )
+
         self.xh, self.phi_ion = evolve3D(
             dt=dt,
             dr=self.dr,
@@ -288,6 +324,7 @@ class C2Ray:
             src_pos=src_pos,
             src_batch_size=self.raytracing_params.source_batch_size,
             use_gpu=self.gpu,
+            decomposition=self._decomposition_handler,
             max_subbox=self.max_subbox,
             subboxsize=self.subboxsize,
             loss_fraction=self.loss_fraction,

@@ -215,6 +215,9 @@ namespace asora {
          * @param[in] tag Buffer identifier
          * @param[in] src Host memory source pointer
          * @param[in] items Number of elements to copy
+         * @param[in] force_matching_size If true, enforce exact size match; when false,
+         * reuse existing buffers that are large enough and only reallocate when they
+         * are too small.
          */
         template <typename T>
         static void ensure_transfer(

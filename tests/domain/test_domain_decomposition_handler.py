@@ -117,7 +117,7 @@ def test_update_decomposition_rebuilds_if_inputs_change() -> None:
             domain_decomposition_params=params,
         )
 
-    src_pos = np.array([[4, 6], [4, 6], [4, 6]], dtype=np.int32)
+    src_pos = np.array([[4, 4, 4], [6, 6, 6]], dtype=np.int32)
     src_flux = np.array([1.0, 2.0], dtype=np.float64)
 
     # First call builds the decomposition.
@@ -129,7 +129,7 @@ def test_update_decomposition_rebuilds_if_inputs_change() -> None:
     assert handler.subdomains is built
 
     # Changed source configuration triggers a rebuild (subdomains reassigned).
-    moved_pos = np.array([[4, 10], [4, 10], [4, 10]], dtype=np.int32)
+    moved_pos = np.array([[4, 4, 4], [10, 10, 10]], dtype=np.int32)
     update(moved_pos, src_flux)
     assert handler.subdomains is not built
     rebuilt = handler.subdomains
