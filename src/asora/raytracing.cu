@@ -129,8 +129,8 @@ namespace asora {
         const auto &source_position = device::resident<tag::source_position>();
         const auto &fraction_HII_avg = device::resident<tag::fraction_HII_avg>();
         check_array(number_density, n_cells, "number density");
-        check_array(photo_ion_thin, num_tau + 1, "photo ionization thin table");
-        check_array(photo_ion_thick, num_tau + 1, "photo ionization thick table");
+        check_array(photo_ion_thin, num_tau, "photo ionization thin table");
+        check_array(photo_ion_thick, num_tau, "photo ionization thick table");
         check_array(source_flux, num_src, "source flux");
         check_array(source_position, 3 * num_src, "source position");
         check_array(fraction_HII_avg, n_cells, "average ionized fraction");

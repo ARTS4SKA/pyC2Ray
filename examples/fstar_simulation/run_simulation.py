@@ -34,7 +34,7 @@ def main(
 
     # Copy parameter file into the output directory
     if sim.rank == 0:
-        shutil.copy(parameters, sim.results_basename)
+        shutil.copy(parameters, sim.results_dir)
 
     # Measure time
     timer = pc2r.Timer()

@@ -27,7 +27,7 @@ setup:
     - MPICC=mpicc python -m pip install --no-binary=mpi4py --no-cache-dir mpi4py .
     - cp $PYC2RAY_REF/parameters.yml $PYC2RAY_CI/parameters.yml
     - |
-      sed -i "s|results_basename: .*|results_basename: $PYC2RAY_CI/results|g" $PYC2RAY_CI/parameters.yml
+      sed -i "s|results_dir: .*|results_dir: $PYC2RAY_CI/results|g" $PYC2RAY_CI/parameters.yml
     - deactivate
 
 run fstar:

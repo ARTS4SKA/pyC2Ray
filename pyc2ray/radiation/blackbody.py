@@ -11,6 +11,7 @@ import scipy
 from scipy.integrate import quad, quad_vec
 
 import pyc2ray.constants as c
+from pyc2ray.parameters import PathType
 
 # For detailed comparisons with C2Ray, we use the same exact value for the constants
 # This can be changed to the astropy values once consistency between
@@ -134,7 +135,12 @@ class YggdrasilModel(BlackBodyBase):
     """Use Yggdrasil model for SED"""
 
     def __init__(
-        self, tabname: str, grey: bool, freq0: float, pl_index: float, S_star_ref: float
+        self,
+        tabname: PathType,
+        grey: bool,
+        freq0: float,
+        pl_index: float,
+        S_star_ref: float,
     ) -> None:
         self.grey = grey
         self.freq0 = freq0

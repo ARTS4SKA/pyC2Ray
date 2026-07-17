@@ -76,7 +76,7 @@ def setup_do_all_sources(
         mesh_size,
         minlog_tau,
         dlogtau,
-        num_tau,
+        num_tau + 1,
         batch_size,
         block_size,
     )

@@ -2,9 +2,21 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import yaml
 
 from pyc2ray.c2ray_base import C2Ray
+from pyc2ray.parameters import (
+    ChemistryParameters,
+    CosmologyParameters,
+    DomainDecompositionParameters,
+    GridParameters,
+    InputOutputParameters,
+    MaterialParameters,
+    PhotoParameters,
+    RaytracingParameters,
+    SimulationParameters,
+    SinksParameters,
+    SourcesParameters,
+)
 
 MESHSIZE = 8
 
@@ -18,12 +30,9 @@ class C2RayResume(C2Ray):
     def _radiation_init(self) -> None:
         pass
 
-    def _sinks_init(self) -> None:
-        pass
-
 
 @pytest.fixture
-def make_paramfile(data_dir: Path, tmp_path: Path, zred_array: np.ndarray):
+def make_paramfile(tmp_path: Path, zred_array: np.ndarray):
     """Write a parameter file with results/inputs in tmp_path and the given resume flag"""
     inputs_dir = tmp_path / "inputs"
     inputs_dir.mkdir()
@@ -33,14 +42,29 @@ def make_paramfile(data_dir: Path, tmp_path: Path, zred_array: np.ndarray):
     )
 
     def _make(results_dir: Path, resume: bool) -> Path:
-        params = yaml.safe_load((data_dir / "parameters.yml").read_text())
-        params["Output"]["results_basename"] = str(results_dir)
-        params["Output"]["inputs_basename"] = str(inputs_dir)
-        params["Grid"]["meshsize"] = MESHSIZE
-        params["Grid"]["resume"] = int(resume)
-        params["DomainDecomposition"]["enabled"] = 0
         paramfile = tmp_path / "parameters.yml"
-        paramfile.write_text(yaml.safe_dump(params))
+        SimulationParameters(
+            InputOutputParameters.from_dict(
+                {"results_dir": results_dir, "inputs_dir": inputs_dir}
+            ),
+            GridParameters.from_dict(
+                {
+                    "boxsize": 100.0,
+                    "meshsize": MESHSIZE,
+                    "gpu": True,
+                    "mpi": False,
+                    "resume": resume,
+                }
+            ),
+            RaytracingParameters.from_dict({"source_batch_size": 10}),
+            DomainDecompositionParameters.from_dict(),
+            MaterialParameters.from_dict(),
+            ChemistryParameters.from_dict(),
+            CosmologyParameters.from_dict(),
+            PhotoParameters.from_dict(),
+            SinksParameters.from_dict(),
+            SourcesParameters.from_dict(),
+        ).to_yaml_file(paramfile)
         return paramfile
 
     return _make
@@ -68,7 +92,7 @@ def test_no_resume(make_paramfile, tmp_path: Path, zred_array: np.ndarray) -> No
     assert sim.zred == zred_array[0]
     assert np.array_equal(sim.idx_zred, np.arange(len(zred_array)))
     assert np.array_equal(sim.zred_array, zred_array)
-    assert np.all(sim.xh == sim.material_params.xh0)
+    assert np.all(sim.xh == sim.parameters.material.xHII)
     assert np.all(sim.phi_ion == 0)
 
 
@@ -99,7 +123,7 @@ def test_resume_empty_output_starts_fresh(
     assert not sim.resume
     assert sim.zred == zred_array[0]
     assert np.array_equal(sim.zred_array, zred_array)
-    assert np.all(sim.xh == sim.material_params.xh0)
+    assert np.all(sim.xh == sim.parameters.material.xHII)
 
 
 def test_dilution_factor(

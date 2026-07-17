@@ -82,7 +82,7 @@ class C2Ray_Thesan(C2Ray):
 
         # read halo list
         srcpos_mpc, srcmass_msun = self.read_haloes(
-            self.sources_basename / file, self.boxsize
+            self.sources_dir / file, self.boxsize
         )
 
         # select table based on the closest redshift
@@ -231,7 +231,7 @@ class C2Ray_Thesan(C2Ray):
         z : redshift
 
         """
-        file = self.density_basename / fbase
+        file = self.density_dir / fbase
         rdr = t2c.Pkdgrav3data(self.boxsize, self.N, Omega_m=self.cosmology.Om0)
         self.ndens = (
             self.cosmology.critical_density0.cgs.value
