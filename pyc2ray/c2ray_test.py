@@ -72,6 +72,11 @@ class C2Ray_Test(C2Ray):
         z : float
             Redshift (used to name the file)
         """
+        # All ranks hold the same broadcast fields, so only one may write the file:
+        # concurrent writes to the same path fail on the parallel filesystem.
+        if self.rank != 0:
+            return
+
         np.save(f"{self.results_basename}/xfrac_{z:.3f}.npy", self.xh)
         np.save(f"{self.results_basename}/IonRates_{z:.3f}.npy", self.phi_ion)
         # suffix = f"_{z:.3f}.pkl"
@@ -88,6 +93,9 @@ class C2Ray_Test(C2Ray):
         n : int
             Number of the file
         """
+        if self.rank != 0:
+            return
+
         suffix = f"_{n:n}.pkl"
         with open(self.results_basename / f"xfrac{suffix}", "wb") as f:
             pkl.dump(self.xh, f)
