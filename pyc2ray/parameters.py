@@ -3,87 +3,277 @@ from __future__ import annotations
 import logging
 import os
 import re
-from dataclasses import dataclass, fields
-from typing import Any, ClassVar, TypeVar
+from dataclasses import KW_ONLY, MISSING, InitVar, dataclass, field, fields
+from pathlib import Path
+from typing import (
+    Any,
+    ClassVar,
+    Generic,
+    Literal,
+    TypeVar,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 import yaml
 
 import pyc2ray.constants as c
 
+
+class _Loader(yaml.SafeLoader):
+    """A `SafeLoader` with the scientific-notation float fix applied.
+
+    Subclassing rather than patching `yaml.SafeLoader` directly keeps the fix
+    scoped to this module's own YAML loading, instead of mutating a shared
+    class from a third-party library for every other user of `yaml` in the
+    same process.
+    """
+
+    YML_REGEX = re.compile(
+        """^(?:
+    [-+]?(?:[0-9][0-9_]*)\\.[0-9_]*(?:[eE][-+]?[0-9]+)?
+    |[-+]?(?:[0-9][0-9_]*)(?:[eE][-+]?[0-9]+)
+    |\\.[0-9_]+(?:[eE][-+][0-9]+)?
+    |[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\\.[0-9_]*
+    |[-+]?\\.(?:inf|Inf|INF)
+    |\\.(?:nan|NaN|NAN))$""",
+        re.VERBOSE,
+    )
+
+
+def yaml_format(key: str, value: Any) -> str:
+    """Wrapper around `yaml.safe_dump` that uses `_Loader` to read floats in scientific notation."""
+    if isinstance(value, Path):
+        value = str(value)
+    return yaml.safe_dump(
+        {key: value}, default_flow_style=False, sort_keys=False
+    ).strip()
+
+
 # Configure YML to read scientific notation as floats rather than strings
-YML_REGEX = re.compile(
-    """^(?:
-[-+]?(?:[0-9][0-9_]*)\\.[0-9_]*(?:[eE][-+]?[0-9]+)?
-|[-+]?(?:[0-9][0-9_]*)(?:[eE][-+]?[0-9]+)
-|\\.[0-9_]+(?:[eE][-+][0-9]+)?
-|[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\\.[0-9_]*
-|[-+]?\\.(?:inf|Inf|INF)
-|\\.(?:nan|NaN|NAN))$""",
-    re.VERBOSE,
-)
-yaml.SafeLoader.add_implicit_resolver(
-    "tag:yaml.org,2002:float", YML_REGEX, list("-+0123456789.")
+_Loader.add_implicit_resolver(
+    "tag:yaml.org,2002:float", _Loader.YML_REGEX, list("-+0123456789.")
 )
 
 PathType = str | os.PathLike
-OptFloat = float | None
-OptStr = str | None
 ParametersType = TypeVar("ParametersType", bound="YmlParameters")
 
 logger = logging.getLogger(__name__)
 
 
+def _field(doc: str, default: Any = MISSING) -> Any:
+    """Shorthand for a dataclass field carrying a human-readable description.
+    If default is not provided, the field is required and must be specified in the input YAML file.
+
+    The description is used both as a source-level docstring substitute and,
+    via `YmlParameters.to_yaml_block`, as the comment written above the
+    corresponding key when generating a parameters YAML file.
+    """
+    # NOTE: replace metadata with doc from python 3.14
+    return field(default=default, metadata={"doc": doc})
+
+
+# Sentinel object to detect whether a YmlParameters subclass was constructed
+# directly (not allowed) or via a factory method (allowed).
+_factory = object()
+
+
 @dataclass
-class YmlParameters:
+class YmlParameters(Generic[ParametersType]):
     SECTION: ClassVar[str]
+    _: KW_ONLY
+    _build: InitVar[object] = field(default=None, compare=False, repr=False)
+
+    def _validate_literals(self) -> None:
+        """Raise ValueError if any Literal-typed field's value isn't one of its choices."""
+        hints = get_type_hints(type(self))
+        for f in fields(self):
+            type_hint = hints[f.name]
+            origin = get_origin(type_hint)
+            if origin is not Literal:
+                continue
+            args = get_args(type_hint)
+            value = getattr(self, f.name)
+            if value not in args:
+                raise ValueError(
+                    f"Parameter {f.name} = {value!r} is not valid for {type(self).__name__}. "
+                    f"Choose from {args!r}."
+                )
+
+    def __post_init__(self, _build: object) -> None:
+        if _build is not _factory:
+            raise TypeError(
+                f"{type(self).__name__} must be created using factory methods, "
+                "from_dict or from_file, not direct instantiation"
+            )
+        self._validate_literals()
 
     @classmethod
-    def load_yaml(cls, file: PathType) -> dict[str, Any]:
+    def from_dict(
+        cls: type[ParametersType], yml: dict[str, Any], warn: bool = False
+    ) -> ParametersType:
+        """Instantiate from a dict, optionally warning about missing keys.
+
+        Parameters
+        ----------
+        yml : Dictionary containing the parameters for this section.
+        warn : Whether to warn about using default values in the input dictionary.
+        """
+
+        keys = {f.name for f in fields(cls)}
+        obj = cls(**{k: v for k, v in yml.items() if k in keys}, _build=_factory)
+        if warn:
+            missing_keys = keys - yml.keys()
+            for key in missing_keys:
+                logger.warning(
+                    f"Using default value for parameter '{cls.SECTION}/{key}' = {getattr(obj, key)}"
+                )
+        return obj
+
+    @classmethod
+    def load_yaml(cls: type[ParametersType], file: PathType) -> dict[str, Any]:
         """Read in YAML parameter file"""
         with open(file, "r") as f:
-            return yaml.load(f, yaml.SafeLoader)
+            return yaml.load(f, _Loader)
 
     @classmethod
-    def from_yml(cls: type[ParametersType], yml: dict[str, Any]) -> ParametersType:
-        if cls.SECTION not in yml:
-            logger.warning(
-                f"Key '{cls.SECTION}' not found in parameter configuration. Using default values."
+    def from_file(cls: type[ParametersType], file: PathType) -> ParametersType:
+        """Read in YAML parameter file, optionally extracting a nested block of parameters."""
+        yml = cls.load_yaml(file)
+        return cls.from_dict(yml.get(cls.SECTION, {}))
+
+    def to_yaml_block(self) -> str:
+        """Render this section's current values as a commented YAML block."""
+        lines: list[str] = []
+
+        # Add the parameter class docstring as a header comment
+        if self.__doc__ is not None:
+            desc = self.__doc__.splitlines()[0].strip()
+            sep = "# " + "-" * len(desc)
+            lines.extend((sep, f"# {desc}", sep))
+
+        # Add the section name
+        lines.append(f"{self.SECTION}:")
+        for f in fields(self):
+            # Call to_yaml_block for nested YmlParameters
+            attr = getattr(self, f.name)
+            if isinstance(attr, YmlParameters):
+                lines.append(attr.to_yaml_block())
+                continue
+
+            # Add the field's value with docstring as a comment
+            if doc := f.metadata.get("doc"):
+                lines.append(f"  # {doc}")
+            lines.append("  " + yaml_format(f.name, attr))
+        return "\n".join(lines)
+
+
+RegistryModel = TypeVar("RegistryModel", bound="_ModelRegistry")
+
+
+class _ModelRegistry(YmlParameters, Generic[RegistryModel]):
+    """Base for a group of mutually-exclusive parameter sets selected by a
+    string discriminator (e.g. `fstar_model`, `mfp_model`).
+
+    Each subclass of this class should define its registry dictionary and
+    a `KEY` class variable that specifies the name of the parameter set in
+    the input parameter dictionary.
+
+    Each concrete parameter "model" subclass sets instead the `MODEL`  class variable
+    and is automatically registered to the parameter category's register via
+    `__init_subclass__`.
+    """
+
+    _registry: ClassVar[dict[str, type[RegistryModel]]]
+    MODEL: ClassVar[str]
+    KEY: ClassVar[str]
+
+    def __init_subclass__(cls: type[RegistryModel], **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        if hasattr(cls, "MODEL"):
+            cls._registry[cls.MODEL] = cls
+
+    @classmethod
+    def from_model(
+        cls, yml: dict[str, Any], default: str, warn: bool = False
+    ) -> RegistryModel:
+        """Instantiate whichever registered subclass matches `model`.
+
+        Reads only the keys relevant to that subclass out of `yml`.
+
+        Parameters
+        ----------
+        yml : Dictionary containing the parameters for this section.
+        default : Default model name to use if `model` is not present in `yml`.
+        warn : Whether to warn about missing keys in the selected model's parameters.
+        """
+        try:
+            model = yml.get(cls.KEY, default)
+            subclass = cls._registry[model]
+        except KeyError:
+            raise ValueError(
+                f"{model!r} is not implemented for {cls.__name__}. "
+                f"Choose from {sorted(cls._registry)!r}."
             )
-            return cls()
-        return cls.from_dict(yml[cls.SECTION])
+        return subclass.from_dict(yml, warn=warn)
 
-    @classmethod
-    def from_dict(cls: type[ParametersType], yml: dict[str, Any]) -> ParametersType:
-        keys = {f.name for f in fields(cls)}
-        return cls(**{k: v for k, v in yml.items() if k in keys})
+    def to_yaml_block(self) -> str:
+        """Render this model's current values as a commented YAML block."""
+        lines: list[str] = []
 
-    @classmethod
-    def from_file(
-        cls: type[ParametersType], file: PathType, block: OptStr = None
-    ) -> ParametersType:
-        """Read in YAML parameter file"""
-        ld = cls.load_yaml(file)
-        if block is not None:
-            ld = ld.get(block, {})
-        return cls.from_dict(ld)
+        # Print model selector key
+        if doc := type(self).__base__.__doc__:
+            lines.append(f"  # {doc}")
+        lines.append("  " + yaml_format(self.KEY, self.MODEL))
+
+        # Print model's parameters
+        for f in fields(self):
+            if doc := f.metadata.get("doc"):
+                lines.append(f"  # {doc}")
+            lines.append("  " + yaml_format(f.name, getattr(self, f.name)))
+        return "\n".join(lines)
 
 
-@dataclass
-class OutputParameters(YmlParameters):
-    """Output setup"""
+@dataclass()
+class InputOutputParameters(YmlParameters):
+    """Input output setup"""
 
-    SECTION: ClassVar[str] = "Output"
+    SECTION: ClassVar[str] = "InputOutput"
 
-    # Directory where results and log files are stored
-    results_basename: str = "pyC2Ray_results"
-    # Directory where input files are stored
-    inputs_basename: OptStr = None
-    # Basename of the sources file
-    sources_basename: OptStr = None
-    # Basename of the density file
-    density_basename: OptStr = None
-    # Name of the log file to write
-    logfile: str = "pyC2Ray.log"
+    # Output
+    results_dir: Path = _field("Directory where results and log files are stored")
+    log_name: str = _field("Name of the log file in results_dir", "pyC2Ray.log")
+
+    # Input, required only by some C2Ray classes
+    # TODO: make inputs_dir deprecated
+    inputs_dir: Path = _field("Directory where input files are stored", Path(""))
+    sources_dir: Path = _field(
+        "Absolute or relative path with respect to inputs_dir to the source files",
+        Path(""),
+    )
+    density_dir: Path = _field(
+        "Absolute or relative path with repsect to inputs_dir to the density files",
+        Path(""),
+    )
+
+    def __post_init__(self, _build: object) -> None:
+        super().__post_init__(_build)
+        self.results_dir = Path(self.results_dir)
+
+        self.inputs_dir = Path(self.inputs_dir)
+        self.sources_dir = Path(self.sources_dir)
+        self.density_dir = Path(self.density_dir)
+
+        if not self.sources_dir.is_absolute():
+            self.sources_dir = self.inputs_dir / self.sources_dir
+        if not self.density_dir.is_absolute():
+            self.density_dir = self.inputs_dir / self.density_dir
+
+    @property
+    def log_file(self) -> Path:
+        """Return the full path to the log file."""
+        return self.results_dir / self.log_name
 
 
 @dataclass
@@ -92,65 +282,51 @@ class GridParameters(YmlParameters):
 
     SECTION: ClassVar[str] = "Grid"
 
-    # Box size in comoving Mpc
-    boxsize: float = 22.0
-    # Side of the mesh grid
-    meshsize: int = 256
-    # Use GPU acceleration
-    gpu: bool = False
-    # Use MPI parallelization
-    mpi: bool = False
-    # Resume a simulation
-    resume: bool = False
+    boxsize: float = _field("Box size in comoving Mpc")
+    meshsize: int = _field("Side of the mesh grid")
+    gpu: bool = _field("Use GPU acceleration")
+    mpi: bool = _field("Use MPI parallelization")
+    resume: bool = _field("Resume a simulation")
 
 
 @dataclass
 class RaytracingParameters(YmlParameters):
-    """ASORA Raytracing parameters"""
+    """ASORA and C2Ray (legacy) raytracing parameters"""
 
     SECTION: ClassVar[str] = "Raytracing"
 
-    # Photon loss fraction for the subbox algorithm
-    loss_fraction: float = 1e-2
-    # Size increase of subboxes around sources
-    subboxsize: int = 128
-    # Maximum subbox size for the subbox algorithm
-    max_subbox: int = 1000
-    # Number of sources to be processed in parallel
-    source_batch_size: int = 1
-    # Which fraction of the cells can be left unconverged
-    convergence_fraction: float = 1.0e-4
+    source_batch_size: int = _field("Number of sources to be processed in parallel")
+    loss_fraction: float = _field("Photon loss fraction for the subbox algorithm", 1e-2)
+    subboxsize: int = _field("Size increase of subboxes around sources", 128)
+    max_subbox: int = _field("Maximum subbox size for the subbox algorithm", 1000)
 
 
-# TODO: morton_bits is a morton specific parameter, should be moved to a morton grouping
-# parameter class
 @dataclass
 class DomainDecompositionParameters(YmlParameters):
-    """Parameters for domain decomposition and source grouping."""
+    """Parameters for domain decomposition and source grouping"""
 
     SECTION: ClassVar[str] = "DomainDecomposition"
 
-    # Enable domain decomposition/source grouping
-    enabled: bool = False
+    enabled: bool = _field("Enable domain decomposition/source grouping", False)
     # TODO: evaluate if keeping the non incremental mode: in case of real cosmological simulations,
     # the non incremental mode can become extremely expensive.
-    # Source grouping/domain decomposition algorithm. "morton" fits the enclosing sphere of
-    # every trial group accurately; "morton_incremental" grows it incrementally instead, which
-    # is much faster to build but yields looser spheres and therefore larger local grids.
-    grouping_algorithm: str = "morton_incremental"
-    # Maximum number of sources in one source group
-    max_num_sources_per_group: int = 1000
-    # Number of bits per dimension for Morton ordering
-    morton_bits: int = 10
-    # Maximum allowed memory cost per group in bytes
-    max_memory_cost_per_group: float = 50.0e9
+    # - 'morton' fits the enclosing sphere of every trial group accurately
+    # - 'morton_incremental' grows it incrementally instead, which is much faster to build
+    #   but yields looser spheres and therefore larger local grids
+    grouping_algorithm: Literal["morton", "morton_incremental"] = _field(
+        "Source grouping/domain decomposition algorithm", "morton_incremental"
+    )
+    max_num_sources_per_group: int = _field(
+        "Maximum number of sources in one source group", 1000
+    )
+    # TODO: morton_bits is a morton specific parameter, should be moved to a morton grouping parameter class
+    morton_bits: int = _field("Number of bits per dimension for Morton ordering", 10)
+    max_memory_cost_per_group: float = _field(
+        "Maximum allowed memory cost per group in bytes", 50.0e9
+    )
 
-    def __post_init__(self) -> None:
-        if self.grouping_algorithm not in ("morton", "morton_incremental"):
-            raise ValueError(
-                f"Grouping algorithm {self.grouping_algorithm} not implemented. "
-                "The supported algorithms are 'morton' and 'morton_incremental'."
-            )
+    def __post_init__(self, _build: object) -> None:
+        super().__post_init__(_build)
         if self.max_num_sources_per_group <= 0:
             raise ValueError(
                 f"max_num_sources_per_group must be a positive integer. "
@@ -170,48 +346,43 @@ class DomainDecompositionParameters(YmlParameters):
             )
 
 
+# TODO: Propse to name it initial conditions?
 @dataclass
 class MaterialParameters(YmlParameters):
     """Properties of physical quantities in the simulation volume"""
 
     SECTION: ClassVar[str] = "Material"
 
-    # Initial Temperature of the grid
-    temp0: float = 1e4
-    # Initial Ionized fraction of the grid
-    xh0: float = 1.2e-3
-    # Constant average density, comoving value
-    avg_dens: float = 1.87e-7
+    temp0: float = _field("Initial Temperature of the grid", 1e4)
+    xHII: float = _field("Initial Ionized fraction of the grid", 1.0e-5)
+    avg_dens: float = _field("Constant average density, comoving value", 1.87e-7)
 
 
 @dataclass
-class CGSParameters(YmlParameters):
+class ChemistryParameters(YmlParameters):
     """Miscellaneous physical constants"""
 
-    SECTION: ClassVar[str] = "CGS"
+    SECTION: ClassVar[str] = "Chemistry"
 
-    # Hydrogen recombination parameter (power law index)
-    albpow: float = -0.7
-    # Hydrogen recombination parameter (value at 10^4 K)
-    bh00: float = 2.59e-13
-    # Helium0 recombination parameter (power law index)
-    alcpow: float = -0.67
-    # Hydrogen ionization energy (in eV)
-    eth0: float = 13.598
-    # Helium I ionization energy (in eV)
-    ethe0: float = 24.587
-    # Helium II ionization energy (in eV)
-    ethe1: float = 54.416
-    # Hydrogen collisional ionization parameter 1
-    xih0: float = 1.0
-    # Hydrogen collisional ionization parameter 2
-    fh0: float = 0.83
-    # Colfh0 factor
-    colh0_fact: float = 1.3e-8
+    ion_energy_HI: float = _field("Hydrogen I ionization energy (in eV)", 13.598)
+    ion_energy_HeI: float = _field("Helium I ionization energy (in eV)", 24.587)
+    ion_energy_HeII: float = _field("Helium II ionization energy (in eV)", 54.416)
+    albpow: float = _field("Hydrogen recombination parameter (power law index)", -0.7)
+    b0_HI: float = _field(
+        "Hydrogen recombination parameter (value at 10^4 K)", 2.59e-13
+    )
+    alcpow: float = _field("Helium0 recombination parameter (power law index)", -0.67)
+    xi_HI: float = _field("Hydrogen collisional ionization parameter 1", 1.0)
+    f_HI: float = _field("Hydrogen collisional ionization parameter 2", 0.83)
+    col_HI_fact: float = _field("Colf_HI factor", 1.3e-8)
+    convergence_fraction: float = _field(
+        "Which fraction of the cells can be left unconverged", 1.0e-4
+    )
 
-    def __post_init__(self):
-        self.colh0 = self.colh0_fact * self.fh0 * self.xih0 / self.eth0**2
-        self.temph0 = self.eth0 * c.ev2k
+    def __post_init__(self, _build: object) -> None:
+        super().__post_init__(_build)
+        self.col_HI = self.col_HI_fact * self.f_HI * self.xi_HI / self.ion_energy_HI**2
+        self.temp_HI = self.ion_energy_HI * c.ev2k
 
 
 @dataclass
@@ -220,198 +391,457 @@ class CosmologyParameters(YmlParameters):
 
     SECTION: ClassVar[str] = "Cosmology"
 
-    # Global flag to use cosmology
-    cosmological: bool = False
-    # Reduced Hubble constant
-    h: float = 0.7
-    # Omega matter t=0
-    Omega0: float = 0.27
-    # Omega baryon t=0
-    Omega_B: float = 0.043
-    # Initial redshift of the simulation
-    zred_0: float = 9.0
-    # Temperature of CMB in Kelvin
-    cmbtemp: float = 2.726
+    cosmological: bool = _field("Global flag to use cosmology", False)
+    h: float = _field("Reduced Hubble constant", 0.7)
+    Omega0: float = _field("Omega matter t=0", 0.27)
+    Omega_B: float = _field("Omega baryon t=0", 0.043)
+    cmbtemp: float = _field("Temperature of CMB in Kelvin", 2.726)
+    # Deprecated
+    zred_0: float = _field("Initial redshift of the simulation", 9.0)
+    abu_h: float = _field("Hydrogen abundance", 0.926)
+    abu_he: float = _field("Helium abundance", 0.074)
+    abu_c: float = _field("Carbon abundance", 7.1e-7)
+
+    def __post_init__(self, _build: object) -> None:
+        super().__post_init__(_build)
+        self.mean_molecular = self.abu_h + 4.0 * self.abu_he
+
+
+class SourceTypeParameters(_ModelRegistry["SourceTypeParameters"]):
+    """Source type model"""
+
+    _registry: ClassVar[dict[str, type[SourceTypeParameters]]] = {}
+    KEY: ClassVar[str] = "source_type_model"
 
 
 @dataclass
-class AbundancesParameters(YmlParameters):
-    """Element abundances"""
+class BlackBodySourceParameters(SourceTypeParameters):
+    """Parameters for black body source type"""
 
-    SECTION: ClassVar[str] = "Abundances"
+    MODEL: ClassVar[str] = "blackbody"
 
-    # Hydrogen Abundance
-    abu_h: float = 0.926
-    # Helium Abundance
-    abu_he: float = 0.074
-    # Carbon Abundance
-    abu_c: float = 7.1e-7
+    Teff: float = _field("Effective temperature of black body source", 5e4)
+    cross_section_pl_index: float = _field(
+        "Power-law index for the frequency dependence of the photoionization cross section",
+        2.8,
+    )
+    sigma_HI_at_ion_freq: float = _field(
+        "HI cross section at its ionizing frequency (weighted by freq_factor)", 6.30e-18
+    )
 
-    def __post_init__(self):
-        self.mean_molecular = self.abu_h + 4.0 * self.abu_he
+
+@dataclass
+class PowerLawSourceParameters(SourceTypeParameters):
+    """Parameters for power-law source type"""
+
+    MODEL: ClassVar[str] = "powerlaw"
+
+
+@dataclass
+class Zackrisson11SourceParameters(SourceTypeParameters):
+    """Parameters for Zackrisson '11 source model"""
+
+    MODEL: ClassVar[str] = "Zackrisson11"
+
+    Teff: float = _field("Effective temperature of Black Body source", 5e4)
+    cross_section_pl_index: float = _field(
+        "Power-law index for the frequency dependence of the photoionization cross section",
+        2.8,
+    )
+    sed_table_file: Path = _field("Path to the SED table file", Path(""))
+
+    def __post_init__(self, _build: object) -> None:
+        super().__post_init__(_build)
+        self.sed_table_file = Path(self.sed_table_file)
 
 
 @dataclass
 class PhotoParameters(YmlParameters):
-    """Parameters governing photoionization"""
+    """Parameters governing photoionization tables
+
+    The following attributes are populated by the registered subclasses:
+    - 'source_type_model' -> source_type [SourceTypeParameters]
+    """
 
     SECTION: ClassVar[str] = "Photo"
 
-    # HI cross section at its ionizing frequency (weighted by freq_factor)
-    sigma_HI_at_ion_freq: float = 6.30e-18
-    # Minimum optical depth for tables
-    minlogtau: float = -20
-    # Maximum optical depth for tables
-    maxlogtau: float = 4
-    # Number of table points
-    NumTau: int = 20000
-    # Whether or not to use grey opacity (i.e. cross-section is frequency-independent)
-    grey: bool = False
-    # Type of source to use
-    SourceType: str = "blackbody"
-    # Whether to compute heating rates arrays (NOT USED BY CHEMISTRY SO FAR)
-    compute_heating_rates: bool = False
-    # Name of the SED table file
-    sed_table: str = ""
+    minlogtau: float = _field("Minimum optical depth for tables", -20)
+    maxlogtau: float = _field("Maximum optical depth for tables", 4)
+    num_tau: int = _field("Number of table points", 2000)
+    grey: bool = _field(
+        "Whether or not to use grey opacity (i.e. cross-section is frequency-independent)",
+        False,
+    )
+    compute_heating_rates: bool = _field(
+        "Whether to compute heating rates arrays", False
+    )
+    source_type: SourceTypeParameters = field(default_factory=BlackBodySourceParameters)
+
+    @classmethod
+    def from_dict(cls, yml: dict[str, Any], warn: bool = False) -> PhotoParameters:
+        source_type = SourceTypeParameters.from_model(yml, "blackbody", warn)
+        return super().from_dict({**yml, "source_type": source_type}, warn)
+
+    @property
+    def source_type_model(self) -> str:
+        return self.source_type.MODEL
+
+
+class ClumpingParameters(_ModelRegistry["ClumpingParameters"]):
+    """Clumping model parameters"""
+
+    _registry: ClassVar[dict[str, type[ClumpingParameters]]] = {}
+    KEY: ClassVar[str] = "clumping_model"
+
+
+@dataclass
+class ConstantClumpingParameters(ClumpingParameters):
+    MODEL: ClassVar[str] = "constant"
+
+    value: float = _field("Clumping factor for the constant model", 5.0)
+
+
+@dataclass
+class RedshiftClumpingParameters(ClumpingParameters):
+    MODEL: ClassVar[str] = "redshift"
+
+
+@dataclass
+class DensityClumpingParameters(ClumpingParameters):
+    MODEL: ClassVar[str] = "density"
+
+
+@dataclass
+class StochasticClumpingParameters(ClumpingParameters):
+    MODEL: ClassVar[str] = "stochastic"
+
+
+class MfpParameters(_ModelRegistry["MfpParameters"]):
+    """Mean-free-path model parameters"""
+
+    _registry: ClassVar[dict[str, type[MfpParameters]]] = {}
+    KEY: ClassVar[str] = "mfp_model"
+
+
+@dataclass
+class ConstantMfpParameters(MfpParameters):
+    MODEL: ClassVar[str] = "constant"
+
+    R_max_cMpc: float = _field(
+        "Maximum comoving distance for photons from source", 15.0
+    )
+
+
+@dataclass
+class Choudhury09MfpParameters(MfpParameters):
+    MODEL: ClassVar[str] = "Choudhury09"
+
+    A_mfp: float = _field(
+        "Free parameter for the Choudhury09 mean-free-path model in cMpc units", 210.0
+    )
+    eta_mfp: float = _field(
+        "Spectral index of the Choudhury09 mean-free-path model redshift evolution",
+        -9.0,
+    )
+
+
+@dataclass
+class Worseck14MfpParameters(MfpParameters):
+    MODEL: ClassVar[str] = "Worseck14"
+
+    A_mfp: float = _field(
+        "Free parameter for the Worseck14 mean-free-path model in cMpc units", 210.0
+    )
+    eta_mfp: float = _field(
+        "Spectral index of the Worseck14 mean-free-path model redshift evolution",
+        -9.0,
+    )
+    eta1_mfp: float = _field("Parameter for the modification to the Worseck14 fit", 9.0)
+    z1_mfp: float = _field("Parameter for the modification to the Worseck14 fit", 6.0)
 
 
 @dataclass
 class SinksParameters(YmlParameters):
-    """Parameters for sinks"""
+    """Parameters for sinks
+
+    The following attributes are populated by the registered subclasses:
+    - 'clumping_model' -> clumping [ClumpingParameters]
+    - 'mfp_model' -> mfp [MfpParameters]
+    """
 
     SECTION: ClassVar[str] = "Sinks"
 
-    # Clumping model, values are "constant", "redshift", "density" or "stochastic"
-    clumping_model: str
-    # Mean-free-path model "constant", "Choudhury09", "Worseck2014"
-    mfp_model: str
-    # Clumping factor for the constant model
-    clumping: float = 5.0
-    # Maximum comoving distance for photons from source
-    R_max_cMpc: float = 15.0
-    # Free parameter for the Choudhury09 mean-free-path model in cMpc units
-    A_mfp: OptFloat = None
-    # Spectral index of the Choudhury09 mean-free-path model redshift evolution
-    eta_mfp: OptFloat = None
-    # TODO: add a description
-    eta1_mfp: OptFloat = None
-    # TODO: add a description
-    z1_mfp: OptFloat = None
+    clumping: ClumpingParameters = field(default_factory=ConstantClumpingParameters)
+    mfp: MfpParameters = field(default_factory=ConstantMfpParameters)
 
-    def __post_init__(self) -> None:
-        if self.clumping_model not in ("constant", "redshift", "density", "stochastic"):
-            raise ValueError(
-                f"Clumping model {self.clumping_model} not implemented. "
-                "Choose from 'constant', 'redshift', 'density' or 'stochastic'."
-            )
-        if self.mfp_model not in ("constant", "Choudhury09", "Worseck2014"):
-            raise ValueError(
-                f"Mean-free-path model {self.mfp_model} not implemented. "
-                "Choose from 'constant' or 'Choudhury09'."
-            )
+    @classmethod
+    def from_dict(cls, yml: dict[str, Any], warn: bool = False) -> SinksParameters:
+        clumping = ClumpingParameters.from_model(yml, "constant", warn)
+        mfp = MfpParameters.from_model(yml, "constant", warn)
+        return super().from_dict({**yml, "clumping": clumping, "mfp": mfp}, warn)
 
-        if self.mfp_model == "Worseck2014" and (
-            self.A_mfp is None
-            or self.eta_mfp is None
-            or self.eta1_mfp is None
-            or self.z1_mfp is None
-        ):
+    @property
+    def clumping_model(self) -> str:
+        return self.clumping.MODEL
+
+    @property
+    def mfp_model(self) -> str:
+        return self.mfp.MODEL
+
+
+class FstarParameters(_ModelRegistry["FstarParameters"]):
+    """Stellar-to-halo mass relation parameters"""
+
+    _registry: ClassVar[dict[str, type[FstarParameters]]] = {}
+    KEY: ClassVar[str] = "fstar_model"
+
+
+@dataclass
+class FgammaSourceParameters(FstarParameters):
+    """Classical mass-independent stellar-to-halo mass relation"""
+
+    MODEL: ClassVar[str] = "fgamma"
+
+    f0: float = _field("Constant stellar-to-halo mass fraction", 0.02)
+    fgamma_hm: float = _field(
+        "Efficiency High-Mass Atomically Cooling Halo (HMACH)", 30.0
+    )
+    fgamma_lm: float = _field(
+        "Efficiency Low-Mass Atomically Cooling Halo (LMACH)", 0.0
+    )
+
+
+@dataclass
+class DplSourceParameters(FstarParameters):
+    """Double power law stellar-to-halo mass relation (Schneider, Giri, Mirocha '21)."""
+
+    MODEL: ClassVar[str] = "dpl"
+
+    f0: float = _field("Amplitude", 0.02)
+    Mt: float = _field("Turn over mass", 1e10)
+    Mp: float = _field("Second turn over mass", 1e10)
+    g1: float = _field("First Mp exponent", -0.3)
+    g2: float = _field("Second Mp exponent", -0.3)
+    g3: float = _field("First Mt exponent", 0.0)
+    g4: float = _field("Second Mt exponent", -0.0)
+
+    def __post_init__(self, _build: object) -> None:
+        super().__post_init__(_build)
+        if self.g3 < 0 or self.g4 > 0:
             raise ValueError(
-                "A_mfp, eta_mfp, eta1_mfp and z1_mpd must be provided for the Worseck2014 MFP model."
+                f"Invalid DPL parameters: g3 = {self.g3} must be >= 0 and g4 = {self.g4} must be <= 0."
             )
 
 
 @dataclass
-class BlackBodyParameters(YmlParameters):
-    """Parameters for Black Body source type"""
+class MuvSourceParameters(FstarParameters):
+    """Scatter in the absolute magnitude with sigma_UV = a_s*log10(Mhalo)+b_s. This extends Gelli+ 2024"""
 
-    SECTION: ClassVar[str] = "BlackBodySource"
+    MODEL: ClassVar[str] = "Muv"
 
-    # Effective temperature of Black Body source
-    Teff: float = 5e4
-    # Power-law index for the frequency dependence of the photoionization cross section
-    cross_section_pl_index: float = 2.8
+    f0: float = _field("Amplitude", 0.02)
+    Mt: float = _field("Turn over mass", 1e10)
+    Mp: float = _field("Second turn over mass", 1e10)
+    g1: float = _field("First Mp exponent", -0.3)
+    g2: float = _field("Second Mp exponent", -0.3)
+    g3: float = _field("First Mt exponent", 0.0)
+    g4: float = _field("Second Mt exponent", -0.0)
+    a_s: float = _field(
+        "Slope of the linear relation between log mass and sigma_UV for the Muv-scatter",
+        -1.0 / 3.0,
+    )
+    b_s: float = _field(
+        "Intercept of the linear relation between log mass sigma_UV for the Muv-scatter",
+        9.0 / 2.0,
+    )
+
+    def __post_init__(self, _build: object) -> None:
+        super().__post_init__(_build)
+        if self.g3 < 0 or self.g4 > 0:
+            raise ValueError(
+                f"Invalid Muv parameters: g3 = {self.g3} must be >= 0 and g4 = {self.g4} must be <= 0."
+            )
+        if self.a_s >= 0:
+            raise ValueError(f"Invalid Muv parameters: a_s = {self.a_s} must be < 0.")
+        if self.b_s <= 0:
+            raise ValueError(f"Invalid Muv parameters: b_s = {self.b_s} must be > 0.")
+
+
+class FescParameters(_ModelRegistry["FescParameters"]):
+    """Escaping photon fraction parameters"""
+
+    _registry: ClassVar[dict[str, type[FescParameters]]] = {}
+    KEY: ClassVar[str] = "fesc_model"
+
+
+@dataclass
+class ConstantFescParameters(FescParameters):
+    """Mass-independent escape fraction"""
+
+    MODEL: ClassVar[str] = "constant"
+
+    f0_esc: float = _field("Escape fraction parameter", 0.1)
+
+
+@dataclass
+class PowerFescParameters(FescParameters):
+    """Power law mass-dependent escape fraction"""
+
+    MODEL: ClassVar[str] = "power"
+
+    f0_esc: float = _field("Escape fraction parameter", 0.1)
+    Mp_esc: float = _field("Escape fraction parameter", 1e10)
+    al_esc: float = _field("Escape fraction parameter", -0.3)
+
+
+@dataclass
+class PowerObsFescParameters(FescParameters):
+    """Power law mass-dependent escape fraction, fitted to data that uses stellar mass"""
+
+    MODEL: ClassVar[str] = "power_obs"
+
+    f0_esc: float = _field("Escape fraction parameter", 0.1)
+    Mp_esc: float = _field("Escape fraction parameter", 1e10)
+    al_esc: float = _field(
+        "Power index of the mass dependence for the escape fraction parameter", -0.3
+    )
+    al_esc_z: float = _field(
+        "Power index of the mass dependence for escape fraction parameter", 1.0
+    )
+    zp_esc: float = _field("Zero point of the escape fraction parameter", 0.0)
+
+
+@dataclass
+class ThesanFescParameters(FescParameters):
+    """Thesan escape fraction model"""
+
+    MODEL: ClassVar[str] = "thesan"
+
+    # TODO: path to Thesan escape fraction model file
+    tables_dir: PathType = _field(
+        "Path to directory with the Thesan escape fraction tables", Path("")
+    )
+
+    def __post_init__(self, _build: object) -> None:
+        super().__post_init__(_build)
+        self.tables_dir = Path(self.tables_dir)
+
+
+class AccretionParameters(_ModelRegistry["AccretionParameters"]):
+    """Accretion model parameters"""
+
+    _registry: ClassVar[dict[str, type[AccretionParameters]]] = {}
+    KEY: ClassVar[str] = "accretion_model"
+
+
+@dataclass
+class ConstantAccretionParameters(AccretionParameters):
+    MODEL: ClassVar[str] = "constant"
+
+
+@dataclass
+class ExpAccretionParameters(AccretionParameters):
+    MODEL: ClassVar[str] = "exp"
+
+    # TODO: remove
+    bursty_sfr: Literal["no", "instant", "integrate"] = _field(
+        "Bursty star-formation model", "no"
+    )
+
+    alpha_h: float = _field("accretion rate parameter (see Schneider+21)", 0.79)
+    beta1: float = _field(
+        "Index power-low of the bursty star-formation model mass relation", 0.1
+    )
+    beta2: float = _field(
+        "Index power-low of the bursty star-formation model time relation", 1.5
+    )
+    tB0: float = _field("Bursty star-formation time-scale at z=0", 200.0)
+    tQ_frac: float = _field("Fraction of the quiescent time-scale", 1.6)
+    z0: float = _field("Reference redshift for the bursty star-formation model", 30.0)
+    t_rnd: float = _field(
+        "Randomize the time-scale of the bursty star-formation model (std for "
+        "N~(t_start, t_rnd))",
+        0,
+    )
 
 
 @dataclass
 class SourcesParameters(YmlParameters):
-    """Parameters for sources"""
+    """Parameters for sources
+
+    The following attributes are populated by the registered subclasses:
+    - 'fstar_model' -> fstar [FstarParameters]
+    - 'fesc_model' -> fesc [FescParameters]
+    - 'accretion_model' -> accretion [AccretionParameters]
+    """
 
     SECTION: ClassVar[str] = "Sources"
 
-    # stellar-to-halo mass relation:
-    #  'fgamma' for classical mass independent model
-    #  'dpl' for double power law (Schneider, Giri, Mirocha 2021)
-    #  'lognorm' for a stochastic with lognorm distribution and std ~Mhalo^(-1/3).
-    #  'Muv' for a scatter in the absolute magnitude with std_UV~a_s*log10(Mhalo)+b_s (see Gelli+ 2024)
-    fstar_kind: str = "fgamma"
-    # efficiency High-Mass Atomically Cooling Halo (HMACH) - used only for fstar_kind: 'fgamma'
-    fgamma_hm: OptFloat = None
-    # efficiency Low-Mass Atomically Cooling Halo (LMACH)
-    fgamma_lm: OptFloat = None
-    # Double power law parameter - these are used only when fstar_kind: 'dpl'
-    Nion: OptFloat = None
-    f0: OptFloat = None
-    Mt: OptFloat = None
-    Mp: OptFloat = None
-    g1: OptFloat = None
-    g2: OptFloat = None
-    g3: OptFloat = None
-    g4: OptFloat = None
-    # Free parameters for the Muv-scatter in the fstar model, relevant for fstar_kind == 'Muv'
-    a_s: OptFloat = None
-    b_s: OptFloat = None
-    # Photons escaping fraction:
-    #  'constant' for mass independent model,
-    #  'power' for a power law mass dependent factor
-    fesc_model: str = "constant"
-    f0_esc: OptFloat = None
-    Mp_esc: OptFloat = None
-    al_esc: OptFloat = None
-    # define the accretion model: 'constant' or 'EXP'
-    accretion_model: str = "constant"
-    # accretion rate parameter (see Schneider+ 2021)
-    alpha_h: OptFloat = None
-    # bursty star-formation model, requires accretion model 'EXP':
-    #  'no'
-    #  'instant'
-    #  'integrate', it
-    bursty_sfr: str = "no"
-    # index power-low of the bursty star-formation model mass relation
-    beta1: OptFloat = None
-    # index power-low of the bursty star-formation model time relation
-    beta2: OptFloat = None
-    # bursty star-formation time-scale at z=0
-    tB0: OptFloat = None
-    # fraction of the quiescent time-scale
-    tQ_frac: OptFloat = None
-    # reference redshift for the bursty star-formation model
-    z0: OptFloat = None
-    # Randomize the time-scale of the bursty star-formation model (std for N~(t_start, t_rnd))
-    t_rnd: OptFloat = None
-    # seed for the stochastic source models (None: different on every run)
-    seed: int | None = None
-    # TODO: add description
-    ts: OptFloat = None
+    num_ion: int = _field("Number of ionizing photons per baryon in stars", 2000)
+    fstar: FstarParameters = field(default_factory=FgammaSourceParameters)
+    fesc: FescParameters = field(default_factory=ConstantFescParameters)
+    accretion: AccretionParameters = field(default_factory=ConstantAccretionParameters)
+    seed: int | None = _field(
+        "Seed for the stochastic source models (None: different on every run)", None
+    )
 
-    def __post_init__(self) -> None:
-        if self.fstar_kind not in ("fgamma", "dpl", "lognorm", "Muv"):
-            raise ValueError(
-                f"fstar_kind {self.fstar_kind} not implemented. "
-                "Choose from 'fgamma', 'dpl', 'lognorm' or 'Muv'."
+    @classmethod
+    def from_dict(cls, yml: dict[str, Any], warn: bool = False) -> SourcesParameters:
+        fstar = FstarParameters.from_model(yml, "fgamma", warn)
+        fesc = FescParameters.from_model(yml, "constant", warn)
+        accretion = AccretionParameters.from_model(yml, "constant", warn)
+        return super().from_dict(
+            {**yml, "fstar": fstar, "fesc": fesc, "accretion": accretion}, warn
+        )
+
+    @property
+    def fstar_model(self) -> str:
+        return self.fstar.MODEL
+
+    @property
+    def fesc_model(self) -> str:
+        return self.fesc.MODEL
+
+    @property
+    def accretion_model(self) -> str:
+        return self.accretion.MODEL
+
+
+@dataclass
+class SimulationParameters:
+    """Aggregates every parameter section into a single, serializable object"""
+
+    io: InputOutputParameters
+    grid: GridParameters
+    raytracing: RaytracingParameters
+    domain_decomposition: DomainDecompositionParameters
+    material: MaterialParameters
+    chemistry: ChemistryParameters
+    cosmology: CosmologyParameters
+    photo: PhotoParameters
+    sinks: SinksParameters
+    sources: SourcesParameters
+
+    @classmethod
+    def from_file(cls, file: PathType) -> SimulationParameters:
+        """Load every parameter section from a single YAML file."""
+        yml = YmlParameters.load_yaml(file)
+        hints = get_type_hints(cls)
+        param_types = {f.name: hints[f.name] for f in fields(cls)}
+
+        return cls(
+            **{
+                name: param.from_dict(yml.get(param.SECTION, {}))
+                for name, param in param_types.items()
+            }
+        )
+
+    def to_yaml_file(self, file: PathType) -> None:
+        """Write every section's current values to a single YAML file."""
+        blocks = [getattr(self, f.name).to_yaml_block() for f in fields(self)]
+        with open(file, "w") as fh:
+            fh.write(
+                "# pyC2Ray parameters file -- generated, edit values as needed.\n\n"
             )
-        if self.fesc_model not in ("constant", "power"):
-            raise ValueError(
-                f"fesc_model {self.fesc_model} not implemented. "
-                "Choose from 'constant' or 'power'."
-            )
-        if self.accretion_model not in ("constant", "EXP"):
-            raise ValueError(
-                f"accretion_model {self.accretion_model} not implemented. "
-                "Choose from 'constant' or 'EXP'."
-            )
-        if self.bursty_sfr not in ("no", "instant", "integrate"):
-            raise ValueError(
-                f"bursty_sfr {self.bursty_sfr} not implemented. "
-                "Choose from 'no', 'instant' or 'integrate'."
-            )
+            fh.write("\n\n".join(blocks))
+            fh.write("\n")
