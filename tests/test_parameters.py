@@ -105,7 +105,7 @@ class TestYmlParameters:
         assert obj.grouping_algorithm == "morton"
         assert obj.max_num_sources_per_group == 1000
         assert obj.morton_bits == 10
-        assert pytest.approx(obj.max_memory_cost_per_group) == 50.0e9
+        assert obj.max_memory_cost_per_group == 50.0e9
 
     def test_domain_decomposition_parameters(self, params_file: Path):
         obj = DomainDecompositionParameters.from_file(
@@ -116,7 +116,7 @@ class TestYmlParameters:
         assert obj.grouping_algorithm == "morton"
         assert obj.max_num_sources_per_group == 12
         assert obj.morton_bits == 8
-        assert pytest.approx(obj.max_memory_cost_per_group) == 4.0e9
+        assert obj.max_memory_cost_per_group == 4.0e9
 
     def test_domain_decomposition_rejects_unknown_grouping_algorithm(self):
         with pytest.raises(ValueError):

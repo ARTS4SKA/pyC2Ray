@@ -66,7 +66,7 @@ def device_close() -> None:
 def prepare_grid_buffers(
     grid_edge_length: int, force_matching_size: bool = False
 ) -> None:
-    """Ensure mesh-dependent device buffers exist for an m1^3 grid
+    """Ensure mesh-dependent device buffers exist for an grid_edge_length^3 grid
 
     Parameters
     ----------

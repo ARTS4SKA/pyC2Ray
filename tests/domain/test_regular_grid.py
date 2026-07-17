@@ -177,6 +177,20 @@ def test_regular_grid_local_to_global_map_periodic_set_and_add() -> None:
     assert np.all(global_field == expected_global_field)
 
 
+def test_regular_grid_periodic_mapping_rejects_duplicate_wrapping() -> None:
+    grid = RegularGrid(
+        cell_size=1.0,
+        num_cells=5,
+        offset=np.array([3, 3, 3], dtype=np.int64),
+        is_periodic_mode_active=True,
+    )
+    local_field = np.ones((5, 5, 5), dtype=float)
+    global_field = np.zeros((4, 4, 4), dtype=float)
+
+    with pytest.raises(ValueError, match="multiple local cells"):
+        grid.local_to_global_map(local_field, global_field, add=True)
+
+
 def test_regular_grid_local_to_global_map_periodic_set_and_add_included() -> None:
     grid = RegularGrid(
         cell_size=1.0,

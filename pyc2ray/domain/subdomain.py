@@ -70,15 +70,16 @@ class Subdomain:
 
         Returns
         -------
-        The positions (indexes) of the sources, referred to the local grid.
+        The positions (indexes) of the sources, referred to the local grid,
+        with shape (num_sources, 3).
         """
+        if len(self.source_group.sources) == 0:
+            return np.empty((0, 3), dtype=int)
+
         return np.array(
             [
-                [
-                    self.local_grid.global_to_local_position_map(s.pos)[i]
-                    for s in self.source_group.sources
-                ]
-                for i in range(3)
+                self.local_grid.global_to_local_position_map(s.pos)
+                for s in self.source_group.sources
             ]
         )
 

@@ -113,6 +113,7 @@ class DomainDecompositionHandler:
         # Key identifying the grouping inputs. cell_size and N are deliberately excluded: the
         # grouping is invariant under a uniform cell-size scaling, so a cosmological cell-size
         # change alone does not require a rebuild.
+        # TODO: save memory by using a hash instead of the full bytes representation of the arrays.
         decomposition_key = (src_pos.tobytes(), src_flux.tobytes(), float(R_max_LLS))
         if decomposition_key == self._decomposition_key:
             logger.info("Reusing cached source grouping/domain decomposition.")
@@ -172,7 +173,7 @@ class DomainDecompositionHandler:
         sources = [
             Source(
                 id=i,
-                pos=(np.array(src_pos[:, i], dtype=float) + 0.5) * cell_size,
+                pos=(np.array(src_pos[i, :], dtype=float) + 0.5) * cell_size,
                 strength=src_flux[i],
                 radius=R_max_LLS * cell_size,
             )
