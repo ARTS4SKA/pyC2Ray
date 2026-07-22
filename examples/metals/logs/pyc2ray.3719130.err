@@ -1,0 +1,46 @@
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 4, in <module>
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 4, in <module>
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 4, in <module>
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 4, in <module>
+    import pyc2ray as pc2r
+    import pyc2ray as pc2r
+    import pyc2ray as pc2r
+  File "/users/cprior/pyC2Ray/pyc2ray/__init__.py", line 4, in <module>
+    import pyc2ray as pc2r
+  File "/users/cprior/pyC2Ray/pyc2ray/__init__.py", line 4, in <module>
+  File "/users/cprior/pyC2Ray/pyc2ray/__init__.py", line 4, in <module>
+  File "/users/cprior/pyC2Ray/pyc2ray/__init__.py", line 4, in <module>
+    from .c2ray_244paper import *  # noqa: F403
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_244paper.py", line 10, in <module>
+    from .c2ray_244paper import *  # noqa: F403
+    from .c2ray_244paper import *  # noqa: F403
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_244paper.py", line 10, in <module>
+    from .c2ray_244paper import *  # noqa: F403
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_244paper.py", line 10, in <module>
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_244paper.py", line 10, in <module>
+    from .c2ray_base import C2Ray
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_base.py", line 10, in <module>
+    from .c2ray_base import C2Ray
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_base.py", line 10, in <module>
+    from .c2ray_base import C2Ray
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_base.py", line 10, in <module>
+    from .c2ray_base import C2Ray
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_base.py", line 10, in <module>
+    from mpi4py import MPI
+ImportError: libmpi_gtl_cuda.so.0: cannot open shared object file: No such file or directory
+    from mpi4py import MPI
+ImportError: libmpi_gtl_cuda.so.0: cannot open shared object file: No such file or directory
+    from mpi4py import MPI
+ImportError: libmpi_gtl_cuda.so.0: cannot open shared object file: No such file or directory
+    from mpi4py import MPI
+ImportError: libmpi_gtl_cuda.so.0: cannot open shared object file: No such file or directory
+srun: error: nid006547: tasks 0-3: Exited with exit code 1
+srun: Terminating StepId=3719130.0

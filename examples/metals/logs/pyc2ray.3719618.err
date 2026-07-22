@@ -1,0 +1,45 @@
+WARNING: No heating rates
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 50, in <module>
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 50, in <module>
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 50, in <module>
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 50, in <module>
+    sim.read_density(fbase='CDM_200Mpc_2048.%05d.den.256.0' %idx_zred[k], z=zi)
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_fstar.py", line 317, in read_density
+    sim.read_density(fbase='CDM_200Mpc_2048.%05d.den.256.0' %idx_zred[k], z=zi)
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_fstar.py", line 317, in read_density
+    sim.read_density(fbase='CDM_200Mpc_2048.%05d.den.256.0' %idx_zred[k], z=zi)
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_fstar.py", line 317, in read_density
+    overd = rdr.load_density_field(file)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/tools21cm/nbody_pkdgrav.py", line 281, in load_density_field
+    sim.read_density(fbase='CDM_200Mpc_2048.%05d.den.256.0' %idx_zred[k], z=zi)
+    overd = rdr.load_density_field(file)
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_fstar.py", line 317, in read_density
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    overd = rdr.load_density_field(file)
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/tools21cm/nbody_pkdgrav.py", line 281, in load_density_field
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/tools21cm/nbody_pkdgrav.py", line 281, in load_density_field
+    overd = rdr.load_density_field(file)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/tools21cm/nbody_pkdgrav.py", line 281, in load_density_field
+    dens  = np.fromfile(file, dtype=np.float32)
+    dens  = np.fromfile(file, dtype=np.float32)
+    dens  = np.fromfile(file, dtype=np.float32)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    dens  = np.fromfile(file, dtype=np.float32)
+FileNotFoundError: [Errno 2] No such file or directory: '/capstor/scratch/cscs/cprior/CDM_100Mpc_2048/grids/nc100/CDM_200Mpc_2048.00005.den.256.0'
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/capstor/scratch/cscs/cprior/CDM_100Mpc_2048/grids/nc100/CDM_200Mpc_2048.00005.den.256.0'
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/capstor/scratch/cscs/cprior/CDM_100Mpc_2048/grids/nc100/CDM_200Mpc_2048.00005.den.256.0'
+FileNotFoundError: [Errno 2] No such file or directory: '/capstor/scratch/cscs/cprior/CDM_100Mpc_2048/grids/nc100/CDM_200Mpc_2048.00005.den.256.0'
+srun: error: nid006553: tasks 1-2: Exited with exit code 1
+srun: Terminating StepId=3719618.0
+[2026-06-22T11:22:17.397] error: *** STEP 3719618.0 ON nid006553 CANCELLED AT 2026-06-22T11:22:17 DUE TO TASK FAILURE ***
+srun: error: nid006553: tasks 0,3: Exited with exit code 1

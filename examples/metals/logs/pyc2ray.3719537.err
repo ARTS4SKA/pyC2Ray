@@ -1,0 +1,25 @@
+WARNING: No heating rates
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 41, in <module>
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 41, in <module>
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 41, in <module>
+    sim.printlog("\n=================================\nDoing redshift %.3f to %.3f\n=================================\n" %(zi, zf), sim.logfile)
+    sim.printlog("\n=================================\nDoing redshift %.3f to %.3f\n=================================\n" %(zi, zf), sim.logfile)
+    ^^^^^^^^^^^^
+    ^^^^^^^^^^^^
+AttributeError: 'C2Ray_fstar' object has no attribute 'printlog'
+AttributeError: 'C2Ray_fstar' object has no attribute 'printlog'
+    sim.printlog("\n=================================\nDoing redshift %.3f to %.3f\n=================================\n" %(zi, zf), sim.logfile)
+    ^^^^^^^^^^^^
+AttributeError: 'C2Ray_fstar' object has no attribute 'printlog'
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 41, in <module>
+    sim.printlog("\n=================================\nDoing redshift %.3f to %.3f\n=================================\n" %(zi, zf), sim.logfile)
+    ^^^^^^^^^^^^
+AttributeError: 'C2Ray_fstar' object has no attribute 'printlog'
+srun: error: nid006546: tasks 0,2-3: Exited with exit code 1
+srun: Terminating StepId=3719537.0
+[2026-06-22T11:14:57.246] error: *** STEP 3719537.0 ON nid006546 CANCELLED AT 2026-06-22T11:14:57 DUE TO TASK FAILURE ***
+srun: error: nid006546: task 1: Exited with exit code 1

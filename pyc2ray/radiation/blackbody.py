@@ -198,6 +198,17 @@ class BPASSSource(BlackBodyBase):
         S_unscaled = scipy.integrate.simpson(y=sed[mask], x=freqs[mask])
         return sed * (S_star_ref / S_unscaled)
 
+    def ionizing_photon_rate(self, freq_min: float, freq_max: float) -> float:
+        """Un-normalized band-integrated ionizing photon rate Q_ion for this
+        (metallicity, age) BPASS population, in photons/s per BPASS population
+        mass (the loader's 1e6 Msun normalization).
+
+        This is exactly the S_unscaled that _normalize_sed divides out — the
+        metallicity/age-dependent ionizing EFFICIENCY that make_photo_table
+        normalizes away. Ratios between metallicities are unit-independent."""
+        mask = (self.freqs >= freq_min) & (self.freqs <= freq_max)
+        return float(scipy.integrate.simpson(y=self.sed_photon[mask], x=self.freqs[mask]))
+
     # ------------------------------------------------------------------
     # Integrand helpers
     # ------------------------------------------------------------------

@@ -1,0 +1,45 @@
+WARNING: No heating rates
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 50, in <module>
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 50, in <module>
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 50, in <module>
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 50, in <module>
+    sim.read_density(fbase='CDM_100Mpc_2048.%05d.ovrden.npy' %idx_zred[k], z=zi)
+    sim.read_density(fbase='CDM_100Mpc_2048.%05d.ovrden.npy' %idx_zred[k], z=zi)
+    sim.read_density(fbase='CDM_100Mpc_2048.%05d.ovrden.npy' %idx_zred[k], z=zi)
+    sim.read_density(fbase='CDM_100Mpc_2048.%05d.ovrden.npy' %idx_zred[k], z=zi)
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_fstar.py", line 314, in read_density
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_fstar.py", line 314, in read_density
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_fstar.py", line 314, in read_density
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_fstar.py", line 314, in read_density
+    overd = np.load(file) - 1.0
+    overd = np.load(file) - 1.0
+    overd = np.load(file) - 1.0
+            ^^^^^^^^^^^^^
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/numpy/lib/_npyio_impl.py", line 454, in load
+            ^^^^^^^^^^^^^
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/numpy/lib/_npyio_impl.py", line 454, in load
+            ^^^^^^^^^^^^^
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/numpy/lib/_npyio_impl.py", line 454, in load
+    overd = np.load(file) - 1.0
+            ^^^^^^^^^^^^^
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/numpy/lib/_npyio_impl.py", line 454, in load
+    fid = stack.enter_context(open(os.fspath(file), "rb"))
+    fid = stack.enter_context(open(os.fspath(file), "rb"))
+    fid = stack.enter_context(open(os.fspath(file), "rb"))
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    fid = stack.enter_context(open(os.fspath(file), "rb"))
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/capstor/scratch/cscs/cprior/CDM_100Mpc_2048/grids/nc100/CDM_100Mpc_2048.00094.ovrden.npy'
+FileNotFoundError: [Errno 2] No such file or directory: '/capstor/scratch/cscs/cprior/CDM_100Mpc_2048/grids/nc100/CDM_100Mpc_2048.00094.ovrden.npy'
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/capstor/scratch/cscs/cprior/CDM_100Mpc_2048/grids/nc100/CDM_100Mpc_2048.00094.ovrden.npy'
+FileNotFoundError: [Errno 2] No such file or directory: '/capstor/scratch/cscs/cprior/CDM_100Mpc_2048/grids/nc100/CDM_100Mpc_2048.00094.ovrden.npy'
+srun: error: nid006544: tasks 0-2: Exited with exit code 1
+srun: Terminating StepId=3719868.0
+[2026-06-22T11:53:51.002] error: *** STEP 3719868.0 ON nid006544 CANCELLED AT 2026-06-22T11:53:50 DUE TO TASK FAILURE ***
+srun: error: nid006544: task 3: Exited with exit code 1

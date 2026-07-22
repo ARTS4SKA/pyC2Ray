@@ -1,0 +1,22 @@
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 6, in <module>
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 6, in <module>
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 6, in <module>
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 6, in <module>
+    logger = logging.getLogger("pyc2Ray")
+    logger = logging.getLogger("pyc2Ray")
+    logger = logging.getLogger("pyc2Ray")
+             ^^^^^^^
+             ^^^^^^^
+             ^^^^^^^
+NameError: name 'logging' is not defined. Did you forget to import 'logging'?
+NameError: name 'logging' is not defined. Did you forget to import 'logging'?
+NameError: name 'logging' is not defined. Did you forget to import 'logging'?
+    logger = logging.getLogger("pyc2Ray")
+             ^^^^^^^
+NameError: name 'logging' is not defined. Did you forget to import 'logging'?
+srun: error: nid006564: tasks 0-3: Exited with exit code 1
+srun: Terminating StepId=3719600.0

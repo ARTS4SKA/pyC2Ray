@@ -343,6 +343,18 @@ class BPASSParameters(YmlParameters):
     age: float
     # Path to the root directory containing BPASS SED files
     bpass_dir: str
+    # Source-amplitude normalisation scenario:
+    #  'fixed_nion' : constant Nion amplitude + BPASS-shape tables (legacy behaviour)
+    #  'bpass_qion' : BPASS-shape tables + amplitude from q_ion(Z, age) [Option 2]
+    #  'bb_qion'    : fitted-Teff black-body tables + amplitude from q_ion(Z, age) [Option 1]
+    norm_scenario: str = "fixed_nion"
+
+    def __post_init__(self) -> None:
+        if self.norm_scenario not in ("fixed_nion", "bpass_qion", "bb_qion"):
+            raise ValueError(
+                f"norm_scenario {self.norm_scenario} not implemented. "
+                "Choose from 'fixed_nion', 'bpass_qion' or 'bb_qion'."
+            )
 
 
 @dataclass

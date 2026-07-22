@@ -8,6 +8,11 @@ import tools21cm as t2c
 from astropy import constants as cst
 
 import pyc2ray.constants as c
+from pyc2ray.radiation.zbinned_tables import (
+    BBFittedPhotoTableSet,
+    BPASSPhotoTableSet,
+    BPASSQionGrid,
+)
 
 from .c2ray_base import C2Ray
 from .source_model import BurstySFR, EscapeFraction, StellarToHaloRelation
@@ -50,6 +55,15 @@ class C2Ray_Metals(C2Ray):
         """
         super().__init__(paramfile)
         logger.info('Running: "C2Ray_Metals for %d Mpc/h volume"', self.boxsize)
+
+        # Gridded stellar mass of the current slice's sources (set by
+        # ionizing_flux; consumed by the q_ion normalisation scenarios).
+        self.src_mstar: np.ndarray | None = None
+
+        # Memo key for the per-slice lifetime-averaged q_ion (computed once per
+        # slice: mean_Z and window are constant across its sub-steps).
+        self._slice_qbar_key: tuple[float, float] | None = None
+
 
 
     # =====================================================================================================
@@ -167,6 +181,10 @@ class C2Ray_Metals(C2Ray):
                     meshsize=self.N + 1,
                 )
 
+                # q_ion scenarios need a gridded stellar mass, which the SPICE
+                # (SFR-based) branch does not provide.
+                self.src_mstar = None
+
                 # normalize flux
                 assert self.sources_params.Nion is not None
                 normflux = (
@@ -183,6 +201,10 @@ class C2Ray_Metals(C2Ray):
                     boxsize=self.boxsize / self.cosmology.h,
                     meshsize=self.N + 1,
                 )
+
+                # stash the gridded stellar mass (fesc already folded in) for
+                # the q_ion normalisation scenarios
+                self.src_mstar = srcmstar
 
                 # normalize flux
                 assert self.sources_params.Nion is not None
@@ -243,6 +265,7 @@ class C2Ray_Metals(C2Ray):
             )
 
             self.tot_phots = 0
+            self.src_mstar = np.array((0.0,), dtype=np.float64)
             return np.array((3, 0), dtype=np.int32), np.array((0,), dtype=np.float64)
 
     def read_haloes(
@@ -277,39 +300,45 @@ class C2Ray_Metals(C2Ray):
             srcmass_msun = hl.get(var="m") / h  # Msun
             srcpos_mpc = hl.get(var="pos") / h  # Mpc
         elif suffix == ".txt":
-            # Read haloes from a PKDGrav converted in txt.
+            # Read haloes from a PKDGrav "halo" txt: positions already in [0, boxsize] Mpc/h.
             hl = np.loadtxt(halo_file)
             srcmass_msun = hl[:, 0] / self.cosmology.h  # Msun
-            srcpos_mpc = hl[:, 1:] + self.boxsize / 2  # Mpc/h
+            srcpos_mpc = hl[:, 1:]  # Mpc/h, no centering offset
 
-            # apply periodic boundary condition shift
-            srcpos_mpc[srcpos_mpc > self.boxsize] = (
-                self.boxsize - srcpos_mpc[srcpos_mpc > self.boxsize]
-            )
+            # periodic boundary wrap (not reflection)
             srcpos_mpc[srcpos_mpc < 0.0] = self.boxsize + srcpos_mpc[srcpos_mpc < 0.0]
+            srcpos_mpc[srcpos_mpc > self.boxsize] = (
+                srcpos_mpc[srcpos_mpc > self.boxsize] - self.boxsize
+            )
+
+            assert srcpos_mpc.min() >= 0.0
+            assert srcpos_mpc.max() <= self.boxsize
             srcpos_mpc /= self.cosmology.h  # Mpc
         return srcpos_mpc, srcmass_msun
 
     def read_density(self, fbase, z=None):
-        """Read coarser density field from C2Ray-formatted file
+        """Read coarser density field from C2Ray-formatted file.
 
-        This method is meant for reading density field run with either N-body or hydro-dynamical simulations. The field is then smoothed on a coarse mesh grid.
-
-        Parameters
-        ----------
-        fbase : string
-            the file name (cwithout the path) of the file to open
-
+        Handles both numpy (.npy) overdensity fields and raw PKDGRAV3 binary.
         """
         file = self.density_basename + fbase
-        rdr = t2c.Pkdgrav3data(self.boxsize, self.N, Omega_m=self.cosmology.Om0)
+        if file.endswith("npy"):
+            overd = np.load(file) - 1.0
+        else:
+            rdr = t2c.Pkdgrav3data(self.boxsize, self.N, Omega_m=self.cosmology.Om0)
+            overd = rdr.load_density_field(file)
+
         self.ndens = (
             self.cosmology.critical_density0.cgs.value
             * self.cosmology.Ob0
-            * (1.0 + rdr.load_density_field(file))
+            * (1.0 + overd)
             / (self.mean_molecular * c.m_p)
             * (1 + z) ** 3
         )
+
+        # floor density to avoid zero-valued cells
+        self.ndens = np.maximum(self.ndens, 5e-6)
+        
         logger.info(
             """
 ---- Reading density file:
@@ -353,6 +382,7 @@ class C2Ray_Metals(C2Ray):
         cosmo = CosmologyLite(
             h=self.cosmology.h,
             Omega_b=self.cosmology.Ob0,
+            Omega_m = self.cosmology.Om0,
             L_box=self.boxsize * u.Mpc / cu.littleh,
         )
         bpass = BPASSYieldTable(Path(self.bpass_params.bpass_dir))
@@ -569,15 +599,164 @@ class C2Ray_Metals(C2Ray):
 
         self.fesc_model = EscapeFraction(model=self.fesc_kind, pars=fesc_pars)
 
+    def _radiation_init(self):
+        """Standard radiation init, plus a BPASS photoionization table for every
+        metallicity bin. Per slice, the single active table is swapped to the
+        volume-average source metallicity (set_radiation_to_metallicity)."""
+        super()._radiation_init()
+        if self.bpass_params is None:
+            raise ValueError("C2Ray_Metals needs a BPASSSource section to build metallicity tables")
+
+        ion_freq_HI = c.ev2fr * self.eth0
+        ion_freq_HeII = c.ev2fr * self.ethe1
+
+        scenario = self.bpass_params.norm_scenario
+        table_kwargs = dict(
+            bpass_dir=self.bpass_params.bpass_dir,
+            tau=self.tau,
+            freq_min=ion_freq_HI,
+            freq_max=10 * ion_freq_HeII,
+            S_star_ref=1e48,
+            grey=self.grey,
+            freq0=ion_freq_HI,
+            pl_index=self.cs_pl_idx_h,
+            age=self.bpass_params.age,
+        )
+        if scenario == "bb_qion":
+            # Option 1: fitted-Teff black-body SHAPE per Z bin
+            self.ztables = BBFittedPhotoTableSet(**table_kwargs)
+            logger.info(
+                "Built fitted-Teff black-body tables for %d metallicity bins: Z=%s, Teff=%s K",
+                self.ztables.n_bins, self.ztables.Z_bin_centers,
+                np.array2string(self.ztables.Teff, precision=0),
+            )
+        else:
+            # 'fixed_nion' and 'bpass_qion': BPASS SHAPE per Z bin
+            self.ztables = BPASSPhotoTableSet(**table_kwargs)
+            logger.info(
+                "Built BPASS photoionization tables for %d metallicity bins: %s",
+                self.ztables.n_bins, self.ztables.Z_bin_centers,
+            )
+
+        if scenario in ("bpass_qion", "bb_qion"):
+            # q_ion(Z, age) grid: carries the metallicity- and age-dependent
+            # AMPLITUDE that _normalize_sed strips from the tables.
+            self.qion_grid = BPASSQionGrid(
+                bpass_dir=self.bpass_params.bpass_dir,
+                freq_min=ion_freq_HI,
+                freq_max=10 * ion_freq_HeII,
+            )
+            logger.info(
+                "Built q_ion(Z, age) grid (scenario '%s'): source amplitudes come from "
+                "BPASS ionizing efficiency, Nion is ignored.", scenario,
+            )
+
+        self.yield_table = BPASSYieldTable(self.bpass_params.bpass_dir)
+        logger.info("Built BPASS total mass-return table for per-sub-step stellar-mass loss.")
+        
+    def metallicity_output_file(self, i: int):
+        """Path to the per-halo metallicity file for snapshot i, written by
+        run_metallicity_evolution."""
+        if self.metallicity_params is None:
+            raise ValueError("MetallicityEvolution section required to locate metallicity files")
+        out_dir = (
+                Path(self.metallicity_params.output_dir)
+                if self.metallicity_params.output_dir else Path(".")
+            )
+        return out_dir / f"snapshot_{int(i):05d}.metallicities.npy"
+
+    def average_source_metallicity(self, i: int, weight: str = "none") -> float:
+        """Volume-average metallicity of all source halos in snapshot i.
+
+        weight : 'none' for a plain mean over halos (matches "average of all
+            sources"); 'mstar' for a stellar-mass-weighted mean.
+        """
+        halos = np.load(self.metallicity_output_file(i), allow_pickle=True)
+        fz = halos["f_Z_halo"]
+        if weight == "mstar":
+            w = halos["M_star"]
+            if w.sum() > 0:
+                return float(np.average(fz, weights=w))
+        return float(np.mean(fz))
+
+    def set_radiation_to_metallicity(self, mean_Z: float) -> float:
+        """Set the single active photoionization table to a log-Z interpolation
+        between the two BPASS bins bracketing mean_Z and (on GPU) copy it to the
+        device. Call once per slice, before raytracing. Returns the (clamped)
+        metallicity actually used."""
+        thin, thick = self.ztables.get_photo_tables_interp(mean_Z)
+        self.photo_thin_table = np.ascontiguousarray(thin)
+        self.photo_thick_table = np.ascontiguousarray(thick)
+        if self.gpu:
+            photo_table_to_device(self.photo_thin_table, self.photo_thick_table)
+        lo, hi, w = self.ztables._interp_indices_weight(mean_Z)
+        Z_used = float(np.clip(mean_Z, self.ztables.Z_bin_centers[0], self.ztables.Z_bin_centers[-1]))
+        logger.info(
+            "Slice radiation: mean source Z=%.3e -> interpolated between BPASS bins "
+            "Z=%.5f and Z=%.5f (w=%.3f)",
+            mean_Z, self.ztables.Z_bin_centers[lo], self.ztables.Z_bin_centers[hi], w,
+        )
+        return Z_used
+
+    def substep_normflux(self, normflux_birth, mean_Z: float, age_seconds: float):
+        """Scale the slice's birth-mass flux to a sub-step by the remaining stellar
+        mass fraction from BPASS (winds + SN mass return) at population age
+        age_seconds. Slice-mean metallicity mean_Z selects the BPASS Z bin."""
+        age_myr = age_seconds / (1e6 * c.year2s)
+        frac = self.yield_table.remaining_stellar_fraction(mean_Z, age_myr)
+        return normflux_birth * frac
+
+    def scenario_substep_normflux(
+        self, normflux_birth, mean_Z: float, age_seconds: float, t_window_seconds: float
+    ):
+        """Sub-step source amplitudes under the configured normalisation scenario
+        (BPASSSource.norm_scenario in the parameter file).
+
+        'fixed_nion' : legacy per-sub-step behaviour — Nion-based birth flux
+                       scaled by the BPASS remaining-stellar-mass fraction at the
+                       sub-step age (uses age_seconds).
+        'bpass_qion' / 'bb_qion' : amplitude rebuilt from the BPASS ionizing
+                       efficiency, held CONSTANT across the slice at the
+                       lifetime-averaged rate
+
+                           normflux = M_star * <q_ion>_Z / S_star_ref,
+                           <q_ion>_Z = (1/T) integral_0^T q_ion(Z, age) d(age)
+
+                       over the slice window T = t_window_seconds (per-slice
+                       average, not per-sub-step sampling — see supervisor note).
+                       <q_ion> already contains the population fading, so NO
+                       additional remaining-mass factor is applied (that would
+                       double-count the mass loss). age_seconds is unused here.
+        """
+        scenario = self.bpass_params.norm_scenario
+        if scenario == "fixed_nion":
+            return self.substep_normflux(normflux_birth, mean_Z, age_seconds)
+
+        if self.src_mstar is None:
+            raise RuntimeError(
+                "q_ion scenarios need the gridded stellar mass from ionizing_flux "
+                "(not available: either ionizing_flux was not called, or a "
+                "SFR-based 'spice' fstar model is in use)."
+            )
+        # Lifetime-averaged rate over the slice window, memoised so the age
+        # integral runs once per slice (mean_Z and window are constant across
+        # its sub-steps; identical inputs give an identical average).
+        key = (float(mean_Z), float(t_window_seconds))
+        if self._slice_qbar_key != key:
+            t_window_yr = t_window_seconds / c.year2s
+            self._slice_qbar = self.qion_grid.mean_qion(mean_Z, t_window_yr)
+            self._slice_qbar_key = key
+        return self.src_mstar * self._slice_qbar / 1e48
+
 # ---------------------------------------------------------------------------
 # Lightweight metallicity-evolution helper classes (integrated from draft)
 # ---------------------------------------------------------------------------
-
 
 @dataclass
 class CosmologyLite:
     h: float
     Omega_b: float
+    Omega_m: float
     L_box: u.Quantity = 100 * u.Mpc / cu.littleh
 
     H_0: u.Quantity = field(init=False)
@@ -650,7 +829,9 @@ class BPASSYieldTable:
         self.lifetime = (10 ** np.loadtxt(self.bpass_root / "ages.txt") * u.yr).to(u.Myr)
         self.lifetime_truncated = self.lifetime[:n_lifetime_bins]
 
-        self.Z_list, self.t_grid, self.F_table = self._build_table()
+        # build a metals-only and total ejected mass table
+        self.Z_list, self.t_grid, self.F_table = self._build_table("metals")
+        _, _, self.F_return_table = self._build_table("total")
 
     def _load_yields(self, metallicity: float) -> pd.DataFrame:
         i_metal = f"{metallicity:.5f}"
@@ -662,20 +843,27 @@ class BPASSYieldTable:
             names=["log_age", "H_sw", "He_sw", "Z_sw", "E_sw", "E_sn", "H_sn", "He_sn", "Z_sn"],
         )
 
-    def _build_table(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def _build_table(self, channel: str = "metals") -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         Z_list = np.array(sorted(self.metals))
         t_grid = np.linspace(self.t_min_myr, self.t_max_myr, self.n_time_points)
         F_table = np.zeros((len(Z_list), self.n_time_points))
 
         time_vals_myr = self.lifetime_truncated.to_value(u.Myr)
+        time_vals_yr = self.lifetime_truncated.to_value(u.yr)
 
         for z_idx, Z in enumerate(Z_list):
             yields = self._load_yields(Z)
-            stellar = yields["Z_sw"].values[: self.n_lifetime_bins]
-            sn = yields["Z_sn"].values[: self.n_lifetime_bins]
-            total = stellar + sn
+            if channel == "metals":
+                per_bin = (yields["Z_sw"] + yields["Z_sn"]).values[: self.n_lifetime_bins]
+            elif channel == "total":
+                per_bin = (
+                    yields["H_sw"] + yields["He_sw"] + yields["Z_sw"]
+                    + yields["H_sn"] + yields["He_sn"] + yields["Z_sn"]
+                ).values[: self.n_lifetime_bins]
+            else:
+                raise ValueError(f"Unknown yield channel: {channel}")
 
-            cumulative = cumulative_trapezoid(total, time_vals_myr, initial=0)
+            cumulative = cumulative_trapezoid(per_bin, time_vals_yr, initial=0)
             cumulative /= self.M_BPASS
             F_table[z_idx, :] = np.interp(t_grid, time_vals_myr, cumulative)
 
@@ -684,11 +872,38 @@ class BPASSYieldTable:
     def time_index(self, t_myr: float) -> int:
         return int(np.searchsorted(self.t_grid, t_myr).clip(0, len(self.t_grid) - 1))
 
+    def _z_weights(self, metallicity):
+        """Vectorized bracketing indices and log-Z weights, clamped to the Z range."""
+        Z = np.clip(np.asarray(metallicity, dtype=float), self.Z_list[0], self.Z_list[-1])
+        hi = np.searchsorted(self.Z_list, Z).clip(1, len(self.Z_list) - 1)
+        lo = hi - 1
+        w = (np.log10(Z) - np.log10(self.Z_list[lo])) / (
+            np.log10(self.Z_list[hi]) - np.log10(self.Z_list[lo])
+        )
+        return lo, hi, np.clip(w, 0.0, 1.0)
+
     def metal_produced(self, metallicity: np.ndarray, stellar_mass: np.ndarray, t1_idx: int, t2_idx: int) -> np.ndarray:
-        metallicity = np.asarray(metallicity)
-        z_idx = np.searchsorted(self.Z_list, metallicity).clip(0, len(self.Z_list) - 1)
-        fractional_yield = self.F_table[z_idx, t2_idx] - self.F_table[z_idx, t1_idx]
-        return fractional_yield * stellar_mass
+        lo, hi, w = self._z_weights(metallicity)
+        dF_lo = self.F_table[lo, t2_idx] - self.F_table[lo, t1_idx]
+        dF_hi = self.F_table[hi, t2_idx] - self.F_table[hi, t1_idx]
+        return ((1.0 - w) * dF_lo + w * dF_hi) * stellar_mass
+
+    def mass_returned(self, metallicity: np.ndarray, stellar_mass: np.ndarray, t1_idx: int, t2_idx: int) -> np.ndarray:
+        """Total (H + He + Z, winds + SN) mass ejected between the two time
+        indices, log-Z-interpolated between the bracketing BPASS bins."""
+        lo, hi, w = self._z_weights(metallicity)
+        dF_lo = self.F_return_table[lo, t2_idx] - self.F_return_table[lo, t1_idx]
+        dF_hi = self.F_return_table[hi, t2_idx] - self.F_return_table[hi, t1_idx]
+        return ((1.0 - w) * dF_lo + w * dF_hi) * stellar_mass
+
+    def remaining_stellar_fraction(self, metallicity: float, t_myr: float) -> float:
+        """Fraction of the initial stellar mass still locked in stars at population
+        age t_myr, i.e. 1 - cumulative BPASS total (wind+SN) mass-return fraction,
+        log-Z-interpolated between the two bracketing BPASS bins."""
+        lo, hi, w = self._z_weights(metallicity)
+        t_idx = self.time_index(t_myr)
+        F = (1.0 - w) * self.F_return_table[lo, t_idx] + w * self.F_return_table[hi, t_idx]
+        return float(1.0 - F)
 
 
 class MetallicityEvolution:
@@ -723,11 +938,12 @@ class MetallicityEvolution:
 
     def load_halo_txt(self, i: int) -> np.ndarray:
         cols = self.HALO_TXT_COLUMNS
-        return np.loadtxt(
+        df = pd.read_csv(
             self.paths.halo_file(i),
-            dtype={"names": cols, "formats": ["f8"] * len(cols)},
+            sep=r"\s+", comment="#", header=None, names=cols, dtype="float64",
         )
-
+        return df.to_records(index=False)   # structured array, same field names
+    
     def load_overdensity(self, i: int) -> np.ndarray:
         return np.load(self.paths.overdensity_file(i))
 
@@ -766,9 +982,14 @@ class MetallicityEvolution:
 
     def evolve(self, halos: np.ndarray, i: int, t1_idx: int, t2_idx: int, save: bool = True) -> np.ndarray:
         out = halos.copy()
+        # Metals deposited into the gas: metals-only (Z winds + SN) channel.
         delta_Z = self.bpass.metal_produced(out["f_Z_halo"], out["M_star"], t1_idx=t1_idx, t2_idx=t2_idx)
+        # Mass leaving the stars: FULL H + He + Z (winds + SN) ejecta. The
+        # returned H/He rejoins gas whose mass is already set by the
+        # overdensity grid, so only delta_Z enters the metal budget.
+        delta_ej = self.bpass.mass_returned(out["f_Z_halo"], out["M_star"], t1_idx=t1_idx, t2_idx=t2_idx)
         out["M_delta_Z"] = delta_Z
-        out["M_star"] -= delta_Z
+        out["M_star"] -= delta_ej
 
         if save:
             np.save(self.paths.metallicity_file(i), out)
@@ -778,7 +999,7 @@ class MetallicityEvolution:
         ngrid = overdensity.shape[0]
         cell_size = self.cosmology.L_box / ngrid
         cell_volume = cell_size ** 3
-        M_b = self.cosmology.rho_c * self.cosmology.Omega_b * overdensity * cell_volume
+        M_b = self.cosmology.rho_c * (self.cosmology.Omega_b / self.cosmology.Omega_m) * overdensity * cell_volume
         return M_b.value.flatten()
 
     def accumulate_metals(self, evolved: np.ndarray) -> None:
@@ -950,7 +1171,10 @@ def run_metallicity_from_c2ray(
     bpass_root: Path,
     N_cell: int = 100,
 ):
-    cosmo = CosmologyLite(h=c2ray.cosmology.h, Omega_b=c2ray.cosmology.Ob0, L_box=c2ray.boxsize * u.Mpc / cu.littleh)
+    cosmo = CosmologyLite(h=c2ray.cosmology.h,
+                          Omega_b=c2ray.cosmology.Ob0,
+                          Omega_m=c2ray.cosmology.Om0,
+                          L_box=c2ray.boxsize * u.Mpc / cu.littleh)
     paths = _make_metallicity_paths(sim_root, sim_subdir)
     bpass = BPASSYieldTable(bpass_root)
     sim = MetallicityEvolution(cosmology=cosmo, paths=paths, bpass=bpass, N_cell=N_cell)

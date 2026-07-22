@@ -1,0 +1,74 @@
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 15, in <module>
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 15, in <module>
+    sim = pc2r.C2Ray_fstar(paramfile=paramfile)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_fstar.py", line 40, in __init__
+    super().__init__(paramfile)
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 15, in <module>
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 15, in <module>
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_base.py", line 123, in __init__
+    sim = pc2r.C2Ray_fstar(paramfile=paramfile)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_fstar.py", line 40, in __init__
+    sim = pc2r.C2Ray_fstar(paramfile=paramfile)
+    self._read_paramfile(paramfile)
+    sim = pc2r.C2Ray_fstar(paramfile=paramfile)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_fstar.py", line 40, in __init__
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_base.py", line 904, in _read_paramfile
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_fstar.py", line 40, in __init__
+    super().__init__(paramfile)
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_base.py", line 123, in __init__
+    super().__init__(paramfile)
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_base.py", line 123, in __init__
+    super().__init__(paramfile)
+    self.sources_params = SourcesParameters.from_dict(ld["Sources"])
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_base.py", line 123, in __init__
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/pyC2Ray/pyc2ray/parameters.py", line 44, in from_dict
+    self._read_paramfile(paramfile)
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_base.py", line 904, in _read_paramfile
+    self._read_paramfile(paramfile)
+    self._read_paramfile(paramfile)
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_base.py", line 904, in _read_paramfile
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_base.py", line 904, in _read_paramfile
+    return cls(**{k: v for k, v in yml.items() if k in keys})
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 30, in __init__
+  File "/users/cprior/pyC2Ray/pyc2ray/parameters.py", line 320, in __post_init__
+    self.sources_params = SourcesParameters.from_dict(ld["Sources"])
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/pyC2Ray/pyc2ray/parameters.py", line 44, in from_dict
+    raise ValueError(
+ValueError: fesc_model power_obs not implemented. Choose from 'constant', 'power' or 'Gelli2024'.
+    self.sources_params = SourcesParameters.from_dict(ld["Sources"])
+    self.sources_params = SourcesParameters.from_dict(ld["Sources"])
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/pyC2Ray/pyc2ray/parameters.py", line 44, in from_dict
+  File "/users/cprior/pyC2Ray/pyc2ray/parameters.py", line 44, in from_dict
+    return cls(**{k: v for k, v in yml.items() if k in keys})
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 30, in __init__
+  File "/users/cprior/pyC2Ray/pyc2ray/parameters.py", line 320, in __post_init__
+    return cls(**{k: v for k, v in yml.items() if k in keys})
+    return cls(**{k: v for k, v in yml.items() if k in keys})
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 30, in __init__
+  File "/users/cprior/pyC2Ray/pyc2ray/parameters.py", line 320, in __post_init__
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 30, in __init__
+  File "/users/cprior/pyC2Ray/pyc2ray/parameters.py", line 320, in __post_init__
+    raise ValueError(
+ValueError: fesc_model power_obs not implemented. Choose from 'constant', 'power' or 'Gelli2024'.
+    raise ValueError(
+ValueError: fesc_model power_obs not implemented. Choose from 'constant', 'power' or 'Gelli2024'.
+    raise ValueError(
+ValueError: fesc_model power_obs not implemented. Choose from 'constant', 'power' or 'Gelli2024'.
+srun: error: nid006544: tasks 0-3: Exited with exit code 1
+srun: Terminating StepId=3719192.0

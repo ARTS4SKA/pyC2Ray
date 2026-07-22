@@ -1,0 +1,93 @@
+WARNING: No heating rates
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 53, in <module>
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 53, in <module>
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 53, in <module>
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 53, in <module>
+    srcpos, normflux = sim.ionizing_flux(file='CDM_200Mpc_2048.%05d.fof.txt' %idx_zred[k], z=zi, dt=dt) #, save_Mstar=sim.results_basename+'/sources')
+    srcpos, normflux = sim.ionizing_flux(file='CDM_200Mpc_2048.%05d.fof.txt' %idx_zred[k], z=zi, dt=dt) #, save_Mstar=sim.results_basename+'/sources')
+    srcpos, normflux = sim.ionizing_flux(file='CDM_200Mpc_2048.%05d.fof.txt' %idx_zred[k], z=zi, dt=dt) #, save_Mstar=sim.results_basename+'/sources')
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_fstar.py", line 71, in ionizing_flux
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_fstar.py", line 71, in ionizing_flux
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_fstar.py", line 71, in ionizing_flux
+    srcpos, normflux = sim.ionizing_flux(file='CDM_200Mpc_2048.%05d.fof.txt' %idx_zred[k], z=zi, dt=dt) #, save_Mstar=sim.results_basename+'/sources')
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_fstar.py", line 71, in ionizing_flux
+    srcpos_mpc, srcmass_msun = self.read_haloes(
+                               ^^^^^^^^^^^^^^^^^
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_fstar.py", line 267, in read_haloes
+    srcpos_mpc, srcmass_msun = self.read_haloes(
+                               ^^^^^^^^^^^^^^^^^
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_fstar.py", line 267, in read_haloes
+    srcpos_mpc, srcmass_msun = self.read_haloes(
+                               ^^^^^^^^^^^^^^^^^
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_fstar.py", line 267, in read_haloes
+    srcpos_mpc, srcmass_msun = self.read_haloes(
+                               ^^^^^^^^^^^^^^^^^
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_fstar.py", line 267, in read_haloes
+    hl = np.loadtxt(halo_file)
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/numpy/lib/_npyio_impl.py", line 1384, in loadtxt
+    hl = np.loadtxt(halo_file)
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/numpy/lib/_npyio_impl.py", line 1384, in loadtxt
+    hl = np.loadtxt(halo_file)
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/numpy/lib/_npyio_impl.py", line 1384, in loadtxt
+    hl = np.loadtxt(halo_file)
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/numpy/lib/_npyio_impl.py", line 1384, in loadtxt
+    arr = _read(fname, dtype=dtype, comment=comment, delimiter=delimiter,
+    arr = _read(fname, dtype=dtype, comment=comment, delimiter=delimiter,
+    arr = _read(fname, dtype=dtype, comment=comment, delimiter=delimiter,
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/numpy/lib/_npyio_impl.py", line 1011, in _read
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/numpy/lib/_npyio_impl.py", line 1011, in _read
+    arr = _read(fname, dtype=dtype, comment=comment, delimiter=delimiter,
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/numpy/lib/_npyio_impl.py", line 1011, in _read
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/numpy/lib/_npyio_impl.py", line 1011, in _read
+    fh = np.lib._datasource.open(fname, 'rt', encoding=encoding)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/numpy/lib/_datasource.py", line 192, in open
+    fh = np.lib._datasource.open(fname, 'rt', encoding=encoding)
+    fh = np.lib._datasource.open(fname, 'rt', encoding=encoding)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/numpy/lib/_datasource.py", line 192, in open
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/numpy/lib/_datasource.py", line 192, in open
+    fh = np.lib._datasource.open(fname, 'rt', encoding=encoding)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/numpy/lib/_datasource.py", line 192, in open
+    return ds.open(path, mode, encoding=encoding, newline=newline)
+    return ds.open(path, mode, encoding=encoding, newline=newline)
+    return ds.open(path, mode, encoding=encoding, newline=newline)
+    return ds.open(path, mode, encoding=encoding, newline=newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/numpy/lib/_datasource.py", line 529, in open
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/numpy/lib/_datasource.py", line 529, in open
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/numpy/lib/_datasource.py", line 529, in open
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/venvs/pyc2ray-env/lib/python3.12/site-packages/numpy/lib/_datasource.py", line 529, in open
+    raise FileNotFoundError(f"{path} not found.")
+FileNotFoundError: /capstor/scratch/cscs/cprior/CDM_100Mpc_2048/sources/CDM_200Mpc_2048.00005.fof.txt not found.
+    raise FileNotFoundError(f"{path} not found.")
+    raise FileNotFoundError(f"{path} not found.")
+FileNotFoundError: /capstor/scratch/cscs/cprior/CDM_100Mpc_2048/sources/CDM_200Mpc_2048.00005.fof.txt not found.
+    raise FileNotFoundError(f"{path} not found.")
+FileNotFoundError: /capstor/scratch/cscs/cprior/CDM_100Mpc_2048/sources/CDM_200Mpc_2048.00005.fof.txt not found.
+FileNotFoundError: /capstor/scratch/cscs/cprior/CDM_100Mpc_2048/sources/CDM_200Mpc_2048.00005.fof.txt not found.
+srun: error: nid006552: tasks 0-2: Exited with exit code 1
+srun: Terminating StepId=3719801.0
+[2026-06-22T11:30:17.145] error: *** STEP 3719801.0 ON nid006552 CANCELLED AT 2026-06-22T11:30:17 DUE TO TASK FAILURE ***
+srun: error: nid006552: task 3: Exited with exit code 1

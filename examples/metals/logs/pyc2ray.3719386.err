@@ -1,0 +1,16 @@
+Traceback (most recent call last):
+  File "/users/cprior/pyC2Ray/examples/metals/run_test.py", line 15, in <module>
+    sim = pc2r.C2Ray_fstar(paramfile=paramfile)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_fstar.py", line 40, in __init__
+    super().__init__(paramfile)
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_base.py", line 149, in __init__
+    self._output_init()
+  File "/users/cprior/pyC2Ray/pyc2ray/c2ray_base.py", line 794, in _output_init
+    self.results_basename.mkdir(parents=True, exist_ok=True)
+  File "/user-environment/linux-sles15-neoverse_v2/gcc-13.3.0/python-3.12.5-tiwaj3tabjlxhozzutmhoxawzy6pmm5s/lib/python3.12/pathlib.py", line 1311, in mkdir
+    os.mkdir(self, mode)
+PermissionError: [Errno 13] Permission denied: '/capstor/scratch/cscs/mibianco/results_c2ray/paper_stoch/200Mpc_Nion_4_Source1_SinkA_obsfstar5_obsfesc3'
+srun: Job step aborted: Waiting up to 32 seconds for job step to finish.
+[2026-06-22T11:03:03.629] error: *** STEP 3719386.0 ON nid006545 CANCELLED AT 2026-06-22T11:03:03 DUE to SIGNAL Terminated ***
+[2026-06-22T11:03:03.634] error: *** JOB 3719386 ON nid006545 CANCELLED AT 2026-06-22T11:03:03 DUE to SIGNAL Terminated ***
