@@ -60,10 +60,6 @@ class C2Ray_Metals(C2Ray):
         # ionizing_flux; consumed by the q_ion normalisation scenarios).
         self.src_mstar: np.ndarray | None = None
 
-        # Memo key for the per-slice lifetime-averaged q_ion (computed once per
-        # slice: mean_Z and window are constant across its sub-steps).
-        self._slice_qbar_key: tuple[float, float] | None = None
-
 
 
     # =====================================================================================================
@@ -707,30 +703,35 @@ class C2Ray_Metals(C2Ray):
         return normflux_birth * frac
 
     def scenario_substep_normflux(
-        self, normflux_birth, mean_Z: float, age_seconds: float, t_window_seconds: float
+        self, normflux_birth, mean_Z: float, age_lo_seconds: float, age_hi_seconds: float
     ):
         """Sub-step source amplitudes under the configured normalisation scenario
-        (BPASSSource.norm_scenario in the parameter file).
+        (BPASSSource.norm_scenario in the parameter file). The burst is born at
+        slice start (age 0), so sub-step t spans population ages
+        [age_lo_seconds, age_hi_seconds] = [t*dt, (t+1)*dt].
 
-        'fixed_nion' : legacy per-sub-step behaviour — Nion-based birth flux
-                       scaled by the BPASS remaining-stellar-mass fraction at the
-                       sub-step age (uses age_seconds).
+        'fixed_nion' : legacy behaviour — Nion-based birth flux scaled by the
+                       BPASS remaining-stellar-mass fraction at the sub-step
+                       mid-point age.
         'bpass_qion' / 'bb_qion' : amplitude rebuilt from the BPASS ionizing
-                       efficiency, held CONSTANT across the slice at the
-                       lifetime-averaged rate
+                       efficiency, interval-averaged over THIS sub-step's age
+                       window,
 
-                           normflux = M_star * <q_ion>_Z / S_star_ref,
-                           <q_ion>_Z = (1/T) integral_0^T q_ion(Z, age) d(age)
+                           normflux = M_star * <q_ion>_[a,b] / S_star_ref,
+                           <q_ion>_[a,b] = 1/(b-a) integral_a^b q_ion(Z, age) d(age)
 
-                       over the slice window T = t_window_seconds (per-slice
-                       average, not per-sub-step sampling — see supervisor note).
-                       <q_ion> already contains the population fading, so NO
-                       additional remaining-mass factor is applied (that would
-                       double-count the mass loss). age_seconds is unused here.
+                       with [a, b] = [age_lo, age_hi]. This resolves the steep
+                       decline of ionizing output with age across the sub-steps
+                       while keeping normflux a RATE: the 1/(b-a) is essential —
+                       without it normflux would be a photon count and evolve3D's
+                       own *dt (in the chemistry ODE) would double-count it.
+                       <q_ion> already contains the population fading, so NO extra
+                       remaining-mass factor is applied.
         """
         scenario = self.bpass_params.norm_scenario
         if scenario == "fixed_nion":
-            return self.substep_normflux(normflux_birth, mean_Z, age_seconds)
+            age_mid = 0.5 * (age_lo_seconds + age_hi_seconds)
+            return self.substep_normflux(normflux_birth, mean_Z, age_mid)
 
         if self.src_mstar is None:
             raise RuntimeError(
@@ -738,15 +739,10 @@ class C2Ray_Metals(C2Ray):
                 "(not available: either ionizing_flux was not called, or a "
                 "SFR-based 'spice' fstar model is in use)."
             )
-        # Lifetime-averaged rate over the slice window, memoised so the age
-        # integral runs once per slice (mean_Z and window are constant across
-        # its sub-steps; identical inputs give an identical average).
-        key = (float(mean_Z), float(t_window_seconds))
-        if self._slice_qbar_key != key:
-            t_window_yr = t_window_seconds / c.year2s
-            self._slice_qbar = self.qion_grid.mean_qion(mean_Z, t_window_yr)
-            self._slice_qbar_key = key
-        return self.src_mstar * self._slice_qbar / 1e48
+        qbar = self.qion_grid.mean_qion_interval(
+            mean_Z, age_lo_seconds / c.year2s, age_hi_seconds / c.year2s
+        )
+        return self.src_mstar * qbar / 1e48
 
 # ---------------------------------------------------------------------------
 # Lightweight metallicity-evolution helper classes (integrated from draft)

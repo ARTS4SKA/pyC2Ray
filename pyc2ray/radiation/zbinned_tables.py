@@ -351,18 +351,29 @@ class BPASSQionGrid:
         q_zhi = (1.0 - wa) * self.qion[zi_hi, ai_lo] + wa * self.qion[zi_hi, ai_hi]
         return float((1.0 - wz) * q_zlo + wz * q_zhi)
 
-    def mean_qion(self, Z, t_window_yr, n_sample=256):
-        """Lifetime-averaged ionizing efficiency over age in [0, t_window_yr]:
+    def mean_qion_interval(self, Z, t_lo_yr, t_hi_yr, n_sample=256):
+        """Interval-averaged ionizing efficiency over age in [t_lo_yr, t_hi_yr]:
 
-            <q_ion>_Z = (1 / T) * integral_0^T q_ion(Z, age) d(age)   [photons/s/Msun]
+            <q_ion> = 1/(t_hi - t_lo) * integral_{t_lo}^{t_hi} q_ion(Z, age) d(age)
+                                                                    [photons/s/Msun]
 
-        This is the per-slice average that replaces per-sub-step sampling: the
-        population is born at age 0 and emits over the whole slice window T, so
-        the constant rate that reproduces the correct total photon budget is the
-        time-average of q_ion, not its (peak) value at age 0. q_ion is clamped
-        below the youngest tabulated age (1 Myr), so the [0, 1 Myr] portion uses
-        the 1 Myr value.
+        This is the per-sub-step amplitude: sub-step t spans population ages
+        [t*dt, (t+1)*dt], so this returns the average RATE over that window.
+        Dividing by the window width (t_hi - t_lo) is essential -- it keeps the
+        result a rate (photons/s/Msun), NOT a photon count, so evolve3D's own
+        multiplication by dt in the chemistry ODE is not double-counted. q_ion is
+        clamped below the youngest tabulated age (1 Myr).
         """
-        ages = np.linspace(0.0, float(t_window_yr), int(n_sample))
+        t_lo, t_hi = float(t_lo_yr), float(t_hi_yr)
+        if t_hi <= t_lo:
+            return self.qion_at(Z, t_lo)
+        ages = np.linspace(t_lo, t_hi, int(n_sample))
         q = np.array([self.qion_at(Z, a) for a in ages])
-        return float(scipy.integrate.trapezoid(q, ages) / float(t_window_yr))
+        return float(scipy.integrate.trapezoid(q, ages) / (t_hi - t_lo))
+
+    def mean_qion(self, Z, t_window_yr, n_sample=256):
+        """Whole-slice (0 -> t_window_yr) lifetime average -- a convenience
+        wrapper around mean_qion_interval. Kept for the per-slice approach and
+        its tests; the per-sub-step driver path uses mean_qion_interval directly.
+        """
+        return self.mean_qion_interval(Z, 0.0, t_window_yr, n_sample=n_sample)

@@ -142,6 +142,71 @@ def test_mean_qion_positive_and_finite(qion_grid):
 
 
 # ---------------------------------------------------------------------------
+# mean_qion_interval: per-sub-step interval average
+# ---------------------------------------------------------------------------
+
+def test_interval_full_slice_matches_mean_qion(qion_grid):
+    """The [0, T] interval average equals the whole-slice mean_qion wrapper."""
+    Z = qion_grid.Z_bin_centers[0]
+    T = 1e7
+    np.testing.assert_allclose(
+        qion_grid.mean_qion_interval(Z, 0.0, T),
+        qion_grid.mean_qion(Z, T),
+        rtol=1e-12,
+    )
+
+
+def test_interval_average_is_bounded(qion_grid):
+    """An interval average lies between the efficiency at its two endpoints."""
+    Z = qion_grid.Z_bin_centers[0]
+    a, b = 2e6, 3e6
+    qbar = qion_grid.mean_qion_interval(Z, a, b)
+    q_a = qion_grid.qion_at(Z, a)
+    q_b = qion_grid.qion_at(Z, b)
+    assert min(q_a, q_b) <= qbar <= max(q_a, q_b)
+
+
+def test_interval_average_is_a_rate_not_a_count(qion_grid):
+    """Key units guard: the interval average must be independent of the window
+    WIDTH for a locally-constant q_ion (a rate), unlike a bare integral (a count
+    that scales with width). Two nested windows starting at the same age, over a
+    region where q_ion barely changes, give nearly the same average; their bare
+    integrals would differ by the width ratio."""
+    Z = qion_grid.Z_bin_centers[0]
+    # a region well inside the grid where q_ion varies slowly
+    q1 = qion_grid.mean_qion_interval(Z, 5e6, 6e6)
+    q2 = qion_grid.mean_qion_interval(Z, 5e6, 5.5e6)
+    # both are rates ~ q_ion near 5-6 Myr, so within a modest tolerance
+    assert np.isclose(q1, q2, rtol=0.5)
+    # and both are the same order as the instantaneous value (a rate)
+    assert 0.1 < q1 / qion_grid.qion_at(Z, 5.5e6) < 10.0
+
+
+def test_substep_intervals_preserve_slice_budget(qion_grid):
+    """The whole point of the earlier per-slice approach — total photon budget —
+    is preserved by per-sub-step interval averaging: summing each sub-step's
+    (interval mean x sub-step width) reproduces the whole-slice (mean x T).
+
+    This is what makes the per-sub-step change safe: it only redistributes
+    emission in time within the slice, it does not change the total.
+    """
+    Z = qion_grid.Z_bin_centers[0]
+    T, n = 1e7, 10
+    dt = T / n
+    total_substep = sum(
+        qion_grid.mean_qion_interval(Z, t * dt, (t + 1) * dt, n_sample=512) * dt
+        for t in range(n)
+    )
+    total_slice = qion_grid.mean_qion(Z, T, n_sample=4096) * T
+    np.testing.assert_allclose(total_substep, total_slice, rtol=1e-4)
+
+
+def test_interval_zero_width_returns_instantaneous(qion_grid):
+    Z = qion_grid.Z_bin_centers[0]
+    assert qion_grid.mean_qion_interval(Z, 4e6, 4e6) == qion_grid.qion_at(Z, 4e6)
+
+
+# ---------------------------------------------------------------------------
 # fit_blackbody_teff
 # ---------------------------------------------------------------------------
 
