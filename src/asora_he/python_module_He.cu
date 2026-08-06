@@ -60,12 +60,14 @@ static PyObject *asora_do_all_sources(PyObject *self, PyObject *args) {
     if (!PyArray_Check(coldensh_out) || PyArray_TYPE(coldensh_out) != NPY_DOUBLE) {
         PyErr_SetString(PyExc_TypeError, "coldensh_out must be Array of type double");
         return NULL;
-    } else if (!PyArray_Check(coldenshei_out) ||
-               PyArray_TYPE(coldenshei_out) != NPY_DOUBLE) {
+    } else if (
+        !PyArray_Check(coldenshei_out) || PyArray_TYPE(coldenshei_out) != NPY_DOUBLE
+    ) {
         PyErr_SetString(PyExc_TypeError, "coldenshei_out must be Array of type double");
         return NULL;
-    } else if (!PyArray_Check(coldensheii_out) ||
-               PyArray_TYPE(coldensheii_out) != NPY_DOUBLE) {
+    } else if (
+        !PyArray_Check(coldensheii_out) || PyArray_TYPE(coldensheii_out) != NPY_DOUBLE
+    ) {
         PyErr_SetString(
             PyExc_TypeError, "coldensheii_out must be Array of type double"
         );

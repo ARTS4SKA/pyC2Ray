@@ -6,12 +6,12 @@
 from .load_extensions import libasora
 
 __all__ = [
+    "device_close",
+    "device_init",
     "is_device_init",
     "is_periodic_mode_active",
-    "device_init",
-    "device_close",
-    "prepare_grid_buffers",
     "photo_table_to_device",
+    "prepare_grid_buffers",
 ]
 
 # This flag indicates whether GPU memory has been correctly allocated before calling any methods.

@@ -5,7 +5,6 @@ for all grouping algorithms.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List
 
 from pyc2ray.domain.cost_model import CostModel
 from pyc2ray.domain.sources import SourceGroup
@@ -24,5 +23,5 @@ class SourceGrouping(ABC):
     @abstractmethod
     def build_groups(
         self, sources, grid, grouping_params: GroupingParams, cost_model: CostModel
-    ) -> List[SourceGroup]:
+    ) -> list[SourceGroup]:
         pass

@@ -3,7 +3,7 @@ build-backend = "mesonpy"
 requires = [
   "charset-normalizer",
   "meson-python",
-  "meson",
+  "meson==1.11.2",
   "numpy>=2",
 ]
 
@@ -37,10 +37,10 @@ dependencies = [
 [project.optional-dependencies]
 lint = [
   "pre-commit",
-  "ruff",
-  "clang-format",
-  "mypy",
-  "meson",
+  "ruff==0.16.1",
+  "clang-format==22.1.5",
+  "mypy==2.3.0",
+  "meson==1.11.2",
   "types-PyYAML",
 ]
 test = [
@@ -49,11 +49,16 @@ test = [
 ]
 dev = ["pyc2ray[lint,test]"]
 
-[tool.pytest.ini_options]
-testpaths = "tests"
+[tool.pytest]
+testpaths = ["tests"]
+addopts = ["--benchmark-skip"]
 
 [tool.meson-python.args]
 setup = ["-Dbuildtype=release"]
 
 [tool.mypy]
 ignore_missing_imports = true
+
+[tool.ruff.lint]
+ignore = ["UP031", "PYI019"]
+extend-select = ["F403"]

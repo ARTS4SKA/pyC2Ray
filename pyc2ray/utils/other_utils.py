@@ -16,7 +16,7 @@ def get_extension_in_folder(path):
         f = arr[1]
         ext = f[f.rfind(".") :]
     else:
-        ValueError("Check the output directory, it maybe empty or do not exist")
+        raise ValueError("Check the output directory, it maybe empty or do not exist")
     return ext
 
 
@@ -29,7 +29,7 @@ def get_redshifts_from_output(output_dir, z_low=None, z_high=None, bracket=False
         try:
             z = float(f.split("z")[-1][:-4])
             redshifts.append(z)
-        except Exception:
+        except Exception:  # noqa: S110, BLE001
             pass
 
     return np.sort(np.array(redshifts))[::-1]
@@ -110,7 +110,7 @@ def get_source_redshifts(source_dir, z_low=None, z_high=None, bracket=False):
         try:
             z = float(f[f.rfind("/") + 1 : f.rfind("-coarsest_wsubgrid_sources")])
             redshifts.append(z)
-        except Exception:
+        except Exception:  # noqa: S110, BLE001
             pass
 
     return _get_redshifts_in_range(redshifts, z_low, z_high, bracket)
@@ -124,13 +124,17 @@ def get_same_values_in_array(arr1, arr2):
     return interp_arr
 
 
+class RedshiftRangeError(Exception):
+    """Custom exception for redshift range errors."""
+
+
 def _get_redshifts_in_range(redshifts, z_low, z_high, bracket):
     """Filter out redshifts outside of range. For internal use."""
     redshifts = np.array(redshifts)
     redshifts.sort()
     if bracket:
         if z_low < redshifts.min() or z_high > redshifts.max():
-            raise Exception("No redshifts to bracket range.")
+            raise RedshiftRangeError("No redshifts to bracket range.")
         z_low = redshifts[redshifts <= z_low][-1]
         z_high = redshifts[redshifts >= z_high][0]
     if z_low is None:

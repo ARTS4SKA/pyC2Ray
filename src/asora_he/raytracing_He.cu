@@ -437,11 +437,10 @@ __global__ void evolve0D_gpu(
                                         // total optical depth
                                         tau_in_tot = coldens_in_hi * sig_hi[nf];
                                         tau_out_tot = tau_out_hi;
-                                    } else if ((nf >= NumBin1) &&
-                                               (nf <
-                                                NumBin1 +
-                                                    NumBin2))  // second frequency bin
-                                                               // ionizes HI and HeI
+                                    } else if (
+                                        (nf >= NumBin1) && (nf < NumBin1 + NumBin2)
+                                    )  // second frequency bin
+                                       // ionizes HI and HeI
                                     {
                                         // Compute optical depth
                                         tau_out_hi = cdo_hi * sig_hi[nf];
@@ -451,11 +450,12 @@ __global__ void evolve0D_gpu(
                                         tau_in_tot = coldens_in_hi * sig_hi[nf] +
                                                      coldens_in_hei * sig_hei[nf];
                                         tau_out_tot = tau_out_hi + tau_out_hei;
-                                    } else if ((nf >= NumBin1 + NumBin2) &&
-                                               (nf < NumBin1 + NumBin2 +
-                                                         NumBin3))  // third frequency
-                                                                    // bin ionizes HI,
-                                                                    // HeI and HeII
+                                    } else if (
+                                        (nf >= NumBin1 + NumBin2) &&
+                                        (nf < NumBin1 + NumBin2 + NumBin3)
+                                    )  // third frequency
+                                       // bin ionizes HI,
+                                       // HeI and HeII
                                     {
                                         // Compute optical depth
                                         tau_out_hi = cdo_hi * sig_hi[nf];

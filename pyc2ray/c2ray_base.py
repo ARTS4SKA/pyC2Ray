@@ -905,7 +905,6 @@ This corresponds to %.3f grid cells.
 
     def _sources_init(self) -> None:
         """Initialize settings to read source files"""
-        pass
 
     # =====================================================================================================
     # OTHER PRIVATE METHODS

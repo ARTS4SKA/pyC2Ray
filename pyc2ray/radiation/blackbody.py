@@ -1,3 +1,4 @@
+import itertools
 from abc import ABC, abstractmethod
 from functools import partial
 from typing import TypeVar
@@ -227,7 +228,7 @@ class YggdrasilModel(BlackBodyBase):
     def make_photo_table(
         self, tau: FloatArray, freq_min: float, freq_max: float, S_star_ref: float
     ) -> tuple[FloatArray, FloatArray]:
-        sed, freqs, lamb = self.SED(f1=freq_min, f2=freq_max)
+        sed, freqs, _ = self.SED(f1=freq_min, f2=freq_max)
         norm_sed = self.normalize_SED(sed, freqs, S_star_ref)
 
         table_thin = np.array(
@@ -387,7 +388,7 @@ class BlackBodySource_Multifreq(BlackBodyBase):
         table_thin = np.zeros((tau.size, freqs.size))
         table_thick = np.zeros((tau.size, freqs.size))
 
-        for i_f, (f_min, f_max) in enumerate(zip(freqs[:-1], freqs[1:])):
+        for i_f, (f_min, f_max) in enumerate(itertools.pairwise(freqs)):
             table_thin[:, i_f] = quad_vec(integrand_thin, f_min, f_max, epsrel=1e-12)[0]
             table_thick[:, i_f] = quad_vec(integrand_thick, f_min, f_max, epsrel=1e-12)[
                 0
@@ -416,7 +417,7 @@ class BlackBodySource_Multifreq(BlackBodyBase):
         table_thin = np.zeros((tau.size, freqs.size))
         table_thick = np.zeros((tau.size, freqs.size))
 
-        for i_f, (f_min, f_max) in enumerate(zip(freqs[:-1], freqs[1:])):
+        for i_f, (f_min, f_max) in enumerate(itertools.pairwise(freqs)):
             table_thin[:, i_f] = quad_vec(integrand_thin, f_min, f_max, epsrel=1e-12)[0]
             table_thick[:, i_f] = quad_vec(integrand_thick, f_min, f_max, epsrel=1e-12)[
                 0

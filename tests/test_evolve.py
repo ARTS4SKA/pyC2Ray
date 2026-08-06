@@ -31,11 +31,7 @@ def mock_asora():
         patch("pyc2ray.evolve.is_device_init", return_value=True),
         patch("pyc2ray.evolve.libasora") as mock,
     ):
-        mock.configure_mock(
-            **{
-                "chemistry_global_pass": Mock(return_value=1),
-            }
-        )
+        mock.configure_mock(chemistry_global_pass=Mock(return_value=1))
         yield mock
 
 
@@ -51,11 +47,7 @@ def mock_asora_domain_decomposition():
         patch("pyc2ray.evolve.prepare_grid_buffers"),
         patch("pyc2ray.evolve.libasora") as mock,
     ):
-        mock.configure_mock(
-            **{
-                "chemistry_global_pass": Mock(return_value=1),
-            }
-        )
+        mock.configure_mock(chemistry_global_pass=Mock(return_value=1))
         yield mock
 
 

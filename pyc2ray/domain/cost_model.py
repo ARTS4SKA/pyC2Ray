@@ -40,7 +40,6 @@ class CostModel(ABC):
         -------
         The computed memory and computational costs of processing the group.
         """
-        pass
 
 
 class pyC2RayCostModel(CostModel):

@@ -248,7 +248,7 @@ def friedrich(
     # column density of half a cell
     NHI = n_gas * (1.0 - xHII_old) / (dr / 2)
     # FIXME: xHeI_old is undefined, this is a bug
-    NHeI = n_gas * xHeII_old / (dr / 2)  # noqa: F821
+    NHeI = n_gas * xHeII_old / (dr / 2)
     NHeII = n_gas * xHII_old / (dr / 2)
 
     # opt depth of HI at HeI ion threshold

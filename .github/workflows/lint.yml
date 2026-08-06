@@ -5,13 +5,13 @@ on:
     branches:
       - main
     paths:
-      - .github/workflows/lint.yml
-      - pyproject.toml
-      - pyc2ray/**.py
-      - tests/**.py
-      - src/**.f90
-      - src/**.cu
-      - src/**.cuh
+      - '.github/workflows/lint.yml'
+      - 'pyproject.toml'
+      - 'pyc2ray/**.py'
+      - 'tests/**.py'
+      - 'src/**.f90'
+      - 'src/**.cu'
+      - 'src/**.cuh'
       - '**/meson.build'
 
 permissions:
@@ -55,11 +55,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Install clang-format
-        run: pip install "clang-format>=22"
+        run: pip install clang-format==22.1.5
       - name: Check C++ and CUDA code style
-        run: >-
-          find src/ -regex '.*\.\(cu\|cuh\|cpp\|h\)' -exec clang-format -n
-          -Werror {} \;
+        run: find src/ -regex '.*\.\(cu\|cuh\|cpp\|h\)' | xargs clang-format -n -Werror
 
   lintmeson:
     name: Lint meson
@@ -69,4 +67,4 @@ jobs:
       - name: Install meson
         run: pip install meson
       - name: Check meson code style
-        run: 'find . -name meson.build -exec meson format -q {} \;'
+        run: find . -name meson.build | xargs meson format -q

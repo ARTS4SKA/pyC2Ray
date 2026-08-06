@@ -4,12 +4,8 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 
+from pyc2ray.lib import libasoratest
 from pyc2ray.load_extensions import libasora
-
-try:
-    import pyc2ray.lib.libasoratest as libasoratest
-except ImportError:
-    libasoratest = None
 
 
 @pytest.mark.skipif(libasora is None, reason="libasora.so missing, skipping tests")
@@ -85,7 +81,7 @@ class TestLibasoraTest:
             q_tot += 4 * q**2 + 2
             assert libasoratest.cells_to_shell(q) == q_tot
 
-    @pytest.mark.parametrize("q", range(0, Q_MAX))
+    @pytest.mark.parametrize("q", range(Q_MAX))
     def test_shell_mapping(self, q: int) -> None:
         cells: set[tuple[int, int, int]] = set()
         q_max = 4 * q**2 + 2 if q > 0 else 1
