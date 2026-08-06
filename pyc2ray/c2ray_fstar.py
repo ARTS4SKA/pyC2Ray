@@ -139,7 +139,6 @@ class C2Ray_fstar(C2Ray):
             # no bursty model
             nr_switchon = srcmass_msun.size
             self.perc_switchon = 100.0
-            pass
 
         # if there are sources shitched on then calculate flux
         if nr_switchon > 0:

@@ -116,7 +116,7 @@ for ii, Mi in enumerate(Mh_plot):
         out_old["z"],
         out_old["Ndot"][:, np.abs(out_old["Mh"].value - Mi).argmin()],
         c=f"C{ii}",
-        label=f"$M_\mathrm{{h}}=10^{{{np.log10(Mi):.0f}}} M_\odot$",
+        label=rf"$M_\mathrm{{h}}=10^{{{np.log10(Mi):.0f}}} M_\odot$",
     )
     axs[0].semilogy(
         out_exp["z"],
@@ -132,7 +132,7 @@ axs[1].plot(
 for ax in axs:
     ax.legend()
     ax.set_xlabel("$z$", fontsize=15)
-axs[0].set_ylabel("$\dot{N}_\gamma$ [1/s]", fontsize=15)
-axs[1].set_ylabel("$t_\mathrm{lifetime}$ [Myr]", fontsize=15)
+axs[0].set_ylabel(r"$\dot{N}_\gamma$ [1/s]", fontsize=15)
+axs[1].set_ylabel(r"$t_\mathrm{lifetime}$ [Myr]", fontsize=15)
 plt.tight_layout()
 plt.show()

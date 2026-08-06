@@ -4,7 +4,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass, fields
-from typing import Any, ClassVar, Type, TypeVar
+from typing import Any, ClassVar, TypeVar
 
 import yaml
 
@@ -19,7 +19,7 @@ YML_REGEX = re.compile(
 |[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\\.[0-9_]*
 |[-+]?\\.(?:inf|Inf|INF)
 |\\.(?:nan|NaN|NAN))$""",
-    re.X,
+    re.VERBOSE,
 )
 yaml.SafeLoader.add_implicit_resolver(
     "tag:yaml.org,2002:float", YML_REGEX, list("-+0123456789.")
@@ -38,13 +38,13 @@ class YmlParameters:
     SECTION: ClassVar[str]
 
     @classmethod
-    def load_yaml(cls: Type[ParametersType], file: PathType) -> dict[str, Any]:
+    def load_yaml(cls, file: PathType) -> dict[str, Any]:
         """Read in YAML parameter file"""
         with open(file, "r") as f:
             return yaml.load(f, yaml.SafeLoader)
 
     @classmethod
-    def from_yml(cls: Type[ParametersType], yml: dict[str, Any]) -> ParametersType:
+    def from_yml(cls: type[ParametersType], yml: dict[str, Any]) -> ParametersType:
         if cls.SECTION not in yml:
             logger.warning(
                 f"Key '{cls.SECTION}' not found in parameter configuration. Using default values."
@@ -53,13 +53,13 @@ class YmlParameters:
         return cls.from_dict(yml[cls.SECTION])
 
     @classmethod
-    def from_dict(cls: Type[ParametersType], yml: dict[str, Any]) -> ParametersType:
+    def from_dict(cls: type[ParametersType], yml: dict[str, Any]) -> ParametersType:
         keys = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in yml.items() if k in keys})
 
     @classmethod
     def from_file(
-        cls: Type[ParametersType], file: PathType, block: OptStr = None
+        cls: type[ParametersType], file: PathType, block: OptStr = None
     ) -> ParametersType:
         """Read in YAML parameter file"""
         ld = cls.load_yaml(file)
@@ -304,16 +304,15 @@ class SinksParameters(YmlParameters):
                 "Choose from 'constant' or 'Choudhury09'."
             )
 
-        if self.mfp_model == "Worseck2014":
-            if (
-                self.A_mfp is None
-                or self.eta_mfp is None
-                or self.eta1_mfp is None
-                or self.z1_mfp is None
-            ):
-                raise ValueError(
-                    "A_mfp, eta_mfp, eta1_mfp and z1_mpd must be provided for the Worseck2014 MFP model."
-                )
+        if self.mfp_model == "Worseck2014" and (
+            self.A_mfp is None
+            or self.eta_mfp is None
+            or self.eta1_mfp is None
+            or self.z1_mfp is None
+        ):
+            raise ValueError(
+                "A_mfp, eta_mfp, eta1_mfp and z1_mpd must be provided for the Worseck2014 MFP model."
+            )
 
 
 @dataclass

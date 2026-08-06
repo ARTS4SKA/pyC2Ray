@@ -15,7 +15,7 @@ ion_freq_HI = (eth0 / cst.h).to("Hz").value
 ion_freq_HeI = (ethe0 / cst.h).to("Hz").value
 ion_freq_HeII = (ethe1 / cst.h).to("Hz").value
 
-__all__ = ["Source", "BlackBodySource", "PowerLawSource"]
+__all__ = ["BlackBodySource", "PowerLawSource", "Source"]
 
 
 class Source:

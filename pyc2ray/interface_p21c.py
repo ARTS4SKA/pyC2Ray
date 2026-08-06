@@ -173,7 +173,8 @@ class Run21cmfast:
                     self.data_dir
                     + f"/matter_data_{Lbox:.2f}Mpc_{user_params.HII_DIM}_z{redshift:05.2f}.pkl"
                 )
-                pickle.dump(savedata, open(filename, "wb"))
+                with open(filename, "wb") as f:
+                    pickle.dump(savedata, f)
                 print(f"Data saved as {savedata}.")
 
         end_time = time.time()

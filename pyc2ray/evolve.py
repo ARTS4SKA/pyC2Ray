@@ -725,10 +725,9 @@ def _evolve3D_c2ray(
     rank_prefix = f"Rank={rank}: " if use_mpi else ""
 
     # Problem dimensions.
-    N, _, _ = mesh_shape = ndens.shape
+    mesh_shape = ndens.shape
     num_cells = np.prod(mesh_shape)
     num_src, *_ = src_flux.shape
-    num_tau, *_ = photo_thin_table.shape
 
     # Convergence criteria.
     conv_criterion = min(int(convergence_fraction * num_cells), (num_src - 1) / 3)

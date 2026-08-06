@@ -51,5 +51,5 @@ py.extension_module(
     install: true,
     subdir: 'pyc2ray/lib',
     fortran_args: '-DUSE_SUBBOX',
-    override_options: {'warning_level': '0'}
+    override_options: {'warning_level': '0'},
 )

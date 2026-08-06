@@ -3,11 +3,11 @@
 import warnings
 from types import ModuleType
 
-import pyc2ray.lib.libc2ray as libc2ray
+from pyc2ray.lib import libc2ray
 
 try:
     libasora: ModuleType | None
-    import pyc2ray.lib.libasora as libasora
+    from pyc2ray.lib import libasora
 except ImportError as e:
     warnings.warn(f"{e!s}. ASORA Library functionalities are disabled.")
     libasora = None

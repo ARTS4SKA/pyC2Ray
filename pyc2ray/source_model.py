@@ -1,5 +1,6 @@
+from collections.abc import Callable
 from functools import partial
-from typing import Any, Callable
+from typing import Any
 
 import astropy.units as u
 import numpy as np
@@ -62,7 +63,7 @@ class StellarToHaloRelation:
                 self.get = self.deterministic
                 self.spice_model = SPICE_scatterSFR(self.model)
             case _:
-                ValueError(
+                raise ValueError(
                     " Selected stellar-to-halo relation model that does not exist : %s"
                     % self.model
                 )
@@ -224,7 +225,7 @@ class EscapeFraction:
 
             self.get = self.fesc_Thesan
         else:
-            ValueError(
+            raise ValueError(
                 " Selected escaping fraction model that does not exist : %s"
                 % self.model
             )
@@ -277,14 +278,14 @@ class BurstySFR:
         if self.model == "instant":
             self.get_bursty = self.instant_burst_or_quiescent_galaxies
         elif self.model == "integrate":
-            ValueError(" Sorry, model not yet implemented : %s" % self.model)
+            raise ValueError(" Sorry, model not yet implemented : %s" % self.model)
         elif self.model == "no":
-            ValueError(
+            raise ValueError(
                 " You have selected %s model. You should not call this class or change the variable in the parameter file."
                 % self.model
             )
         else:
-            ValueError(
+            raise ValueError(
                 " Selected burstiness model that does not exist : %s" % self.model
             )
 
@@ -376,7 +377,7 @@ class SPICE_scatterSFR:
         elif "sm" in self.model:
             self.tab = np.loadtxt(path_model + "sigma_SFR_smooth.txt", unpack=True)
         else:
-            ValueError(
+            raise ValueError(
                 " Selected SPICE star formation rate model that does not exist : %s"
                 % self.model
             )
@@ -458,7 +459,7 @@ class Halo2Grid:
         pos = kwargs.get("pos", self.pos_grid)
         if pos is None:
             print('Provide the halo positions via parameter "pos".')
-            return None
+            return
 
         print("Creating a tree...")
         kdtree = cKDTree(pos)
@@ -485,7 +486,7 @@ class Halo2Grid:
             return None
         binned_mass = kwargs.get("binned_mass")
         if binned_mass is None:
-            binned_mass, bin_edges, bin_num = self.value_on_grid(
+            binned_mass, _, _ = self.value_on_grid(
                 pos, mass, statistic="sum", bins=self.n_grid
             )
         binned_pos_list = np.argwhere(binned_mass > 0)
@@ -499,7 +500,7 @@ class Halo2Grid:
             return None
         binned_value = kwargs.get("binned_value")
         if binned_value is None:
-            binned_value, bin_edges, bin_num = self.value_on_grid(
+            binned_value, _, _ = self.value_on_grid(
                 pos, value, statistic="sum", bins=self.n_grid
             )
         binned_pos_list = np.argwhere(binned_value > 0)

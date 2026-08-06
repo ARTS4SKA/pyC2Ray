@@ -38,7 +38,6 @@ class Grid(ABC):
         -------
         The minimum corner of the domain (shape `(3,)`).
         """
-        pass
 
     @abstractmethod
     def get_domain_max(self) -> np.ndarray:
@@ -48,7 +47,6 @@ class Grid(ABC):
         -------
         The maximum corner of the domain (shape `(3,)`).
         """
-        pass
 
     @abstractmethod
     def get_average_cell_size(self, position: np.ndarray) -> float:
@@ -66,7 +64,6 @@ class Grid(ABC):
         -------
         The representative cell size of the grid around the provided position.
         """
-        pass
 
     @abstractmethod
     def global_to_local_map(
@@ -80,7 +77,6 @@ class Grid(ABC):
         local_field : The field defined on the local grid initialized with the corresponding values
         from the global grid. This is an I/O parameter.
         """
-        pass
 
     @abstractmethod
     def local_to_global_map(
@@ -97,7 +93,6 @@ class Grid(ABC):
         add : If True, the local field values are added to the global field values. If False, the local
         field values are set to the global field values.
         """
-        pass
 
     # TODO: design issue: this function implicitly assumes that the local grid
     # is a subset of the global grid, which is the case for regular grids but
@@ -116,7 +111,6 @@ class Grid(ABC):
         -------
         The corresponding local grid index (shape `(3,)`).
         """
-        pass
 
     @abstractmethod
     def global_to_local_position_map(self, global_position: np.ndarray) -> np.ndarray:
@@ -131,7 +125,6 @@ class Grid(ABC):
         The corresponding local subdomain coordinates (shape `(3,)`).
             The corresponding local grid index (shape `(3,)`).
         """
-        pass
 
     @abstractmethod
     def get_local_grid(self, source_group: SourceGroup) -> Grid:
@@ -145,7 +138,6 @@ class Grid(ABC):
         -------
         The local grid corresponding to the region of influence of the source group of the subdomain.
         """
-        pass
 
     @abstractmethod
     def find_num_cells_in_box(self, box_min: np.ndarray, box_max: np.ndarray) -> int:
@@ -160,7 +152,6 @@ class Grid(ABC):
         -------
         The number of cells in the box defined by the minimum and maximum corners.
         """
-        pass
 
     @abstractmethod
     def resize_local_field(self, local_field: np.ndarray) -> None:
@@ -170,4 +161,3 @@ class Grid(ABC):
         ----------
         local_field : The local field to resize (IO parameter).
         """
-        pass

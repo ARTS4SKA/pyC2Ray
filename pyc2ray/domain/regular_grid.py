@@ -295,13 +295,13 @@ class RegularGrid(Grid):
         if vol > 0.0:
             if self.is_periodic_mode_active:
                 # This calculation already accounts for the fact that the box may be partially outside the grid domain
-                return int(np.prod((max_indexes - min_indexes + 1)))
+                return int(np.prod(max_indexes - min_indexes + 1))
 
             # In non-periodic mode, if the box extends outside the domain, we consider only the part inside the domain for the cell count
             min_indexes_clipped, max_indexes_clipped = self._clip_index_bounds_to_grid(
                 min_indexes, max_indexes
             )
-            return int(np.prod((max_indexes_clipped - min_indexes_clipped + 1)))
+            return int(np.prod(max_indexes_clipped - min_indexes_clipped + 1))
 
         return 0
 

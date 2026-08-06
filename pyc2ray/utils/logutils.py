@@ -2,8 +2,8 @@ import logging
 import os
 import sys
 import warnings
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Iterator
 
 from mpi4py import MPI
 

@@ -36,12 +36,18 @@ nvcc_flags = [
 nvlink_flags = [compute_cap]
 
 if get_option('buildtype') in ['release', 'minsize']
-  nvcc_flags += ['-dlto']
-  nvlink_flags += ['-dlto']
+    nvcc_flags += ['-dlto']
+    nvlink_flags += ['-dlto']
 endif
 
 # CUDA sources for ASORA
-asora_sources = ['memory.cpp', 'rates.cu', 'raytracing.cu', 'utils.cu', 'chemistry.cu']
+asora_sources = [
+    'memory.cpp',
+    'rates.cu',
+    'raytracing.cu',
+    'utils.cu',
+    'chemistry.cu',
+]
 cuda_dep = dependency('cuda', version: '>=12', static: false)
 asora_core = static_library(
     'asora_core',

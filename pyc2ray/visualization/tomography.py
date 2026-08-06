@@ -34,11 +34,10 @@ class zTomography:
             zz += self.incr
         elif down:
             zz -= self.incr
-        if up or down:
-            if zz in range(self.N):
-                self.im.set_data(self.data[:, :, zz])
-                self.zz = zz
-                self.fig.canvas.draw()
+        if (up or down) and zz in range(self.N):
+            self.im.set_data(self.data[:, :, zz])
+            self.zz = zz
+            self.fig.canvas.draw()
 
 
 class zTomography_3panels:
@@ -67,13 +66,12 @@ class zTomography_3panels:
             zz += self.incr
         elif down:
             zz -= self.incr
-        if up or down:
-            if zz in range(self.N):
-                self.im1.set_data(self.data1[:, :, zz])
-                self.im2.set_data(self.data2[:, :, zz])
-                self.im3.set_data(self.data3[:, :, zz])
-                self.zz = zz
-                self.fig.canvas.draw()
+        if (up or down) and zz in range(self.N):
+            self.im1.set_data(self.data1[:, :, zz])
+            self.im2.set_data(self.data2[:, :, zz])
+            self.im3.set_data(self.data3[:, :, zz])
+            self.zz = zz
+            self.fig.canvas.draw()
 
 
 # ==============
