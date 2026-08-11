@@ -1,7 +1,6 @@
 from contextlib import contextmanager
 from pathlib import Path
 
-import astropy.constants as cst
 import astropy.units as u
 import numpy as np
 import pytest
@@ -9,6 +8,7 @@ import pytest
 from pyc2ray.load_extensions import libasora_He as libasora
 from pyc2ray.radiation.blackbody import BlackBodySource_Multifreq
 from pyc2ray.radiation.common import make_tau_table
+from pyc2ray.radiation.radiation_tables import RadiationTables
 
 if libasora is None:
     pytest.skip("libasora_He.so missing, skipping tests", allow_module_level=True)
@@ -24,37 +24,21 @@ def setup_do_all_sources(
     radius: float = 15.0,
 ):
     # Calculate the table
-    minlog_tau, maxlog_tau, num_tau = -20.0, 4.0, 20000
+    minlog_tau, maxlog_tau, num_tau = -20.0, 4.0, 2000
     tau, dlogtau = make_tau_table(minlog_tau, maxlog_tau, num_tau)
 
-    # Min and max frequency of the integral
-    freq_min, freq_max = (
-        (13.598 * u.eV / cst.h).to("Hz").value,
-        (54.416 * u.eV / cst.h).to("Hz").value,
-    )
-
     # Calculate the table
-    radsource = BlackBodySource_Multifreq(1e5, False)
-    photo_thin_table, photo_thick_table = radsource.make_photo_table(
-        tau, freq_min, freq_max, 1e48
-    )
-    heat_thin_table, heat_thick_table = radsource.make_heat_table(
-        tau, freq_min, freq_max, 1e48
-    )
+    radsource = BlackBodySource_Multifreq(1e5)
+    photo_thin_table, photo_thick_table = radsource.make_photo_tables(tau)
+    heat_thin_table, heat_thick_table = radsource.make_heat_tables(tau)
 
     # Read cross section
-    _, sigma_HI, sigma_HeI, sigma_HeII = np.loadtxt(
-        data_dir / "Verner1996_crossect.txt", unpack=True
-    )
-    sigma_HI = sigma_HI.ravel()
-    sigma_HeI = sigma_HeI.ravel()
-    sigma_HeII = sigma_HeII.ravel()
+    rt = RadiationTables()
+    sigmas = rt.cross_sections
+    heat_factors = rt.factors
+    nfreq = len(sigmas[0])
 
-    # number of frequency bin
-    numb1, numb2, numb3 = 1, 26, 20
-    num_freq = numb1 + numb2 + numb3
-
-    assert photo_thin_table.shape[0] == num_freq
+    assert photo_thin_table.shape == (nfreq, num_tau + 1)
 
     # Allocate tables to GPU device
     assert libasora is not None
@@ -70,14 +54,12 @@ def setup_do_all_sources(
     phion_HI = np.empty(size, dtype=np.float64)
     phion_HeI = np.empty(size, dtype=np.float64)
     phion_HeII = np.empty(size, dtype=np.float64)
-    pheat_HI = np.empty(size, dtype=np.float64)
-    pheat_HeI = np.empty(size, dtype=np.float64)
-    pheat_HeII = np.empty(size, dtype=np.float64)
+    pheat = np.empty(size, dtype=np.float64)
 
-    ndens = np.full(size, 1.87e-7, dtype=np.float64)
-    xHII = np.full(size, 1.2e-3, dtype=np.float64)
-    xHeII = np.full(size, 1e-3, dtype=np.float64)
-    xHeIII = np.full(size, 1e-3, dtype=np.float64)
+    ndens = np.full(size, 1.0e-6, dtype=np.float64)
+    xHII = np.full_like(ndens, 1.0e-3)
+    xHeII = np.full_like(ndens, 1.0e-3)
+    xHeIII = np.full_like(ndens, 1.0e-3)
 
     # Copy density field to GPU device
     assert libasora is not None
@@ -97,18 +79,14 @@ def setup_do_all_sources(
     libasora.source_data_to_device(src_pos, norm_flux)
 
     # Size of a cell
-    boxsize = 1.62022035 * u.Mpc
+    boxsize = 1.5 * u.Mpc
     dr = (boxsize / mesh_size).cgs.value
 
     yield (
         radius,
-        sigma_HI,
-        sigma_HeI,
-        sigma_HeII,
-        numb1,
-        numb2,
-        numb3,
-        num_freq,
+        *sigmas,
+        heat_factors,
+        nfreq,
         dr,
         xHII,
         xHeII,
@@ -116,9 +94,7 @@ def setup_do_all_sources(
         phion_HI,
         phion_HeI,
         phion_HeII,
-        pheat_HI,
-        pheat_HeI,
-        pheat_HeII,
+        pheat,
         num_sources,
         mesh_size,
         minlog_tau,
@@ -133,18 +109,14 @@ def test_do_all_sources(data_dir, init_device):
     with setup_do_all_sources(data_dir) as args:
         libasora.do_all_sources(*args)
 
-        phion_HI = args[12] * 1e48
-        phion_HeI = args[13] * 1e48
-        phion_HeII = args[14] * 1e48
-        pheat_HI = args[15] * 1e48
-        pheat_HeI = args[16] * 1e48
-        pheat_HeII = args[17] * 1e48
+        phion_HI = args[10] * 1e48
+        phion_HeI = args[11] * 1e48
+        phion_HeII = args[12] * 1e48
+        pheat = args[13] * 1e48
 
         expected_rates = np.load(data_dir / "photo_rates_with_helium.npz")
 
         assert np.allclose(phion_HI, expected_rates["ion_HI"])
         assert np.allclose(phion_HeI, expected_rates["ion_HeI"])
         assert np.allclose(phion_HeII, expected_rates["ion_HeII"])
-        assert np.allclose(pheat_HI, expected_rates["heat_HI"], equal_nan=True)
-        assert np.allclose(pheat_HeI, expected_rates["heat_HeI"], equal_nan=True)
-        assert np.allclose(pheat_HeII, expected_rates["heat_HeII"], equal_nan=True)
+        assert np.allclose(pheat, expected_rates["heat"])

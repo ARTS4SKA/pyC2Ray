@@ -158,7 +158,7 @@ class C2Ray_fstar(C2Ray):
                 # normalize flux
                 assert self.sources_params.Nion is not None
                 normflux = (
-                    c.msun2g * self.sources_params.Nion * sfr / (c.m_p * S_star_ref)
+                    c.M_sun * self.sources_params.Nion * sfr / (c.m_p * S_star_ref)
                 )
             else:
                 # get stellar mass
@@ -175,7 +175,7 @@ class C2Ray_fstar(C2Ray):
                 # normalize flux
                 assert self.sources_params.Nion is not None
                 normflux = (
-                    c.msun2g
+                    c.M_sun
                     * self.sources_params.Nion
                     * srcmstar
                     / (c.m_p * ts * S_star_ref)

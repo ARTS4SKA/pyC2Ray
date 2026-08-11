@@ -5,18 +5,9 @@ build
 work
 run
 
-# Ignore log directory and files
-test/logs/
-test/pasc_arts4ska/logs/
-
 # Ignore compiled object
 **.so
 **.o
-
-# Ignore images and data created by debug and tests
-*.pkl
-pyc2ray/tables/multifreq/*png
-test/debug/*png
 
 # Ignore editor files
 .vscode/

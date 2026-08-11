@@ -74,7 +74,7 @@ Abundances:
 Photo:
   # HI cross section at its ionzing frequency (weighted by freq_factor)
   sigma_HI_at_ion_freq: 6.30e-18
-    # Minimum optical depth for tables
+  # Minimum optical depth for tables
   minlogtau: -20
   # Maximum optical depth for tables
   maxlogtau: 4

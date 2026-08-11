@@ -29,18 +29,17 @@ namespace {
         const cuda::std::array<double, 3>& xh, const cooling_tables& rates,
         const linspace<double>& logtemp, double abu_h, double abu_he
     ) {
-        auto&& [i0, i1, p] = log_table_index(temp, logtemp);
-        auto q = 1 - p;
+        auto temp_pos = log_table_index(temp, logtemp);
 
         auto& [xHI, xHeI, xHeII] = xh;
         auto xHII = 1.0 - xHI;
         auto xHeIII = 1.0 - xHeI - xHeII;
 
-        auto rHI = xHI * (rates.HI[i0] * q + rates.HI[i1] * p);
-        auto rHII = xHII * (rates.HII[i0] * q + rates.HII[i1] * p);
-        auto rHeI = xHeI * (rates.HeI[i0] * q + rates.HeI[i1] * p);
-        auto rHeII = xHeII * (rates.HeII[i0] * q + rates.HeII[i1] * p);
-        auto rHeIII = xHeIII * (rates.HeIII[i0] * q + rates.HeIII[i1] * p);
+        auto rHI = xHI * temp_pos.interp(rates.HI);
+        auto rHII = xHII * temp_pos.interp(rates.HII);
+        auto rHeI = xHeI * temp_pos.interp(rates.HeI);
+        auto rHeII = xHeII * temp_pos.interp(rates.HeII);
+        auto rHeIII = xHeIII * temp_pos.interp(rates.HeIII);
 
         return ndens_atom * ndens_elec *
                ((rHI + rHII) * abu_h + (rHeI + rHeII + rHeIII) * abu_he);
@@ -413,12 +412,10 @@ namespace asora {
 
     __device__ cuda::std::tuple<double3, double3, double2> do_chemistry(
         double dt, double Hz, double temp, double ndens, const double3& xh,
-        double3 xh_av, const double3& phi_ion, const double3& phi_heat, double clump,
+        double3 xh_av, const double3& phi_ion, double heating, double clump,
         const cooling_tables& tables, const linspace<double>& logtemp,
         const parameters& p, size_t max_iterations
     ) {
-        auto heating = phi_heat.x + phi_heat.y + phi_heat.z;
-
         // At each loop iteration, the counter is decreased until 0 unless
         // convergence is reached before.
         double3 xh_new, xh_av_new;
@@ -468,9 +465,9 @@ namespace asora {
     __global__ void evolve0D_gpu(
         double dt, double Hz, double* __restrict__ temp, double* __restrict__ temp_int,
         double* __restrict__ ndens, double3ptr xh, double3ptr xh_av, double3ptr xh_int,
-        double3ptr phi_ion, double3ptr phi_heat, const double* __restrict__ clump,
-        cooling_tables tables, linspace<double> logtemp, bool* conv_flag, parameters p,
-        size_t size
+        double3ptr phi_ion, const double* __restrict__ phi_heat,
+        const double* __restrict__ clump, cooling_tables tables,
+        linspace<double> logtemp, bool* conv_flag, parameters p, size_t size
     ) {
         auto idx = threadIdx.x + blockDim.x * blockIdx.x;
 
@@ -482,8 +479,7 @@ namespace asora {
             auto&& [xh_int_new, xh_av_new, temp_new] = do_chemistry(
                 dt, Hz, temp_av_old, ndens[idx], {xh.x[idx], xh.y[idx], xh.z[idx]},
                 xh_av_old, {phi_ion.x[idx], phi_ion.y[idx], phi_ion.z[idx]},
-                {phi_heat.x[idx], phi_heat.y[idx], phi_heat.z[idx]}, clump[idx], tables,
-                logtemp, p
+                phi_heat[idx], clump[idx], tables, logtemp, p
             );
 
             conv_flag[idx] = check_do_chemistry_convergence(
@@ -513,9 +509,10 @@ namespace asora {
     size_t global_pass(
         double dt, double Hz, const double* __restrict__ temp,
         double* __restrict__ temp_int, double3ptr xh, double3ptr xh_av,
-        double3ptr xh_int, const double3ptr& phi_ion, const double3ptr& phi_heat,
-        const double* __restrict__ clump, const linspace<double>& logtemp,
-        const parameters& p, size_t n_cells, size_t block_size
+        double3ptr xh_int, const double3ptr& phi_ion,
+        const double* __restrict__ phi_heat, const double* __restrict__ clump,
+        const linspace<double>& logtemp, const parameters& p, size_t n_cells,
+        size_t block_size
     ) {
         // Initialize and copy const data.
         for (auto&& [tag, data] : {
@@ -527,9 +524,7 @@ namespace asora {
                  std::pair{buffer_tag::photo_ionization_HI, phi_ion.cx()},
                  std::pair{buffer_tag::photo_ionization_HeI, phi_ion.cy()},
                  std::pair{buffer_tag::photo_ionization_HeII, phi_ion.cz()},
-                 std::pair{buffer_tag::photo_heating_HI, phi_heat.cx()},
-                 std::pair{buffer_tag::photo_heating_HeI, phi_heat.cy()},
-                 std::pair{buffer_tag::photo_heating_HeII, phi_heat.cz()},
+                 std::pair{buffer_tag::photo_heating, phi_heat},
              }) {
             device::ensure_transfer<double>(tag, data, n_cells);
         }
@@ -568,11 +563,7 @@ namespace asora {
             get_data_view<double>(buffer_tag::photo_ionization_HeI),
             get_data_view<double>(buffer_tag::photo_ionization_HeII)
         };
-        double3ptr phi_heat_d = {
-            get_data_view<double>(buffer_tag::photo_heating_HI),
-            get_data_view<double>(buffer_tag::photo_heating_HeI),
-            get_data_view<double>(buffer_tag::photo_heating_HeII)
-        };
+        auto phi_heat_d = get_data_view<double>(buffer_tag::photo_heating);
 
         cooling_tables tables{};
         if (!p.cosmo_only) {
