@@ -76,7 +76,7 @@ class C2Ray_CubeP3M(C2Ray):
 
         # TODO: automatic selection of low mass or high mass. For the moment only high mass
         mass2phot = (
-            c.msun2g
+            c.M_sun
             * self.fgamma_hm
             * self.cosmology.Ob0
             / (self.mean_molecular * c.m_p * self.ts * self.cosmology.Om0)
