@@ -1,6 +1,7 @@
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #define PY_SSIZE_T_CLEAN
 
+#include "rates.cuh"
 #include "tests.cuh"
 #include "utils.cuh"
 
@@ -148,6 +149,78 @@ PyObject *asora_test_cells_to_shell([[maybe_unused]] PyObject *self, PyObject *a
     return Py_BuildValue("i", n);
 }
 
+PyObject *asora_test_log_table_index([[maybe_unused]] PyObject *self, PyObject *args) {
+    double tau;
+    double base = 10.0;
+    PyObject *logtau_arg;
+
+    // Error checking
+    if (!PyArg_ParseTuple(args, "dO|d", &tau, &logtau_arg)) return nullptr;
+
+    asora::linspace<double> logtau;
+    if (!PyArg_ParseTuple(
+            logtau_arg, "ddk", &logtau.start, &logtau.step, &logtau.num
+        )) {
+        PyErr_SetString(PyExc_TypeError, "logtau must be a (float, float, int) tuple");
+        return nullptr;
+    }
+
+    try {
+        auto [i0, i1, residual] = asora::log_table_index(tau, logtau);
+        return Py_BuildValue("iid", i0, i1, residual);
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return nullptr;
+    }
+}
+
+PyObject *asora_test_photo_table_lookup(
+    [[maybe_unused]] PyObject *self, PyObject *args
+) {
+    double tau_in;
+    double tau_out;
+    PyArrayObject *thin;
+    PyArrayObject *thick;
+    PyObject *logtau_arg;
+
+    // Error checking
+    if (!PyArg_ParseTuple(args, "ddOOO", &tau_in, &tau_out, &thin, &thick, &logtau_arg))
+        return nullptr;
+
+    if (!PyArray_Check(thin) || PyArray_TYPE(thin) != NPY_DOUBLE ||
+        PyArray_NDIM(thin) != 1) {
+        PyErr_SetString(PyExc_TypeError, "thin must be numpy array of type double");
+        return nullptr;
+    }
+
+    if (!PyArray_Check(thick) || PyArray_TYPE(thick) != NPY_DOUBLE ||
+        PyArray_NDIM(thick) != 1) {
+        PyErr_SetString(PyExc_TypeError, "thick must be numpy array of type double");
+        return nullptr;
+    }
+
+    asora::photo_tables<> tables{
+        static_cast<double *>(PyArray_DATA(thin)),
+        static_cast<double *>(PyArray_DATA(thick))
+    };
+
+    asora::linspace<double> logtau;
+    if (!PyArg_ParseTuple(
+            logtau_arg, "ddk", &logtau.start, &logtau.step, &logtau.num
+        )) {
+        PyErr_SetString(PyExc_TypeError, "logtau must be a (float, float, int) tuple");
+        return nullptr;
+    }
+
+    try {
+        auto res = asora::photo_table_lookup(tau_in, tau_out, tables, logtau);
+        return Py_BuildValue("d", res);
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return nullptr;
+    }
+}
+
 #ifdef __cplusplus
 extern "C" {
 #endif  // __cplusplus
@@ -170,6 +243,10 @@ static PyMethodDef asoraMethods[] = {
      "Number of cells in q-shell"},
     {"cells_to_shell", asora_test_cells_to_shell, METH_VARARGS,
      "Cumulative number of cells up to q-shell"},
+    {"log_table_index", asora_test_log_table_index, METH_VARARGS,
+     "Get interpolation indices and weights for log-scale tables"},
+    {"photo_table_lookup", asora_test_photo_table_lookup, METH_VARARGS,
+     "Lookup log-scale photo rate tables"},
     {NULL, NULL, 0, NULL} /* Sentinel */
 };
 

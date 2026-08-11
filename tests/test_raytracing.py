@@ -1,7 +1,6 @@
 from contextlib import contextmanager
 from pathlib import Path
 
-import astropy.constants as cst
 import astropy.units as u
 import numpy as np
 import pytest
@@ -9,6 +8,7 @@ import pytest
 from pyc2ray.load_extensions import libasora_He as libasora
 from pyc2ray.radiation.blackbody import BlackBodySource_Multifreq
 from pyc2ray.radiation.common import make_tau_table
+from pyc2ray.radiation.radiation_tables import RadiationTables
 
 if libasora is None:
     pytest.skip("libasora_He.so missing, skipping tests", allow_module_level=True)
@@ -24,37 +24,20 @@ def setup_do_all_sources(
     radius: float = 15.0,
 ):
     # Calculate the table
-    minlog_tau, maxlog_tau, num_tau = -20.0, 4.0, 20000
+    minlog_tau, maxlog_tau, num_tau = -20.0, 4.0, 2000
     tau, dlogtau = make_tau_table(minlog_tau, maxlog_tau, num_tau)
 
-    # Min and max frequency of the integral
-    freq_min, freq_max = (
-        (13.598 * u.eV / cst.h).to("Hz").value,
-        (54.416 * u.eV / cst.h).to("Hz").value,
-    )
-
     # Calculate the table
-    radsource = BlackBodySource_Multifreq(1e5, False)
-    photo_thin_table, photo_thick_table = radsource.make_photo_table(
-        tau, freq_min, freq_max, 1e48
-    )
-    heat_thin_table, heat_thick_table = radsource.make_heat_table(
-        tau, freq_min, freq_max, 1e48
-    )
+    radsource = BlackBodySource_Multifreq(1e5)
+    photo_thin_table, photo_thick_table = radsource.make_photo_tables(tau)
+    heat_thin_table, heat_thick_table = radsource.make_heat_tables(tau)
 
     # Read cross section
-    _, sigma_HI, sigma_HeI, sigma_HeII = np.loadtxt(
-        data_dir / "Verner1996_crossect.txt", unpack=True
-    )
-    sigma_HI = sigma_HI.ravel()
-    sigma_HeI = sigma_HeI.ravel()
-    sigma_HeII = sigma_HeII.ravel()
+    rt = RadiationTables()
+    sigmas = rt.cross_sections
+    nfreq = len(sigmas[0])
 
-    # number of frequency bin
-    numb1, numb2, numb3 = 1, 26, 20
-    num_freq = numb1 + numb2 + numb3
-
-    assert photo_thin_table.shape[0] == num_freq
+    assert photo_thin_table.shape == (nfreq, num_tau + 1)
 
     # Allocate tables to GPU device
     assert libasora is not None
@@ -102,13 +85,8 @@ def setup_do_all_sources(
 
     yield (
         radius,
-        sigma_HI,
-        sigma_HeI,
-        sigma_HeII,
-        numb1,
-        numb2,
-        numb3,
-        num_freq,
+        *sigmas,
+        nfreq,
         dr,
         xHII,
         xHeII,
@@ -133,12 +111,12 @@ def test_do_all_sources(data_dir, init_device):
     with setup_do_all_sources(data_dir) as args:
         libasora.do_all_sources(*args)
 
-        phion_HI = args[12] * 1e48
-        phion_HeI = args[13] * 1e48
-        phion_HeII = args[14] * 1e48
-        pheat_HI = args[15] * 1e48
-        pheat_HeI = args[16] * 1e48
-        pheat_HeII = args[17] * 1e48
+        phion_HI = args[9] * 1e48
+        phion_HeI = args[10] * 1e48
+        phion_HeII = args[11] * 1e48
+        pheat_HI = args[12] * 1e48
+        pheat_HeI = args[13] * 1e48
+        pheat_HeII = args[14] * 1e48
 
         expected_rates = np.load(data_dir / "photo_rates_with_helium.npz")
 

@@ -32,7 +32,7 @@ from mpi4py import MPI
 
 from pyc2ray.asora_core import is_device_init, libasora
 from pyc2ray.load_extensions import libc2ray
-from pyc2ray.radiation.blackbody import BlackBodySource_Multifreq
+from pyc2ray.radiation.radiation_tables import RadiationTables
 from pyc2ray.utils.logutils import allow_rank_logging
 from pyc2ray.utils.other_utils import display_seconds, distribute_jobs
 from pyc2ray.utils.sourceutils import FloatArray, IntArray
@@ -278,16 +278,9 @@ Convergence Criterion (Number of points): {conv_criterion: n}
     pheat_HeI = np.empty_like(ndens)
     pheat_HeII = np.empty_like(ndens)
 
-    # Temporary input elements for helium raytracing and chemistry.
-    _, sigma_HI, sigma_HeI, sigma_HeII = np.loadtxt(
-        BlackBodySource_Multifreq.TABLE_DIR / "Verner1996_crossect.txt", unpack=True
-    )
-    sigma_HI = sigma_HI.ravel()
-    sigma_HeI = sigma_HeI.ravel()
-    sigma_HeII = sigma_HeII.ravel()
-
-    nbins = 1, 26, 20
-    nfreq = sum(nbins)
+    rt = RadiationTables()
+    sigmas = rt.cross_sections
+    nfreq = len(sigmas[0])
 
     # Prepare other inputs
     temp = np.ravel(temp).astype(np.float64)
@@ -315,10 +308,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
         assert libasora is not None
         libasora.do_all_sources(
             R_max,
-            sigma_HI,
-            sigma_HeI,
-            sigma_HeII,
-            *nbins,
+            *sigmas,
             nfreq,
             dr,
             xHII_av,
