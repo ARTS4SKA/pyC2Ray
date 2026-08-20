@@ -266,6 +266,23 @@ class RegularGrid(Grid):
             side_lengths = max_indexes - min_indexes + 1
             # Conservative rounding policy: one extra cell is fine, one missing cell is not.
             num_cells = int(np.max(side_lengths))
+            if num_cells >= self.num_cells:
+                # The region of influence spans the whole grid, so the local grid is the global one.
+                # A larger local grid is both unusable and useless: in periodic mode it would map
+                # several local cells onto the same global cell (see _periodic_global_indices), and
+                # the raytracer caps the number of traversed shells with the local grid size anyway
+                # (q_max = ceil(sqrt(3) * min(R, sqrt(3) * num_cells / 2))), so the extra cells would
+                # only be periodic images of a domain that is already fully covered.
+                # The offset is the one of this grid (zero for the global grid): the local grid
+                # must coincide with it, so that both the field mapping and the source index
+                # mapping (global_to_local_index_map, a plain shift with no wrap-around) reduce
+                # to the identity.
+                return RegularGrid(
+                    self.cell_size,
+                    self.num_cells,
+                    self.offset.copy(),
+                    self.is_periodic_mode_active,
+                )
             return RegularGrid(
                 self.cell_size, num_cells, min_indexes, self.is_periodic_mode_active
             )
@@ -294,8 +311,12 @@ class RegularGrid(Grid):
         vol = self._overlap_volume(box_min, box_max)
         if vol > 0.0:
             if self.is_periodic_mode_active:
-                # This calculation already accounts for the fact that the box may be partially outside the grid domain
-                return int(np.prod(max_indexes - min_indexes + 1))
+                # This calculation already accounts for the fact that the box may be partially outside the grid domain.
+                # A box spanning more than the whole grid on an axis wraps onto itself, so it still touches
+                # at most num_cells distinct cells on that axis: capping here keeps this count consistent
+                # with the local grid returned by get_local_grid.
+                side_lengths = np.minimum(max_indexes - min_indexes + 1, self.num_cells)
+                return int(np.prod(side_lengths))
 
             # In non-periodic mode, if the box extends outside the domain, we consider only the part inside the domain for the cell count
             min_indexes_clipped, max_indexes_clipped = self._clip_index_bounds_to_grid(

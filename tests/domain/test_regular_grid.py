@@ -218,7 +218,9 @@ def test_regular_grid_find_num_cells_in_box() -> None:
     non_periodic = RegularGrid(cell_size=1.0, num_cells=4)
     periodic = RegularGrid(cell_size=1.0, num_cells=4, is_periodic_mode_active=True)
 
-    assert periodic.find_num_cells_in_box(box_min, box_max) == 80
+    # The box spans 5 cells on the first axis, i.e. more than the grid: in periodic mode it wraps
+    # onto itself and still touches only the 4 distinct cells of that axis, hence 4 * 4 * 4.
+    assert periodic.find_num_cells_in_box(box_min, box_max) == 64
     assert non_periodic.find_num_cells_in_box(box_min, box_max) == 48
 
 
@@ -262,6 +264,36 @@ def test_regular_grid_get_local_grid_from_source_group() -> None:
 
     np.testing.assert_array_equal(local_grid.offset, np.array([7, 7, 7]))
     assert local_grid.num_cells == 4
+
+
+def test_regular_grid_get_local_grid_larger_than_domain() -> None:
+    """Test the case of a source group with a bounding box larger that the global grid."""
+    global_grid = RegularGrid(cell_size=1.0, num_cells=4, is_periodic_mode_active=True)
+    src_pos = np.array([2.0, 2.0, 2.0])
+    src = Source(id=1, pos=src_pos, strength=1.0, radius=20.0)
+    group = SourceGroup(
+        id=0,
+        sources=[src],
+        center=src_pos,
+        radius=20.0,
+        bbox_min=src_pos - 20.0,
+        bbox_max=src_pos + 20.0,
+        mem_cost=1.0,
+        comp_cost=1.0,
+    )
+
+    local_grid = global_grid.get_local_grid(group)
+
+    assert local_grid.num_cells == global_grid.num_cells
+    np.testing.assert_array_equal(local_grid.offset, np.array([0, 0, 0]))
+
+    # The capped local grid must be usable by the periodic mapping, which forbids local grids
+    # larger than the global one.
+    global_field = np.arange(4**3, dtype=float).reshape((4, 4, 4))
+    local_field = np.empty((0,), dtype=float)
+    local_grid.resize_local_field(local_field)
+    local_grid.global_to_local_map(global_field, local_field)
+    np.testing.assert_allclose(local_field, global_field)
 
 
 def test_regular_grid_get_local_grid_outside_domain_is_empty() -> None:
