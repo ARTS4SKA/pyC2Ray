@@ -86,11 +86,9 @@ namespace {
         // When not in periodic mode, only treat cell if its in the grid
         if (!in_box(i0 + di, j0 + dj, k0 + dk, m1)) return;
 #endif
-        auto dist2 =
-            (dr * di) * (dr * di) + (dr * dj) * (dr * dj) + (dr * dk) * (dr * dk);
-        // Reducing the following calculation changes the numerical precision of
-        // the result, albeit the physical result doesn't.
-        if (dist2 / (dr * dr) > R_max * R_max) return;
+        // Using integers for threshold check as it is more consistent.
+        auto dist2 = di * di + dj * dj + dk * dk;
+        if (dist2 > static_cast<int>(R_max * R_max)) return;
 
         cell_interpolator interp{di, dj, dk};
         auto coldens_in =
@@ -100,7 +98,7 @@ namespace {
         if (coldens_in > max_coldens) return;
 
         auto path = path_in_cell(di, dj, dk) * dr;
-        auto vol_ph = 4 * c::pi<> * dist2 * path;
+        auto vol_ph = 4 * c::pi<> * dist2 * path * dr * dr;
 
         // Get local ionization fraction & neutral hydrogen density in the cell
         const auto index = ravel_index(i0 + di, j0 + dj, k0 + dk, m1);
