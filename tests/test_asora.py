@@ -142,6 +142,15 @@ class TestLibasora:
         libasora.photo_table_to_device(*create_photo_table_data(100))
         libasora.photo_table_to_device(*create_photo_table_data(90))
 
+    def test_photo_table_to_device_L2_persistent(self, init_device):
+        def create_photo_table_data(num_tau: int) -> tuple[np.ndarray, np.ndarray]:
+            thin = np.linspace(-20, 4, num_tau + 1, dtype=np.float64)
+            thick = np.linspace(-20, 4, num_tau + 1, dtype=np.float64)
+            return thin, thick
+
+        assert libasora is not None
+        libasora.photo_table_to_device(*create_photo_table_data(80), True)
+
     def test_source_data_to_device(self, init_device):
         # Two arguments required
         with pytest.raises(TypeError):
