@@ -85,11 +85,13 @@ def test_assign_groups_to_ranks_handles_empty_groups() -> None:
 
 
 def _dd_params() -> DomainDecompositionParameters:
-    return DomainDecompositionParameters(
-        enabled=True,
-        grouping_algorithm="morton",
-        max_num_sources_per_group=4,
-        morton_bits=10,
+    return DomainDecompositionParameters.from_dict(
+        {
+            "enabled": True,
+            "grouping_algorithm": "morton",
+            "max_num_sources_per_group": 4,
+            "morton_bits": 10,
+        }
     )
 
 
