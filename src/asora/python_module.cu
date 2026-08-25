@@ -333,9 +333,10 @@ static struct PyModuleDef asoramodule = {
 };
 
 PyMODINIT_FUNC PyInit_libasora(void) {
-    PyObject *module = PyModule_Create(&asoramodule);
+    PyObject *mod = PyModule_Create(&asoramodule);
+    if (!mod) return nullptr;
     import_array();
-    return module;
+    return mod;
 }
 
 #ifdef __cplusplus
