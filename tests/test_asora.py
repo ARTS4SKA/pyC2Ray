@@ -97,6 +97,68 @@ class TestLibasoraTest:
             # Check inverse function
             assert (q, s) == libasoratest.cart2linthrd(*ijk)
 
+    def test_create_lut(self) -> None:
+        q_max = 50
+        lut = libasoratest.create_lut(q_max)
+
+        assert len(lut) == libasoratest.cells_to_shell(q_max)
+
+        for item in lut:
+            # Check that the geometric factors are in range.
+            assert 0.0 <= item.dx <= 1.0 and 0.0 <= item.dy <= 1.0
+
+            # Check that the path length is less than the diagonal of a unit cube.
+            if item.di == 0 and item.dj == 0 and item.dk == 0:
+                assert item.path == pytest.approx(0.5)
+            else:
+                assert 1.0 <= item.path <= np.sqrt(3)
+
+            # Check that the interpolation indices are correct.
+            for index in item.indices:
+                other_item = lut[index]
+                assert abs(item.di - other_item.di) <= 1
+                assert abs(item.dj - other_item.dj) <= 1
+                assert abs(item.dk - other_item.dk) <= 1
+
+        # Entries are sorted in lexicographic order of (di, dj, dk)
+        # in each q-shell.
+        start = 0
+        for q in range(q_max + 1):
+            ncells = libasoratest.cells_in_shell(q)
+            s = slice(start, start + ncells)
+            ijk = np.array(
+                [(item.di, item.dj, item.dk) for item in lut[s]], dtype=np.int32
+            )
+
+            # Assert lexicographic order.
+            indices = np.lexsort(ijk.T[::-1])
+            assert (ijk == ijk[indices]).all()
+
+            start += ncells
+
+    def test_create_lut_edge_cases(self) -> None:
+        # Testing special case offset packing.
+        lut = libasoratest.create_lut_edge_cases()
+        q_max = 512
+
+        assert len(lut) == 6
+        assert lut[0].di == q_max and lut[0].dj == 0 and lut[0].dk == 0
+
+        assert lut[1].di == 0 and lut[1].dj == q_max and lut[1].dk == 0
+
+        assert lut[2].di == 0 and lut[2].dj == 0 and lut[2].dk == q_max
+
+        assert lut[3].di == -q_max and lut[3].dj == 0 and lut[3].dk == 0
+
+        assert lut[4].di == 0 and lut[4].dj == -q_max and lut[4].dk == 0
+
+        assert lut[5].di == 0 and lut[5].dj == 0 and lut[5].dk == -q_max
+
+    @pytest.mark.parametrize("q_max", [50, 100, 150, 200, 250])
+    def test_benchmark_create_lut(self, benchmark, q_max: int) -> None:
+        # Do not copy list to python for benchmarking.
+        benchmark(libasoratest.create_lut, q_max, False)
+
 
 @pytest.mark.skipif(libasora is None, reason="libasora.so missing, skipping tests")
 class TestLibasora:

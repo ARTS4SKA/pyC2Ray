@@ -185,10 +185,16 @@ namespace asora {
         auto dx = abs(copysignf(1.0, di) - di * dk_inv);
         auto dy = abs(copysignf(1.0, dj) - dj * dk_inv);
 
-        auto w1 = (1. - dx) * (1. - dy);
-        auto w2 = (1. - dy) * dx;
-        auto w3 = (1. - dx) * dy;
+        /* Weights are
+         *  w1 = (1. - dx) * (1. - dy);
+         *  w2 = (1. - dy) * dx;
+         *  w3 = (1. - dx) * dy;
+         *  w4 = dx * dy;
+         */
         auto w4 = dx * dy;
+        auto w3 = dy - w4;
+        auto w2 = dx - w4;
+        auto w1 = 1. - dx - w3;
 
         return {w1, w2, w3, w4};
     }
@@ -210,9 +216,9 @@ namespace asora {
         if (ai <= 1 && aj <= 1 && ak <= 1)
             _mul = sqrt(static_cast<double>(ai + ak + aj));
 
-        int si = copysignf(1.0, di);
-        int sj = copysignf(1.0, dj);
-        int sk = copysignf(1.0, dk);
+        int si = (di > 0) - (di < 0);
+        int sj = (dj > 0) - (dj < 0);
+        int sk = (dk > 0) - (dk < 0);
 
         // Offset index matrix for geometric factors w_i and cartesian coordinates
         // (i, j, k). The first weight w_0 always corresponds to the cell that is
@@ -282,17 +288,17 @@ namespace asora {
 #pragma unroll
         for (auto xa = _offsets.data(); auto w : _factors) {
             // If the weight is zero, the ray does not cross the cell.
-            if (w > 0.0) {
-                // Compute which cell and so q-shell correspond to the current weight
-                // and read the column density.
-                auto &&[qlev, s] = get_qlevel(xa[0], xa[1], xa[2]);
-                auto c = coldens[qlev][s];
+            // if (w > 0.0) {
+            // Compute which cell and so q-shell correspond to the current weight
+            // and read the column density.
+            auto &&[qlev, s] = get_qlevel(xa[0], xa[1], xa[2]);
+            auto c = coldens[qlev][s];
 
-                // Rescale weight by optical path
-                w /= max(tau_0, c * sigma);
-                cdens += w * c;
-                wtot += w;
-            }
+            // Rescale weight by optical path
+            w /= max(tau_0, c * sigma);
+            cdens += w * c;
+            wtot += w;
+            // }
             // Access next row of the offset matrix.
             xa += 3;
         }
