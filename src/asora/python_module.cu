@@ -103,6 +103,21 @@ PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) 
     return Py_None;
 }
 
+PyObject *asora_create_lut([[maybe_unused]] PyObject *self, PyObject *args) {
+    size_t q_max = 0;
+    if (!PyArg_ParseTuple(args, "k", &q_max)) return nullptr;
+
+    try {
+        // Initialize the device
+        asora::create_raytracing_lut(q_max);
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_MemoryError, e.what());
+        return nullptr;
+    }
+
+    return Py_None;
+}
+
 /// Expose asora::device::initialize
 PyObject *asora_device_init([[maybe_unused]] PyObject *self, PyObject *args) {
     unsigned int mpi_rank = 0;
@@ -267,6 +282,7 @@ extern "C" {
 
 static PyMethodDef asoraMethods[] = {
     {"do_all_sources", asora_do_all_sources, METH_VARARGS, "Perform ASORA raytracing"},
+    {"create_lut", asora_create_lut, METH_VARARGS, "Create LUT for ASORA raytracing"},
     {"device_init", asora_device_init, METH_VARARGS,
      "Initialize device and allocate memory"},
     {"device_close", asora_device_close, METH_VARARGS, "Close device and free memory"},
