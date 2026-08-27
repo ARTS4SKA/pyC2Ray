@@ -155,6 +155,7 @@ namespace asora {
         source_position,         ///< Source position array (21)
         temperature,             ///< Gas temperature array (22)
         clumping_factor,         ///< Clumping factor array (23)
+        raytracing_lut,          ///< Lookup table for raytracing (24)
     };
 
     /* @brief Singleton managing only one GPU device and its memory pool.
