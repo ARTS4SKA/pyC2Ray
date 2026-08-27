@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cuda/std/array>
 #include <map>
 #include <unordered_map>
 #include <vector>
@@ -28,11 +29,12 @@ namespace asora {
      *            everything else -> 00...
      */
     uint32_t pack_offset(int di, int dj, int dk);
+    __host__ __device__ cuda::std::array<int, 3> unpack_offset(uint32_t offset);
 
     /* @brief Lookup table entry for a given cell in the q-shell.
      *
-     * Each entry contains the cell's integer coordinates (di, dj, dk), packed as a
-     * single 32bit value, the fractional distances (dx, dy) to the nearest neighbor
+     * Each entry contains the cell's integer coordinates (di, dj, dk), ~packed as a
+     * single 32bit value~, the fractional distances (dx, dy) to the nearest neighbor
      * cells, and the path length from the origin to the cell.
      * The indices array contains the indices of the four nearest neighbor cells in
      * the lookup table.
@@ -42,15 +44,13 @@ namespace asora {
         uint32_t offset = 0;
 
         /// Geometric factors.
+        double multiplier = 1.0;
         double dx = 0.0;
         double dy = 0.0;
         double path = 0.5;
 
         /// Offset indices for short-characteristic interpolation.
-        std::array<uint32_t, 4> indices = {0, 0, 0, 0};
-
-        /// Unpack the offset to (di, dj, dk). See pack_offset() for details.
-        std::array<int, 3> dijk() const;
+        uint32_t indices[4] = {0, 0, 0, 0};
     };
 
     /// Create a lookup table for all cells in the q-shells up to q_max.
