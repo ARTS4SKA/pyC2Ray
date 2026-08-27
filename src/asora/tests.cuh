@@ -1,8 +1,9 @@
 #pragma once
 
-#include "lut.h"
+#include "lut.cuh"
 
 #include <array>
+#include <vector>
 
 namespace asoratest {
 
