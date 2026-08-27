@@ -1,3 +1,4 @@
+import math
 from contextlib import contextmanager
 
 import astropy.constants as cst
@@ -57,6 +58,9 @@ def setup_do_all_sources(
 
     # Copy source list to GPU device
     libasora.source_data_to_device(src_pos, src_flux)
+
+    q_max = math.ceil(math.sqrt(3) * min(radius, math.sqrt(3) * mesh_size / 2.0))
+    libasora.create_lut(q_max)
 
     # Size of a cell
     box = 50.0 * u.pc

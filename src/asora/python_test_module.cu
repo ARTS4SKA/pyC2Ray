@@ -1,7 +1,7 @@
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #define PY_SSIZE_T_CLEAN
 
-#include "lut.h"
+#include "lut.cuh"
 #include "tests.cuh"
 #include "utils.cuh"
 
@@ -41,7 +41,7 @@ namespace {
             return nullptr;
         }
 
-        auto &&[di, dj, dk] = item.dijk();
+        auto &&[di, dj, dk] = asora::unpack_offset(item.offset);
         PyStructSequence_SetItem(obj, 0, PyLong_FromLong(di));
         PyStructSequence_SetItem(obj, 1, PyLong_FromLong(dj));
         PyStructSequence_SetItem(obj, 2, PyLong_FromLong(dk));
@@ -280,9 +280,9 @@ static PyMethodDef asoraMethods[] = {
     {"cells_to_shell", asora_test_cells_to_shell, METH_VARARGS,
      "Cumulative number of cells up to q-shell"},
     {"create_lut", asora_test_create_lut, METH_VARARGS,
-     "Build the raytracing look-up table up to shell q_max"},
+     "Create look-up table for raytracing"},
     {"create_lut_edge_cases", asora_test_create_lut_edge_cases, METH_VARARGS,
-     "Build the edge case entires for teh raytracing look-up table"},
+     "Create look-up table for raytracing edge cases"},
     {NULL, NULL, 0, NULL} /* Sentinel */
 };
 

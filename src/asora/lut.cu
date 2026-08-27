@@ -1,4 +1,4 @@
-#include "lut.h"
+#include "lut.cuh"
 
 #include "utils.cuh"
 
@@ -25,6 +25,16 @@ namespace {
 
     using inverse_lut_t = std::unordered_map<std::array<int, 3>, size_t, array_hash>;
 
+    std::array<double, 3> compute_geometric_factors(int di, int dj, int dk) {
+        assert(std::abs(dk) >= std::abs(di) && std::abs(dk) >= std::abs(dj) && dk != 0);
+        auto inv_dk = 1.0 / dk;
+        return {
+            std::abs((std::copysignf(dk, di) - di) * inv_dk),
+            std::abs((std::copysignf(dk, dj) - dj) * inv_dk),
+            std::sqrt(1.0 + (di * di + dj * dj) * inv_dk * inv_dk)
+        };
+    }
+
     asora::lut_entry make_lut_entry(
         int di, int dj, int dk, const inverse_lut_t& inverse_lut
     ) {
@@ -37,22 +47,20 @@ namespace {
         lut_entry entry;
         entry.offset = pack_offset(di, dj, dk);
 
-        // Compute geometric factors.
-        auto ai = std::abs(di);
-        auto aj = std::abs(dj);
-        auto ak = std::abs(dk);
-        auto max_delta = std::max(ai, std::max(aj, ak));
+        double ai = std::abs(di);
+        double aj = std::abs(dj);
+        double ak = std::abs(dk);
 
-        entry.dx = abs(std::copysignf(1.0, di) - di / max_delta);
-        entry.dy = abs(std::copysignf(1.0, dj) - dj / max_delta);
-        entry.path = std::sqrt((di * di + dj * dj + dk * dk) / (max_delta * max_delta));
+        if (ai <= 1 && aj <= 1 && ak <= 1)
+            entry.multiplier = sqrt(static_cast<double>(ai + ak + aj));
 
-        // Compute interpolation indices using inverse_lut.
+        // Compute geometric factors and interpolation indices using inverse_lut.
         int si = (di > 0) - (di < 0);
         int sj = (dj > 0) - (dj < 0);
         int sk = (dk > 0) - (dk < 0);
 
         std::array<int, 12> shifts;
+        std::array<double, 3> factors;
         if (ak >= ai && ak >= aj) {
             shifts = {
                 si, sj, sk,  //
@@ -60,6 +68,7 @@ namespace {
                 si, 0,  sk,  //
                 0,  0,  sk   //
             };
+            factors = compute_geometric_factors(di, dj, dk);
         } else if (aj >= ai && aj >= ak) {
             shifts = {
                 si, sj, sk,  //
@@ -67,6 +76,7 @@ namespace {
                 si, sj, 0,   //
                 0,  sj, 0    //
             };
+            factors = compute_geometric_factors(di, dk, dj);
         } else {  // if (ai >= aj && ai >= ak)
             shifts = {
                 si, sj, sk,  //
@@ -74,13 +84,13 @@ namespace {
                 si, sj, 0,   //
                 si, 0,  0    //
             };
+            factors = compute_geometric_factors(dj, dk, di);
         }
+        entry.dx = factors[0];
+        entry.dy = factors[1];
+        entry.path = factors[2];
 
-#if defined(__clang__)
 #pragma unroll 4
-#elif defined(__GNUC__)
-#pragma GCC unroll 4
-#endif
         for (size_t idx = 0, x = 0; idx < 4; ++idx, x += 3) {
             auto it = inverse_lut.find(
                 {di - shifts[x + 0], dj - shifts[x + 1], dk - shifts[x + 2]}
@@ -119,17 +129,17 @@ namespace asora {
 
         if (di == Q_MAX) {
             assert(dj == 0 && dk == 0);
-            return 3 << (3 * OFFSET_BITS);
+            return uint32_t(3) << (3 * OFFSET_BITS);
         }
 
         if (dj == Q_MAX) {
             assert(di == 0 && dk == 0);
-            return 2 << (3 * OFFSET_BITS);
+            return uint32_t(2) << (3 * OFFSET_BITS);
         }
 
         if (dk == Q_MAX) {
             assert(di == 0 && dj == 0);
-            return 1 << (3 * OFFSET_BITS);
+            return uint32_t(1) << (3 * OFFSET_BITS);
         }
 
         // 3 x 10 bits = 30 bits used, 2 bits spare in the uint32.
@@ -139,7 +149,7 @@ namespace asora {
         return (pi << 2 * OFFSET_BITS) | (pj << OFFSET_BITS) | pk;
     }
 
-    std::array<int, 3> lut_entry::dijk() const {
+    __host__ __device__ cuda::std::array<int, 3> unpack_offset(uint32_t offset) {
         switch (offset >> (3 * OFFSET_BITS)) {
             case 3:
                 return {Q_MAX, 0, 0};
