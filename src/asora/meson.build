@@ -45,7 +45,7 @@ openmp_dep = dependency('openmp')
 
 # CUDA sources for ASORA
 asora_sources = [
-    'lut.cpp',
+    'lut.cu',
     'memory.cpp',
     'rates.cu',
     'raytracing.cu',

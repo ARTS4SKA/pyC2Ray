@@ -1,10 +1,12 @@
 #pragma once
 
+#include "lut.cuh"
 #include "rates.cuh"
 
 #include <cuda/std/array>
 
 namespace asora {
+    void create_raytracing_lut(int q_max);
 
     /* @brief Raytrace all sources and compute photoionization rates
      *
@@ -41,21 +43,6 @@ namespace asora {
 
         /// Photoionization cross section
         double cross_section;
-
-        /// Shared memory banks for column density interpolation
-        cuda::std::array<const double *__restrict__, 3> shared_cdens = {};
-
-        /* @brief Prepare shared column density memory banks for cell interpolation
-         *
-         * Partitions the column density data into shared memory banks compatible with
-         * the asora::cell_interpolator class. The pointers are stored in the
-         * `shared_cdens` member.
-         *
-         * @param q Current q-index
-         * @see cell_interpolator::interpolate() for how these pointers are used in
-         *      interpolation
-         */
-        __device__ void partition_column_density(int q);
     };
 
     /* @brief Read-only maps of number and fractional densities
@@ -91,9 +78,10 @@ namespace asora {
      * @param logtau Logarithmically-spaced optical depth grid
      */
     __global__ void evolve0D_gpu(
-        size_t m1, double dr, double R_max, int q_max, size_t ns_start, size_t num_src,
-        int *src_pos, double *src_flux, element_data data_HI, density_maps densities,
-        photo_tables ion_tables, linspace<double> logtau
+        const lut_entry *__restrict__ lut, size_t m1, double dr, double R_max,
+        int q_max, size_t ns_start, size_t num_src, const int *__restrict__ src_pos,
+        const double *__restrict__ src_flux, element_data data_HI,
+        density_maps densities, photo_tables ion_tables, linspace<double> logtau
     );
 
 }  // namespace asora

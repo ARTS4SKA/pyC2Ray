@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 import numpy as np
@@ -98,20 +99,47 @@ class TestLibasoraTest:
             assert (q, s) == libasoratest.cart2linthrd(*ijk)
 
     def test_create_lut(self) -> None:
+        def path(di: int, dj: int, dk: int) -> float:
+            if di == 0 and dj == 0 and dk == 0:
+                return 0.5
+
+            di2 = di * di
+            dj2 = dj * dj
+            dk2 = dk * dk
+            delta_max = np.maximum(di2, np.maximum(dj2, dk2))
+            return np.sqrt((di2 + dj2 + dk2) / delta_max)
+
+        def geometric_factors(di: int, dj: int, dk: int) -> tuple[float, float]:
+            if di == 0 and dj == 0 and dk == 0:
+                return 0.0, 0.0
+            ai = abs(di)
+            aj = abs(dj)
+            ak = abs(dk)
+
+            if ak >= ai and ak >= aj:
+                pass
+            elif aj >= ai and aj >= ak:
+                dj, dk = dk, dj
+            else:  # ai >= aj and ai >= ak
+                di, dk = dk, di
+                di, dj = dj, di
+
+            dx = abs(math.copysign(1, di) - di / abs(dk))
+            dy = abs(math.copysign(1, dj) - dj / abs(dk))
+            return dx, dy
+
         q_max = 50
         lut = libasoratest.create_lut(q_max)
 
         assert len(lut) == libasoratest.cells_to_shell(q_max)
 
         for item in lut:
-            # Check that the geometric factors are in range.
-            assert 0.0 <= item.dx <= 1.0 and 0.0 <= item.dy <= 1.0
+            # Check that the path and geometric factors match.
+            assert item.path == pytest.approx(path(item.di, item.dj, item.dk))
 
-            # Check that the path length is less than the diagonal of a unit cube.
-            if item.di == 0 and item.dj == 0 and item.dk == 0:
-                assert item.path == pytest.approx(0.5)
-            else:
-                assert 1.0 <= item.path <= np.sqrt(3)
+            dx, dy = geometric_factors(item.di, item.dj, item.dk)
+            assert item.dx == pytest.approx(dx)
+            assert item.dy == pytest.approx(dy)
 
             # Check that the interpolation indices are correct.
             for index in item.indices:
@@ -143,15 +171,10 @@ class TestLibasoraTest:
 
         assert len(lut) == 6
         assert lut[0].di == q_max and lut[0].dj == 0 and lut[0].dk == 0
-
         assert lut[1].di == 0 and lut[1].dj == q_max and lut[1].dk == 0
-
         assert lut[2].di == 0 and lut[2].dj == 0 and lut[2].dk == q_max
-
         assert lut[3].di == -q_max and lut[3].dj == 0 and lut[3].dk == 0
-
         assert lut[4].di == 0 and lut[4].dj == -q_max and lut[4].dk == 0
-
         assert lut[5].di == 0 and lut[5].dj == 0 and lut[5].dk == -q_max
 
     @pytest.mark.parametrize("q_max", [50, 100, 150, 200, 250])

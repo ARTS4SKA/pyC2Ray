@@ -1,6 +1,5 @@
 #include "tests.cuh"
 
-#include "lut.h"
 #include "memory.h"
 #include "utils.cuh"
 
