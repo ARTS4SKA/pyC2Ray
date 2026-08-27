@@ -1,21 +1,27 @@
 from pathlib import Path
+from types import ModuleType
 
 import numpy as np
 import pytest
-from numpy.typing import NDArray
 
+import pyc2ray.constants as c
 from pyc2ray.load_extensions import libasora_He as libasora
+from pyc2ray.radiation.blackbody import BlackBodySource, make_tau_table
+
+libasoratest: ModuleType | None
 
 try:
-    import pyc2ray.lib.libasoratest as libasoratest
+    from pyc2ray.lib import libasoratest  # type: ignore
 except ImportError:
     libasoratest = None
 
+LogtauSpace = tuple[float, float, int]
 
-@pytest.mark.skipif(libasora is None, reason="libasora.so missing, skipping tests")
+
+@pytest.mark.skipif(libasoratest is None, reason="libasora.so missing, skipping tests")
 class TestLibasoraTest:
     def test_path_in_cell(self) -> None:
-        def create_path_in_cell_data(N: int) -> NDArray:
+        def create_path_in_cell_data(N: int) -> np.ndarray:
             """Return the length of the ray intersecting cell at pos emitted from pos0"""
             N2 = N // 2
             di, dj, dk = np.mgrid[-N2 : N2 + 1, -N2 : N2 + 1, -N2 : N2 + 1]
@@ -30,13 +36,14 @@ class TestLibasoraTest:
             return paths
 
         N = 11
+        assert libasoratest is not None
         path = libasoratest.path_in_cell((N, N, N))
         expected = create_path_in_cell_data(N)
 
         assert np.allclose(path, expected)
 
     def test_geometric_factors(self) -> None:
-        def create_geometric_factors_data(N: int) -> NDArray:
+        def create_geometric_factors_data(N: int) -> np.ndarray:
             """Return the geometric interpolation factors (weights) for the 4 adjacent cells"""
             N2 = N // 2
             grid = np.mgrid[-N2 : N2 + 1, -N2 : N2 + 1, -N2 : N2 + 1]
@@ -56,6 +63,7 @@ class TestLibasoraTest:
             return facts
 
         N = 11
+        assert libasoratest is not None
         facts = libasoratest.geometric_factors((N, N, N))
         expected = create_geometric_factors_data(N)
 
@@ -66,6 +74,7 @@ class TestLibasoraTest:
         N = 11
         dens = rng.random((N, N, N), dtype=np.float64)
 
+        assert libasoratest is not None
         cdens = libasoratest.cell_interpolator(dens)
         expected_output = np.load(data_dir / "cell_interpolator_output.npy")
 
@@ -74,23 +83,26 @@ class TestLibasoraTest:
     Q_MAX = 100
 
     def test_cells_in_shell(self) -> None:
+        assert libasoratest is not None
         assert libasoratest.cells_in_shell(0) == 1
         for q in range(1, self.Q_MAX):
             assert libasoratest.cells_in_shell(q) == 4 * q**2 + 2
 
     def test_cells_to_shell(self) -> None:
         q_tot = 1
+        assert libasoratest is not None
         assert libasoratest.cells_to_shell(0) == q_tot
         for q in range(1, self.Q_MAX):
             q_tot += 4 * q**2 + 2
             assert libasoratest.cells_to_shell(q) == q_tot
 
-    @pytest.mark.parametrize("q", range(0, Q_MAX))
+    @pytest.mark.parametrize("q", range(Q_MAX))
     def test_shell_mapping(self, q: int) -> None:
         cells: set[tuple[int, int, int]] = set()
         q_max = 4 * q**2 + 2 if q > 0 else 1
         for s in range(q_max):
             # Check value makes sense
+            assert libasoratest is not None
             ijk = libasoratest.linthrd2cart(q, s)
             assert q == sum(abs(x) for x in ijk)
 
@@ -100,6 +112,83 @@ class TestLibasoraTest:
 
             # Check inverse function
             assert (q, s) == libasoratest.cart2linthrd(*ijk)
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def logtau_space(cls) -> LogtauSpace:
+        return -20.0, 24.0 / 2000, 2000
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def taus(cls, logtau_space: LogtauSpace) -> np.ndarray:
+        minltau, dlogtau, ntau = logtau_space
+        maxltau = minltau + dlogtau * ntau
+        return make_tau_table(minltau, maxltau, ntau)[0]
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def tables(cls, taus: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        ion_freq_HI = c.ev2hz * 13.598
+        rad = BlackBodySource(5e4, (ion_freq_HI, 10 * ion_freq_HI), ion_freq_HI, 2.8)
+
+        return rad.make_photo_tables(taus)
+
+    TEST_TAUS = (0.9e-20, 1e-20, 1.1e-20, 0.123, 1.0, 123, 0.999e4, 1e4, 1.1e4)
+
+    @pytest.mark.parametrize("tau", TEST_TAUS)
+    def test_log_table_index(
+        self, taus: np.ndarray, logtau_space: LogtauSpace, tau: float
+    ) -> None:
+        minlogtau, dlogtau, ntau = logtau_space
+        maxlogtau = minlogtau + dlogtau * ntau
+
+        assert libasoratest is not None
+        i0, i1, res = libasoratest.log_table_index(tau, logtau_space)
+        exp_i0 = min(ntau, max(0, np.searchsorted(taus, tau, side="right").item() - 1))
+        assert i0 == exp_i0
+        assert i1 == min(ntau, max(0, exp_i0 + 1))
+
+        ltau = (i0 + res) * dlogtau + minlogtau
+        exp_ltau = min(maxlogtau, max(minlogtau, np.log10(tau)))
+        assert ltau == pytest.approx(exp_ltau)
+
+    @pytest.mark.parametrize("tau", TEST_TAUS)
+    def test_photo_table_lookup_thin(
+        self,
+        taus: np.ndarray,
+        logtau_space: LogtauSpace,
+        tables: tuple[np.ndarray, np.ndarray],
+        tau: float,
+    ) -> None:
+        tau_in = tau
+        tau_out = tau_in + 1e-8
+        assert libasoratest is not None
+        res = libasoratest.photo_table_lookup(tau_in, tau_out, *tables, logtau_space)
+
+        # Interpolate thin table in log space with numpy
+        rate = np.interp(np.log10(tau_out), np.log10(taus), tables[0])
+        exp_res = (tau_out - tau_in) * rate
+
+        assert res == pytest.approx(exp_res)
+
+    @pytest.mark.parametrize("tau", TEST_TAUS)
+    def test_photo_table_lookup_thick(
+        self,
+        taus: np.ndarray,
+        logtau_space: LogtauSpace,
+        tables: tuple[np.ndarray, np.ndarray],
+        tau: float,
+    ) -> None:
+        tau_in = tau
+        tau_out = tau_in + 1.0
+        assert libasoratest is not None
+        res = libasoratest.photo_table_lookup(tau_in, tau_out, *tables, logtau_space)
+
+        # Interpolate thick table in log space with numpy
+        rates = np.interp(np.log10([tau_in, tau_out]), np.log10(taus), tables[1])
+        exp_res = rates[0] - rates[1]
+
+        assert res == pytest.approx(exp_res)
 
 
 @pytest.mark.skipif(libasora is None, reason="libasora.so missing, skipping tests")

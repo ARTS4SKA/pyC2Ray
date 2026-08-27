@@ -71,9 +71,7 @@ static PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject 
     PyArrayObject *sig_HI;
     PyArrayObject *sig_HeI;
     PyArrayObject *sig_HeII;
-    size_t nbin1;
-    size_t nbin2;
-    size_t nbin3;
+    PyArrayObject *heat_factors;
     size_t num_freq;
     double dr;
     PyArrayObject *xHII_av;
@@ -82,9 +80,7 @@ static PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject 
     PyArrayObject *phion_HI;
     PyArrayObject *phion_HeI;
     PyArrayObject *phion_HeII;
-    PyArrayObject *pheat_HI;
-    PyArrayObject *pheat_HeI;
-    PyArrayObject *pheat_HeII;
+    PyArrayObject *pheat;
     size_t num_src;
     size_t m1;
     double minlogtau;
@@ -94,43 +90,41 @@ static PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject 
     size_t block_size = 256;
 
     if (!PyArg_ParseTuple(
-            args, "dOOOkkkkdOOOOOOOOOkkddkk|k", &R, &sig_HI, &sig_HeI, &sig_HeII,
-            &nbin1, &nbin2, &nbin3, &num_freq, &dr, &xHII_av, &xHeII_av, &xHeIII_av,
-            &phion_HI, &phion_HeI, &phion_HeII, &pheat_HI, &pheat_HeI, &pheat_HeII,
-            &num_src, &m1, &minlogtau, &dlogtau, &num_tau, &grid_size, &block_size
+            args, "dOOOOkdOOOOOOOkkddkk|k", &R, &sig_HI, &sig_HeI, &sig_HeII,
+            &heat_factors, &num_freq, &dr, &xHII_av, &xHeII_av, &xHeIII_av, &phion_HI,
+            &phion_HeI, &phion_HeII, &pheat, &num_src, &m1, &minlogtau, &dlogtau,
+            &num_tau, &grid_size, &block_size
         ))
         return nullptr;
 
     // Type checking
     if (!numpy_check<double>(sig_HI) || !numpy_check<double>(sig_HeI) ||
-        !numpy_check<double>(sig_HeII) || !numpy_check<double>(xHII_av) ||
-        !numpy_check<double>(xHeII_av) || !numpy_check<double>(xHeIII_av) ||
-        !numpy_check<double>(phion_HI) || !numpy_check<double>(phion_HeI) ||
-        !numpy_check<double>(phion_HeII) || !numpy_check<double>(pheat_HI) ||
-        !numpy_check<double>(pheat_HeI) || !numpy_check<double>(pheat_HeII))
+        !numpy_check<double>(sig_HeII) || !numpy_check<double>(heat_factors) ||
+        !numpy_check<double>(xHII_av) || !numpy_check<double>(xHeII_av) ||
+        !numpy_check<double>(xHeIII_av) || !numpy_check<double>(phion_HI) ||
+        !numpy_check<double>(phion_HeI) || !numpy_check<double>(phion_HeII) ||
+        !numpy_check<double>(pheat))
         return nullptr;
 
     // Get Array data
-    auto sig_HI_data = static_cast<double *>(PyArray_DATA(sig_HI));
-    auto sig_HeI_data = static_cast<double *>(PyArray_DATA(sig_HeI));
-    auto sig_HeII_data = static_cast<double *>(PyArray_DATA(sig_HeII));
+    auto sig_HI_data = static_cast<const double *>(PyArray_DATA(sig_HI));
+    auto sig_HeI_data = static_cast<const double *>(PyArray_DATA(sig_HeI));
+    auto sig_HeII_data = static_cast<const double *>(PyArray_DATA(sig_HeII));
+    auto heat_facts_data = static_cast<const double *>(PyArray_DATA(heat_factors));
     auto phion_HI_data = static_cast<double *>(PyArray_DATA(phion_HI));
     auto phion_HeI_data = static_cast<double *>(PyArray_DATA(phion_HeI));
     auto phion_HeII_data = static_cast<double *>(PyArray_DATA(phion_HeII));
-    auto pheat_HI_data = static_cast<double *>(PyArray_DATA(pheat_HI));
-    auto pheat_HeI_data = static_cast<double *>(PyArray_DATA(pheat_HeI));
-    auto pheat_HeII_data = static_cast<double *>(PyArray_DATA(pheat_HeII));
-    auto xh_av_HI_data = static_cast<double *>(PyArray_DATA(xHII_av));
-    auto xh_av_HeI_data = static_cast<double *>(PyArray_DATA(xHeII_av));
-    auto xh_av_HeII_data = static_cast<double *>(PyArray_DATA(xHeIII_av));
+    auto pheat_data = static_cast<double *>(PyArray_DATA(pheat));
+    auto xh_av_HI_data = static_cast<const double *>(PyArray_DATA(xHII_av));
+    auto xh_av_HeI_data = static_cast<const double *>(PyArray_DATA(xHeII_av));
+    auto xh_av_HeII_data = static_cast<const double *>(PyArray_DATA(xHeIII_av));
 
     try {
         asora::do_all_sources_gpu(
-            R, sig_HI_data, sig_HeI_data, sig_HeII_data, nbin1, nbin2, num_freq, dr,
+            R, sig_HI_data, sig_HeI_data, sig_HeII_data, heat_facts_data, num_freq, dr,
             xh_av_HI_data, xh_av_HeI_data, xh_av_HeII_data, phion_HI_data,
-            phion_HeI_data, phion_HeII_data, pheat_HI_data, pheat_HeI_data,
-            pheat_HeII_data, num_src, m1, minlogtau, dlogtau, num_tau, grid_size,
-            block_size
+            phion_HeI_data, phion_HeII_data, pheat_data, num_src, m1, minlogtau,
+            dlogtau, num_tau, grid_size, block_size
         );
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
@@ -269,14 +263,13 @@ PyObject *asora_chemistry_thermal(
 ) {
     double dt;
     double temp_start;
-    double ndens_elec;
-    double ndens_atom;
+    double ndens;
     double heating;
     double Hz;
-    // Not mandatory parameters if cosmo_only is true
-    double xHI = 0.0;
-    double xHeI = 0.0;
+    double xHII = 0.0;
     double xHeII = 0.0;
+    double xHeIII = 0.0;
+    // Not mandatory parameters if cosmo_only is true
     PyArrayObject *HI_table = nullptr;
     PyArrayObject *HII_table = nullptr;
     PyArrayObject *HeI_table = nullptr;
@@ -289,17 +282,16 @@ PyObject *asora_chemistry_thermal(
     double abu_he = 0.074;
     int cosmo_only = false;
 
-    static const char *kwlist[] = {"",       "",      "",      "",       "",
-                                   "",       "",      "",      "",       "",
-                                   "",       "",      "",      "",       "t_start",
-                                   "t_step", "t_num", "abu_h", "abu_he", "cosmo_only",
-                                   NULL};
+    static const char *kwlist[] = {"",      "",      "",       "",           "",
+                                   "",      "",      "",       "",           "",
+                                   "",      "",      "",       "t_start",    "t_step",
+                                   "t_num", "abu_h", "abu_he", "cosmo_only", NULL};
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwargs, "dddddd|dddOOOOOddkddp", const_cast<char **>(kwlist), &dt,
-            &temp_start, &ndens_elec, &ndens_atom, &heating, &Hz, &xHI, &xHeI, &xHeII,
-            &HI_table, &HII_table, &HeI_table, &HeII_table, &HeIII_table, &t_start,
-            &t_step, &t_num, &abu_h, &abu_he, &cosmo_only
+            args, kwargs, "dddddddd|OOOOOddkddp", const_cast<char **>(kwlist), &dt,
+            &temp_start, &ndens, &heating, &Hz, &xHII, &xHeII, &xHeIII, &HI_table,
+            &HII_table, &HeI_table, &HeII_table, &HeIII_table, &t_start, &t_step,
+            &t_num, &abu_h, &abu_he, &cosmo_only
         ))
         return nullptr;
 
@@ -321,8 +313,9 @@ PyObject *asora_chemistry_thermal(
 
     // This is the host version of thermal, so the cooling tables do not need to
     // reside in device memory.
+    double3 xh = {xHII, xHeII, xHeIII};
     auto &&[temp_end, temp_avg] = asora::thermal(
-        dt, temp_start, ndens_elec, ndens_atom, heating, Hz, {xHI, xHeI, xHeII}, tables,
+        dt, temp_start, ndens, heating, Hz, xh, xh, xh, tables,
         {t_start, t_step, t_num},
         {.abu_h = abu_h, .abu_he = abu_he, .cosmo_only = static_cast<bool>(cosmo_only)}
     );
@@ -330,10 +323,42 @@ PyObject *asora_chemistry_thermal(
     return Py_BuildValue("dd", temp_end, temp_avg);
 }
 
+PyObject *asora_chemistry_friedrich([[maybe_unused]] PyObject *self, PyObject *args) {
+    double dt;
+    double temp;
+    double ndens_elec;
+    double xHII;
+    double xHeII;
+    double xHeIII;
+    double nHII_av;
+    double nHeII_av;
+    double nHeIII_av;
+    double phion_HI;
+    double phion_HeI;
+    double phion_HeII;
+
+    if (!PyArg_ParseTuple(
+            args, "dddddddddddd", &dt, &temp, &ndens_elec, &xHII, &xHeII, &xHeIII,
+            &nHII_av, &nHeII_av, &nHeIII_av, &phion_HI, &phion_HeI, &phion_HeII
+        ))
+        return nullptr;
+
+    auto &&[res, res_av] = asora::friedrich(
+        dt, temp, ndens_elec, {xHII, xHeII, xHeIII}, xHII,
+        {phion_HeI, phion_HeII, phion_HI},
+        asora::optical_depth_ratios({nHII_av, nHeII_av, nHeIII_av}), 1.0
+    );
+
+    return Py_BuildValue(
+        "((ddd)(ddd))", res.x, res.y, res.z, res_av.x, res_av.y, res_av.z
+    );
+}
+
 PyObject *asora_chemistry_global_pass([[maybe_unused]] PyObject *self, PyObject *args) {
     double dt;
     double Hz;
     PyArrayObject *temp;
+    PyArrayObject *temp_av;
     PyArrayObject *temp_int;
     PyArrayObject *xHII;
     PyArrayObject *xHII_av;
@@ -347,9 +372,7 @@ PyObject *asora_chemistry_global_pass([[maybe_unused]] PyObject *self, PyObject 
     PyArrayObject *phion_HI;
     PyArrayObject *phion_HeI;
     PyArrayObject *phion_HeII;
-    PyArrayObject *pheat_HI;
-    PyArrayObject *pheat_HeI;
-    PyArrayObject *pheat_HeII;
+    PyArrayObject *pheat;
     PyArrayObject *clump;
     int cosmo_only = false;
     double minlogtemp = 0.0;
@@ -358,28 +381,28 @@ PyObject *asora_chemistry_global_pass([[maybe_unused]] PyObject *self, PyObject 
     size_t block_size = 128;
 
     if (!PyArg_ParseTuple(
-            args, "ddOOOOOOOOOOOOOOOOOO|pddkk", &dt, &Hz, &temp, &temp_int, &xHII,
-            &xHII_av, &xHII_int, &xHeII, &xHeII_av, &xHeII_int, &xHeIII, &xHeIII_av,
-            &xHeIII_int, &phion_HI, &phion_HeI, &phion_HeII, &pheat_HI, &pheat_HeI,
-            &pheat_HeII, &clump, &cosmo_only, &minlogtemp, &dlogtemp, &num_temp,
-            &block_size
+            args, "ddOOOOOOOOOOOOOOOOO|pddkk", &dt, &Hz, &temp, &temp_av, &temp_int,
+            &xHII, &xHII_av, &xHII_int, &xHeII, &xHeII_av, &xHeII_int, &xHeIII,
+            &xHeIII_av, &xHeIII_int, &phion_HI, &phion_HeI, &phion_HeII, &pheat, &clump,
+            &cosmo_only, &minlogtemp, &dlogtemp, &num_temp, &block_size
         ))
         return nullptr;
 
     // Type checking
-    if (!numpy_check<double>(temp) || !numpy_check<double>(temp_int) ||
-        !numpy_check<double>(clump) || !numpy_check<double>(xHII) ||
+    if (!numpy_check<double>(temp) || !numpy_check<double>(temp_av) ||
+        !numpy_check<double>(temp_int) || !numpy_check<double>(xHII) ||
         !numpy_check<double>(xHII_av) || !numpy_check<double>(xHII_int) ||
         !numpy_check<double>(xHeII) || !numpy_check<double>(xHeII_av) ||
         !numpy_check<double>(xHeII_int) || !numpy_check<double>(xHeIII) ||
         !numpy_check<double>(xHeIII_av) || !numpy_check<double>(xHeIII_int) ||
         !numpy_check<double>(phion_HI) || !numpy_check<double>(phion_HeI) ||
-        !numpy_check<double>(phion_HeII) || !numpy_check<double>(pheat_HI) ||
-        !numpy_check<double>(pheat_HeI) || !numpy_check<double>(pheat_HeII))
+        !numpy_check<double>(phion_HeII) || !numpy_check<double>(pheat) ||
+        !numpy_check<double>(clump))
         return nullptr;
 
     // Get Array data
     auto temp_data = static_cast<double *>(PyArray_DATA(temp));
+    auto temp_av_data = static_cast<double *>(PyArray_DATA(temp_av));
     auto temp_int_data = static_cast<double *>(PyArray_DATA(temp_int));
 
     auto xHII_data = static_cast<double *>(PyArray_DATA(xHII));
@@ -395,20 +418,18 @@ PyObject *asora_chemistry_global_pass([[maybe_unused]] PyObject *self, PyObject 
     auto phion_HI_data = static_cast<double *>(PyArray_DATA(phion_HI));
     auto phion_HeI_data = static_cast<double *>(PyArray_DATA(phion_HeI));
     auto phion_HeII_data = static_cast<double *>(PyArray_DATA(phion_HeII));
-    auto pheat_HI_data = static_cast<double *>(PyArray_DATA(pheat_HI));
-    auto pheat_HeI_data = static_cast<double *>(PyArray_DATA(pheat_HeI));
-    auto pheat_HeII_data = static_cast<double *>(PyArray_DATA(pheat_HeII));
+    auto pheat_data = static_cast<const double *>(PyArray_DATA(pheat));
 
-    auto clump_data = static_cast<double *>(PyArray_DATA(clump));
+    auto clump_data = static_cast<const double *>(PyArray_DATA(clump));
     auto n_cells = static_cast<size_t>(PyArray_SIZE(temp));
 
     try {
         auto conv_flag = asora::global_pass(
-            dt, Hz, temp_data, temp_int_data, {xHII_data, xHeII_data, xHeIII_data},
+            dt, Hz, {temp_data, temp_av_data, temp_int_data},
+            {xHII_data, xHeII_data, xHeIII_data},
             {xHII_av_data, xHeII_av_data, xHeIII_av_data},
             {xHII_int_data, xHeII_int_data, xHeIII_int_data},
-            {phion_HI_data, phion_HeI_data, phion_HeII_data},
-            {pheat_HI_data, pheat_HeI_data, pheat_HeII_data}, clump_data,
+            {phion_HI_data, phion_HeI_data, phion_HeII_data}, pheat_data, clump_data,
             {minlogtemp, dlogtemp, num_temp},
             {.cosmo_only = static_cast<bool>(cosmo_only)}, n_cells, block_size
         );
@@ -439,6 +460,8 @@ static PyMethodDef asoraMethods[] = {
      "Copy cooling rate tables to the device"},
     {"source_data_to_device", asora_source_data_to_device, METH_VARARGS,
      "Copy source data to the device"},
+    {"chemistry_friedrich", asora_chemistry_friedrich, METH_VARARGS,
+     "Solve chemistry ODE"},
     {"chemistry_thermal", (PyCFunction)asora_chemistry_thermal,
      METH_VARARGS | METH_KEYWORDS, "Solve chemistry ODE"},
     {"chemistry_global_pass", asora_chemistry_global_pass, METH_VARARGS,

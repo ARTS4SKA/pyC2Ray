@@ -56,8 +56,7 @@ class CoolingTables:
         logtemp = logT[0].item(), np.round(logT[1] - logT[0], 6).item(), len(logT)
 
         def load_table(filename: PathType) -> np.ndarray:
-            data = np.pow(10, np.loadtxt(filename, unpack=True)[1])
-            return np.insert(data, 0, 0.0)
+            return np.pow(10, np.loadtxt(filename, unpack=True)[1])
 
         kwargs: dict[str, Any] = {x: load_table(f) for x, f in table_filenames.items()}
         kwargs["logtemp"] = logtemp
@@ -81,9 +80,9 @@ def cooling_rate(
     n_a: float,
     n_e: float,
     temp: float,
-    xHI: float,
-    xHeI: float,
+    xHII: float,
     xHeII: float,
+    xHeIII: float,
     tables: CoolingTables,
     abu_h: float,
     abu_he: float,
@@ -111,17 +110,15 @@ def cooling_rate(
     tstart, tstep, tnum = tables.logtemp
 
     # Find the position of the temperature in the table
-    # NOTE(TB): Using the same interpolating formula as in rates.cu, which is different from MB notes from 20.05.26;
-    # it instead reads: interp = min(tnum - 1, (ltemp - tstart) / tstep)
     ltemp = max(tstart, math.log10(temp))
-    interp = (ltemp - tstart) / tstep
+    interp = min(float(tnum), max(0.0, (ltemp - tstart) / tstep))
     p, r = math.modf(interp)
     q = 1 - p
-    i0 = max(0, min(tnum - 1, int(r))) + 1
-    i1 = i0 + 1
+    i0 = int(r)
+    i1 = min(tnum, i0 + 1)
 
-    xHII = 1.0 - xHI
-    xHeIII = 1.0 - xHeI - xHeII
+    xHI = 1.0 - xHII
+    xHeI = 1.0 - xHeII - xHeIII
 
     # Combined cooling tables
     rHI = xHI * (tables.HI[i0] * q + tables.HI[i1] * p)
@@ -156,11 +153,10 @@ def get_electron_density(
 def thermal(
     dt: float,
     start_temp: float,
-    ndens_e: float,
     ndens_a: float,
     heating: float,
     Hz: float,
-    xh: None | tuple[float, float, float] = None,
+    xh: tuple[float, float, float],
     cool_tables: None | CoolingTables = None,
     relative_denergy: float = 0.1,
     gamma: float = 5.0 / 3.0,
@@ -177,8 +173,6 @@ def thermal(
         Time step over which to evolve the temperature (s).
     start_temp :
         Initial temperature of the gas (K).
-    ndens_e :
-        Electron number density (cm^-3).
     ndens_a :
         Atomic number density (cm^-3).
     heating :
@@ -186,7 +180,7 @@ def thermal(
     Hz :
         Hubble parameter at the current redshift (s^-1).
     xh :
-        Tuple of ionized fractions for H and He species (xHI, xHeI, xHeII), required if cosmo_only is False.
+        Tuple of ionized fractions for H and He species (xHI, xHeI, xHeII), to calculate the electron density
     cool_tables :
         Cooling tables for atomic cooling, required if cosmo_only is False.
     relative_denergy :
@@ -204,11 +198,10 @@ def thermal(
     if start_temp <= min_temp:
         return start_temp, start_temp
 
-    if not cosmo_only:
-        if xh is None:
-            raise ValueError("xh must be provided when cosmo_only is False.")
-        if cool_tables is None:
-            raise ValueError("cool_tables must be provided when cosmo_only is False.")
+    if not cosmo_only and cool_tables is None:
+        raise ValueError("cool_tables must be provided when cosmo_only is False.")
+
+    ndens_e = get_electron_density(ndens_a, xh, abu_h=abu_h, abu_he=abu_he)
 
     ui = get_energy(start_temp, ndens_a + ndens_e, gamma)
     end_temp = start_temp

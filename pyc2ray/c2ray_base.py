@@ -50,19 +50,17 @@ the two codes has been established.
 
 import atexit
 import logging
-from functools import cached_property
 from pathlib import Path
 from typing import Sequence, TypeAlias
 
 import numpy as np
-from astropy import constants as cst
 from astropy import units as u
 from astropy.cosmology import FlatLambdaCDM, z_at_value
 from mpi4py import MPI
 
 import pyc2ray.constants as c
 from pyc2ray.asora_core import device_close, device_init, is_device_init, libasora
-from pyc2ray.evolve import ChemistryParams, evolve3D
+from pyc2ray.evolve import evolve3D
 from pyc2ray.parameters import (
     AbundancesParameters,
     BlackBodyParameters,
@@ -124,10 +122,9 @@ class C2Ray:
         self.dr: float
         self.xh: tuple[FloatArray, FloatArray, FloatArray]
         self.phion: tuple[FloatArray, FloatArray, FloatArray]
-        self.pheat: tuple[FloatArray, FloatArray, FloatArray]
-        self.temp_av: FloatArray
+        self.pheat: FloatArray
+        self.temp: FloatArray
         self.clumping_factor: FloatArray
-        self.tot_phots: float
 
         # MPI setup
         if self.mpi:
@@ -315,19 +312,18 @@ This corresponds to %.3f grid cells.""",
         # with no source splitting until the condition above is meet.
         use_mpi = NumSrc >= self.nprocs and self.mpi
 
-        self.xh, self.phion, self.pheat, self.temp_av = evolve3D(
-            Hz=self.cosmology.H(self.zred).cgs.value,
+        self.xh, self.phion, self.pheat, self.temp = evolve3D(
+            Hz=self.cosmology.H(self.zred).cgs.value if self.cosmological else 0.0,
             dt=dt,
             dr=self.dr,
             R_max=self.R_max_LLS,
             src_flux=src_flux,
             src_pos=src_pos,
             src_batch_size=self.raytracing_params.source_batch_size,
-            temp=self.temp_av,
+            temp=self.temp,
             ndens=self.ndens,
             clump=self.clumping_factor,
             xh=self.xh,
-            chems=self.chem_params,
             logtau=(self.minlogtau, self.dlogtau, self.num_tau),
             logtemp=self.cool_tables.logtemp,
             convergence_fraction=self.convergence_fraction,
@@ -335,6 +331,7 @@ This corresponds to %.3f grid cells.""",
             use_mpi=use_mpi,
             rank=self.rank if use_mpi else 0,
             nprocs=self.nprocs if use_mpi else 1,
+            T_eff=self.bb_Teff,
             # c2ray only parameters
             photo_thin_table=self.photo_thin_table,
             photo_thick_table=self.photo_thick_table,
@@ -374,14 +371,15 @@ This corresponds to %.3f grid cells.""",
         def save_npz(
             prefix: str, data: Sequence[FloatArray], labels: Sequence[str]
         ) -> None:
+            assert len(data) == len(labels)
             nonlocal z
             filename = self.results_basename / f"{prefix}_z{z:.3f}.npz"
             np.savez(filename, **dict(zip(labels, data)))  # type: ignore
 
         save_npz(C2Ray.XH_PREFIX, self.xh, ("HII", "HeII", "HeIII"))
         save_npz(C2Ray.PHION_PREFIX, self.phion, ("HI", "HeI", "HeII"))
-        save_npz(C2Ray.PHEAT_PREFIX, self.pheat, ("HI", "HeI", "HeII"))
-        save_npz(C2Ray.TEMP_AV_PREFIX, (self.temp_av,), ("temp_av",))
+        save_npz(C2Ray.PHEAT_PREFIX, (self.pheat,), ("heat",))
+        save_npz(C2Ray.TEMP_AV_PREFIX, (self.temp,), ("temp",))
 
     def _log_history(self) -> None:
         # Prevent expensive computation of stats if logger is not enabled.
@@ -399,10 +397,8 @@ This corresponds to %.3f grid cells.""",
             + min_mean_max(self.phion[0], "Irate (HI)", "1/s")
             + min_mean_max(self.phion[1], "Irate (HeI)", "1/s")
             + min_mean_max(self.phion[2], "Irate (HeII)", "1/s")
-            + min_mean_max(self.pheat[0], "Hrate (HI)", "1/s")
-            + min_mean_max(self.pheat[1], "Hrate (HeI)", "1/s")
-            + min_mean_max(self.pheat[2], "Hrate (HeII)", "1/s")
-            + min_mean_max(self.temp_av, "Temperature", "K")
+            + min_mean_max(self.pheat, "Hrate ", "1/s")
+            + min_mean_max(self.temp, "Temperature", "K")
             + min_mean_max(self.ndens, "Density", "1/cm3")
         )
 
@@ -420,9 +416,7 @@ This corresponds to %.3f grid cells.""",
                     "mean Irate HI [1/s]\t"
                     "mean Irate HeI [1/s]\t"
                     "mean Irate HeII [1/s]\t"
-                    "mean Hrate HI [1/s]\t"
-                    "mean Hrate HeI [1/s]\t"
-                    "mean Hrate HeII [1/s]\t"
+                    "mean Hrate [1/s]\t"
                     "mean temperature [K]\t"
                     "R_mfp [cMpc]\t"
                     "mean HII by volume and mass\n"
@@ -430,30 +424,29 @@ This corresponds to %.3f grid cells.""",
                 f.write(header)
 
             tot_n = self.ndens * self.dr**3
-            tot_nHI = tot_n * (1 - self.xh[0]).sum()
-            tot_nHeI = tot_n * (1 - self.xh[1] - self.xh[2]).sum()
-            tot_nHeII = tot_n * self.xh[1].sum()
+            tot_nHI = (tot_n * (1 - self.xh[0])).sum()
+            tot_nHeI = (tot_n * (1 - self.xh[1] - self.xh[2])).sum()
+            tot_nHeII = (tot_n * self.xh[1]).sum()
 
             R_mfp = self.R_max_LLS / self.N * self.boxsize
             massavg_ion_frac = (self.xh[0] * self.ndens).sum() / self.ndens.sum()
 
             ion_HI, ion_HeI, ion_HeII = self.phion
-            heat_HI, heat_HeI, heat_HeII = self.pheat
+            # Use getattr to avoid AttributeError if not set
+            tot_phots = getattr(self, "tot_phots", 0.0)
 
             text = (
                 f"{z:.3f}\t"
                 f"{tot_nHI:.3e}\t"
                 f"{tot_nHeI:.3e}\t"
                 f"{tot_nHeII:.3e}\t"
-                f"{self.tot_phots:.3e}\t"
+                f"{tot_phots:.3e}\t"
                 f"{self.ndens.mean():.3e}\t"
                 f"{ion_HI.mean():.3e}\t"
                 f"{ion_HeI.mean():.3e}\t"
                 f"{ion_HeII.mean():.3e}\t"
-                f"{heat_HI.mean():.3e}\t"
-                f"{heat_HeI.mean():.3e}\t"
-                f"{heat_HeII.mean():.3e}\t"
-                f"{self.temp_av.mean():.3e}\t"
+                f"{self.pheat.mean():.3e}\t"
+                f"{self.temp.mean():.3e}\t"
                 f"{R_mfp:.3e}\t"
                 f"{massavg_ion_frac:.3e}\n"
             )
@@ -503,16 +496,16 @@ This corresponds to %.3f grid cells.""",
         return bool(self.grid_params.resume)
 
     @property
-    def eth0(self) -> float:
-        return self.cgs_params.eth0
+    def ion_freq_HI(self) -> float:
+        return c.ev2hz * self.cgs_params.eth0
 
     @property
-    def ethe0(self) -> float:
-        return self.cgs_params.ethe0
+    def ion_freq_HeI(self) -> float:
+        return c.ev2hz * self.cgs_params.ethe0
 
     @property
-    def ethe1(self) -> float:
-        return self.cgs_params.ethe1
+    def ion_freq_HeII(self) -> float:
+        return c.ev2hz * self.cgs_params.ethe1
 
     @property
     def fh0(self) -> float:
@@ -557,16 +550,6 @@ This corresponds to %.3f grid cells.""",
     @property
     def cosmological(self) -> bool:
         return self.cosmology_params.cosmological
-
-    @cached_property
-    def chem_params(self) -> ChemistryParams:
-        return ChemistryParams(
-            self.cgs_params.bh00,
-            self.cgs_params.albpow,
-            self.cgs_params.colh0,
-            self.cgs_params.temph0,
-            self.abundance_params.abu_c,
-        )
 
     @property
     def minlogtau(self) -> float:
@@ -661,62 +644,59 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}""")
                 f"and tau=10^({self.maxlogtau:n})"
             )
 
-        # The actual table has num_tau + 1 points: the 0-th position is tau=0 and
-        # the remaining num_tau points are log-spaced from minlogtau to maxlogtau (same as in C2Ray)
         self.tau, self.dlogtau = make_tau_table(
             self.minlogtau, self.maxlogtau, self.num_tau
         )
 
-        ion_freq_HI = c.ev2fr * self.eth0
-        ion_freq_HeII = c.ev2fr * self.ethe1
-
         radsource: BlackBodyBase
         # Black-Body source type
         if self.SourceType == "blackbody":
-            freq_min = ion_freq_HI
-            freq_max = 10 * ion_freq_HeII
-
             # Initialize spectrum parameters
-            radsource = BlackBodySource_Multifreq(self.bb_Teff, self.grey)
+            radsource = BlackBodySource_Multifreq(self.bb_Teff, grey=self.grey)
 
-            logger.info(f"""Using Black-Body sources with effective temperature T = {radsource.temp:.1e} K and Radius {(radsource.R_star / cst.R_sun.to("cm")).value: .3e} rsun
-Spectrum Frequency Range: {freq_min:.3e} to {freq_max:.3e} Hz
-This is Energy:           {freq_min / c.ev2fr:.3e} to {freq_max / c.ev2fr:.3e} eV""")
+            logger.info(
+                f"Using Black-Body sources with effective temperature "
+                f"T = {radsource.temp:.1e} K and Radius {np.sqrt(radsource.R_star2) / c.R_sun:.3e} rsun"
+            )
         elif self.SourceType == "powerlaw":
             # TODO: power law spectra is already implemented in radiation folder
             pass
         elif self.SourceType == "Zackrisson2011":
-            freq_min = ion_freq_HI
-            freq_max = 10 * ion_freq_HI  # maximum frequency in Zackrisson tables
-
             fname = self.photo_params.sed_table
             radsource = YggdrasilModel(
                 tabname=fname,
                 grey=self.grey,
-                freq0=ion_freq_HI,
+                freq_range=(  # maximum frequency in Zackrisson tables
+                    self.ion_freq_HI,
+                    10 * self.ion_freq_HI,
+                ),
+                ion_freq=self.ion_freq_HI,
                 pl_index=self.cs_pl_idx_h,
-                S_star_ref=1e48,
             )
 
             logger.info(
-                """Using Yggdrasil Models for SED, Zackrisson et al (2011), for PopIII or PopII sources
-Spectrum Frequency Range: {freq_min:.3e} to {freq_max:.3e} Hz
-This is Energy:           {freq_min / c.ev2fr:.3e} to {freq_max / c.ev2fr:.3e} eV"""
+                "Using Yggdrasil Models for SED, Zackrisson et al (2011), for PopIII or PopII sources"
             )
         else:
             raise NameError("Unknown source type : ", self.SourceType)
+        logger.info(
+            f"""
+Spectrum Frequency Range: {radsource.freq_min:.3e} to {radsource.freq_max:.3e} Hz
+This is Energy:           {radsource.freq_min / c.ev2hz:.3e} to {radsource.freq_max / c.ev2hz:.3e} eV"""
+        )
 
         # Integrate table
         logger.info("Integrating photoionization rate tables...")
-        self.photo_thin_table, self.photo_thick_table = radsource.make_photo_table(
-            self.tau, freq_min, freq_max, 1e48
+        self.photo_thin_table, self.photo_thick_table = radsource.make_photo_tables(
+            self.tau
         )
 
         if self.compute_heating_rates:
             logger.info("Integrating photoheating rate tables...")
-            self.heat_thin_table, self.heat_thick_table = radsource.make_heat_table(
-                self.tau, freq_min, freq_max, 1e48
-            )  # nb integration bounds are given in log10(freq/freq_HI)
+            self.heat_thin_table, self.heat_thick_table = radsource.make_heat_tables(
+                self.tau
+            )
+            # nb integration bounds are given in log10(freq/freq_HI)
         else:
             logger.warning("No heating rates")
             self.heat_thin_table = np.zeros_like(self.photo_thin_table)
@@ -754,7 +734,8 @@ Simulation Box size (comoving Mpc): {self.boxsize:.3e}"""
         )
 
         # Initialize cell size to comoving size (if cosmological run, it will be scaled in cosmology_init)
-        self.dr = self.dr_c
+        # TODO: check if this is correct, since in C2Ray dr is set to be comoving size / h
+        self.dr = self.dr_c / self.cosmology_params.h
 
         # TODO: need to give the index of start for the redshift loop in the main
 
@@ -856,12 +837,8 @@ This corresponds to %.3f grid cells.
             np.zeros_like(self.ndens),
             np.zeros_like(self.ndens),
         )
-        self.pheat = (
-            np.zeros_like(self.ndens),
-            np.zeros_like(self.ndens),
-            np.zeros_like(self.ndens),
-        )
-        self.temp_av = np.full_like(self.ndens, self.material_params.temp0)
+        self.pheat = np.zeros_like(self.ndens)
+        self.temp = np.full_like(self.ndens, self.material_params.temp0)
 
     def _sources_init(self) -> None:
         """Initialize settings to read source files"""
