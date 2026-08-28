@@ -1,5 +1,6 @@
 #include "tests.cuh"
 
+#include "lut.h"
 #include "memory.h"
 #include "utils.cuh"
 
@@ -168,6 +169,28 @@ namespace asoratest {
     std::array<int, 2> cart2linthrd(int i, int j, int k) {
         auto [q, s] = asora::cart2linthrd(i, j, k);
         return {q, s};
+    }
+
+    std::vector<asora::lut_entry> lut_edge_cases() {
+        using namespace asora;
+
+        lut_entry entry;
+        std::vector<lut_entry> lut;
+
+        entry.offset = pack_offset(Q_MAX, 0, 0);
+        lut.push_back(entry);
+        entry.offset = pack_offset(0, Q_MAX, 0);
+        lut.push_back(entry);
+        entry.offset = pack_offset(0, 0, Q_MAX);
+        lut.push_back(entry);
+        entry.offset = pack_offset(-Q_MAX, 0, 0);
+        lut.push_back(entry);
+        entry.offset = pack_offset(0, -Q_MAX, 0);
+        lut.push_back(entry);
+        entry.offset = pack_offset(0, 0, -Q_MAX);
+        lut.push_back(entry);
+
+        return lut;
     }
 
 }  // namespace asoratest

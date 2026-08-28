@@ -1,11 +1,120 @@
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #define PY_SSIZE_T_CLEAN
 
+#include "lut.h"
 #include "tests.cuh"
 #include "utils.cuh"
 
 #include <Python.h>
 #include <numpy/arrayobject.h>
+
+namespace {
+
+    PyTypeObject *LutEntryType = nullptr;
+
+    PyStructSequence_Field lut_entry_fields[] = {
+        {"di", "cell offset in the i direction"},
+        {"dj", "cell offset in the j direction"},
+        {"dk", "cell offset in the k direction"},
+        {"dx", "geometric factor along x"},
+        {"dy", "geometric factor along y"},
+        {"path", "path length through the cell"},
+        {"indices", "tuple of 4 LUT indices of the interpolation neighbours"},
+        {nullptr, nullptr}
+    };
+
+    PyStructSequence_Desc lut_entry_desc = {
+        "libasoratest.LutEntry", "Look-up table entry produced by asora::create_lut",
+        lut_entry_fields, 7
+    };
+
+    /// Convert an asora::lut_entry to a LutEntry python object.
+    PyObject *build_lut_entry(const asora::lut_entry &item) {
+        PyObject *obj = PyStructSequence_New(LutEntryType);
+        if (!obj) return nullptr;
+
+        PyObject *indices = Py_BuildValue(
+            "kkkk", item.indices[0], item.indices[1], item.indices[2], item.indices[3]
+        );
+        if (!indices) {
+            Py_DECREF(obj);
+            return nullptr;
+        }
+
+        auto &&[di, dj, dk] = item.dijk();
+        PyStructSequence_SetItem(obj, 0, PyLong_FromLong(di));
+        PyStructSequence_SetItem(obj, 1, PyLong_FromLong(dj));
+        PyStructSequence_SetItem(obj, 2, PyLong_FromLong(dk));
+        PyStructSequence_SetItem(obj, 3, PyFloat_FromDouble(item.dx));
+        PyStructSequence_SetItem(obj, 4, PyFloat_FromDouble(item.dy));
+        PyStructSequence_SetItem(obj, 5, PyFloat_FromDouble(item.path));
+        PyStructSequence_SetItem(obj, 6, indices);
+
+        return obj;
+    }
+
+}  // namespace
+
+PyObject *asora_test_create_lut([[maybe_unused]] PyObject *self, PyObject *args) {
+    int q_max;
+    int copy = true;
+    if (!PyArg_ParseTuple(args, "i|p", &q_max, &copy)) return nullptr;
+
+    std::vector<asora::lut_entry> lut;
+    try {
+        lut = asora::create_lut(q_max);
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return nullptr;
+    }
+
+    if (!copy) {
+        // Return the size of the LUT if copy is false
+        return PyLong_FromSize_t(lut.size());
+    }
+
+    PyObject *result = PyList_New(static_cast<Py_ssize_t>(lut.size()));
+    if (!result) return nullptr;
+
+    for (size_t i = 0; const auto &item : lut) {
+        PyObject *entry = build_lut_entry(item);
+        if (!entry) {
+            Py_DECREF(result);
+            return nullptr;
+        }
+        PyList_SET_ITEM(result, static_cast<Py_ssize_t>(i++), entry);
+    }
+
+    return result;
+}
+
+PyObject *asora_test_create_lut_edge_cases(
+    [[maybe_unused]] PyObject *self, PyObject *args
+) {
+    if (!PyArg_ParseTuple(args, "")) return nullptr;
+
+    std::vector<asora::lut_entry> lut;
+    try {
+        lut = asoratest::lut_edge_cases();
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return nullptr;
+    }
+
+    PyObject *result = PyList_New(static_cast<Py_ssize_t>(lut.size()));
+    if (!result) return nullptr;
+
+    for (size_t i = 0; const auto &item : lut) {
+        PyObject *entry = build_lut_entry(item);
+        if (!entry) {
+            Py_DECREF(result);
+            return nullptr;
+        }
+        PyList_SET_ITEM(result, static_cast<Py_ssize_t>(i++), entry);
+    }
+
+    return result;
+}
 
 PyObject *asora_test_cell_interpolator(
     [[maybe_unused]] PyObject *self, PyObject *args
@@ -170,6 +279,10 @@ static PyMethodDef asoraMethods[] = {
      "Number of cells in q-shell"},
     {"cells_to_shell", asora_test_cells_to_shell, METH_VARARGS,
      "Cumulative number of cells up to q-shell"},
+    {"create_lut", asora_test_create_lut, METH_VARARGS,
+     "Build the raytracing look-up table up to shell q_max"},
+    {"create_lut_edge_cases", asora_test_create_lut_edge_cases, METH_VARARGS,
+     "Build the edge case entires for teh raytracing look-up table"},
     {NULL, NULL, 0, NULL} /* Sentinel */
 };
 
@@ -179,9 +292,28 @@ static struct PyModuleDef asoramodule = {
 };
 
 PyMODINIT_FUNC PyInit_libasoratest(void) {
-    PyObject *module = PyModule_Create(&asoramodule);
+    PyObject *mod = PyModule_Create(&asoramodule);
+    if (!mod) return nullptr;
     import_array();
-    return module;
+
+    if (!LutEntryType) {
+        LutEntryType = PyStructSequence_NewType(&lut_entry_desc);
+        if (!LutEntryType) {
+            Py_DECREF(mod);
+            return nullptr;
+        }
+    }
+
+    Py_INCREF(LutEntryType);
+    if (PyModule_AddObject(
+            mod, "LutEntry", reinterpret_cast<PyObject *>(LutEntryType)
+        ) < 0) {
+        Py_DECREF(LutEntryType);
+        Py_DECREF(mod);
+        return nullptr;
+    }
+
+    return mod;
 }
 
 #ifdef __cplusplus

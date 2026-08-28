@@ -32,6 +32,7 @@ nvcc_flags = [
     '-DPERIODIC',
     '-DLOCALRATES',
     '-use_fast_math',
+    '--generate-line-info',
 ]
 nvlink_flags = [compute_cap]
 
@@ -40,8 +41,12 @@ if get_option('buildtype') in ['release', 'minsize']
     nvlink_flags += ['-dlto']
 endif
 
+# OpenMP 
+openmp_dep = dependency('openmp')
+
 # CUDA sources for ASORA
 asora_sources = [
+    'lut.cpp',
     'memory.cpp',
     'rates.cu',
     'raytracing.cu',
@@ -52,7 +57,7 @@ cuda_dep = dependency('cuda', version: '>=12', static: false)
 asora_core = static_library(
     'asora_core',
     asora_sources,
-    dependencies: cuda_dep,
+    dependencies: [cuda_dep, openmp_dep],
     cuda_args: nvcc_flags,
     link_args: nvlink_flags,
 )
@@ -61,7 +66,7 @@ asora_core = static_library(
 py.extension_module(
     'libasora',
     'python_module.cu',
-    dependencies: [py_dep, np_dep, cuda_dep],
+    dependencies: [py_dep, np_dep, cuda_dep, openmp_dep],
     install: true,
     subdir: 'pyc2ray/lib',
     link_with: asora_core,
@@ -73,7 +78,7 @@ py.extension_module(
 py.extension_module(
     'libasoratest',
     ['tests.cu', 'python_test_module.cu'],
-    dependencies: [py_dep, np_dep, cuda_dep],
+    dependencies: [py_dep, np_dep, cuda_dep, openmp_dep],
     install: true,
     subdir: 'pyc2ray/lib',
     link_with: asora_core,
