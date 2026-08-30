@@ -1,4 +1,4 @@
-#include "lut.cuh"
+#include "raytracing_lut.cuh"
 
 #include "utils.cuh"
 
@@ -35,24 +35,26 @@ namespace {
         };
     }
 
-    asora::lut_entry make_lut_entry(
-        int di, int dj, int dk, const inverse_lut_t& inverse_lut
+    void fill_lut_entry(
+        asora::raytracing_lut& raylut, size_t idx, std::array<int, 3> pos,
+        const inverse_lut_t& inverse_lut
     ) {
         using namespace asora;
+
+        auto&& [di, dj, dk] = pos;
 
         // Boundary checks.
         assert(abs(di) + abs(dj) + abs(dk) > 0);
         assert(abs(di) + abs(dj) + abs(dk) <= Q_MAX);
 
-        lut_entry entry;
-        entry.offset = pack_offset(di, dj, dk);
+        raylut.offsets[idx] = pack_offset(di, dj, dk);
 
         double ai = std::abs(di);
         double aj = std::abs(dj);
         double ak = std::abs(dk);
 
         if (ai <= 1 && aj <= 1 && ak <= 1)
-            entry.multiplier = sqrt(static_cast<double>(ai + ak + aj));
+            raylut.multipliers[idx] = sqrt(static_cast<double>(ai + ak + aj));
 
         // Compute geometric factors and interpolation indices using inverse_lut.
         int si = (di > 0) - (di < 0);
@@ -86,27 +88,32 @@ namespace {
             };
             factors = compute_geometric_factors(dj, dk, di);
         }
-        entry.dx = factors[0];
-        entry.dy = factors[1];
-        entry.path = factors[2];
+        raylut.dxs[idx] = factors[0];
+        raylut.dys[idx] = factors[1];
+        raylut.paths[idx] = factors[2];
 
+        const std::array<double, 4> weights = {
+            (1. - factors[0]) * (1. - factors[1]), (1. - factors[1]) * factors[0],
+            (1. - factors[0]) * factors[1], factors[0] * factors[1]
+        };
+
+        auto sx = shifts.data();
+        auto& indices = raylut.indices[idx];
+        size_t index = 0;
 #pragma unroll 4
-        for (size_t idx = 0, x = 0; idx < 4; ++idx, x += 3) {
-            auto it = inverse_lut.find(
-                {di - shifts[x + 0], dj - shifts[x + 1], dk - shifts[x + 2]}
-            );
-            assert(it != inverse_lut.end());
-            entry.indices[idx] = it->second;
+        for (size_t k = 0; k < 4; ++k, sx += 3) {
+            if (weights[k] > 0.0) {
+                auto it = inverse_lut.find({di - sx[0], dj - sx[1], dk - sx[2]});
+                assert(it != inverse_lut.end());
+                index = it->second;
+            }
+            indices[k] = index;
         }
-
-        return entry;
     }
 
     // Helper struct to hold cell coordinates and slot index for parallel work.
     struct cell {
-        int i;
-        int j;
-        int k;
+        std::array<int, 3> pos;
         size_t slot;
     };
 
@@ -166,11 +173,10 @@ namespace asora {
         return {di, dj, dk};
     }
 
-    std::vector<lut_entry> create_lut(int q_max) {
+    raytracing_lut create_lut(int q_max) {
         auto n_cells = asora::cells_to_shell(q_max);
 
-        std::vector<lut_entry> lut;
-        lut.reserve(n_cells);
+        raytracing_lut lut(n_cells);
 
         // Inverse LUT for interpolation indices.
         array_hash hash(2 * q_max + 1);
@@ -178,40 +184,34 @@ namespace asora {
         inverse_lut.try_emplace({0, 0, 0}, 0);
 
         // Add q = 0 entry.
-        {
-            lut_entry first;
-            first.offset = pack_offset(0, 0, 0);
-            lut.push_back(std::move(first));
-        }
+        lut.paths[0] = 0.5;
+        lut.offsets[0] = pack_offset(0, 0, 0);
 
         // Work is parallelized over each q-shell.
+        size_t slot = 0;
         for (int q = 1; q <= q_max; ++q) {
             std::vector<cell> cells;
             cells.reserve(asora::cells_in_shell(q));
 
             // Collect cell slots.
-            auto slot = lut.size();
             for (int i = -q; i <= q; ++i) {
                 auto ai = std::abs(i);
                 for (int j = ai - q; j <= q - ai; ++j) {
                     int k = q - ai - abs(j);
-                    cells.push_back({i, j, -k, slot++});
-                    if (k != 0) cells.push_back({i, j, k, slot++});
+                    cells.push_back({{i, j, -k}, ++slot});
+                    if (k != 0) cells.push_back({{i, j, k}, ++slot});
                 }
             }
 
             // Perform parallel work.
-            lut.resize(slot);
-
 #pragma omp parallel for schedule(static)
             for (size_t c = 0; c < cells.size(); ++c) {
                 const auto& cell = cells[c];
-                lut[cell.slot] = make_lut_entry(cell.i, cell.j, cell.k, inverse_lut);
+                fill_lut_entry(lut, cell.slot, cell.pos, inverse_lut);
             }
 
             // Update inverse LUT.
-            for (const auto& cell : cells)
-                inverse_lut.try_emplace({cell.i, cell.j, cell.k}, cell.slot);
+            for (const auto& cell : cells) inverse_lut.try_emplace(cell.pos, cell.slot);
         }
 
         return lut;
