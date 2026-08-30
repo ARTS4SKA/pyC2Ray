@@ -27,8 +27,8 @@ namespace {
     }
 
     __device__ double cinterp(
-        const lut_entry &__restrict__ entry, const double *__restrict__ column_dens,
-        double cross_section
+        const raytracing_lut::entry &__restrict__ entry,
+        const double *__restrict__ column_dens, double cross_section
     ) {
         // Reference optical depth from C2-Ray interpolation function.
         constexpr double tau_0 = 0.6;
@@ -82,7 +82,7 @@ namespace {
     // a single thread. Threads may call this function multiple times if required to
     // cover the full q-shell.
     __device__ void raytrace(
-        const lut_entry &__restrict__ entry, size_t cd_index, const int3 &pos,
+        const raytracing_lut::entry &entry, size_t cd_index, const int3 &pos,
         double strength, element_data &data_HI, double dr, double R_max,
         const density_maps &densities, size_t m1, const photo_tables &ion_tables,
         const linspace<double> &logtau, const int2 &limit
@@ -125,10 +125,20 @@ namespace {
 namespace asora {
 
     void create_raytracing_lut(int q_max) {
-        if (device::contains(buffer_tag::raytracing_lut)) return;
+        if (device::contains(buffer_tag::raylut_offsets)) return;
 
         auto lut = create_lut(q_max);
-        device::ensure_transfer(buffer_tag::raytracing_lut, lut.data(), lut.size());
+
+        auto upload = [](const auto &vec, buffer_tag tag) {
+            device::ensure_transfer(tag, vec.data(), vec.size());
+        };
+
+        upload(lut.offsets, buffer_tag::raylut_offsets);
+        upload(lut.multipliers, buffer_tag::raylut_multipliers);
+        upload(lut.dxs, buffer_tag::raylut_dx);
+        upload(lut.dys, buffer_tag::raylut_dy);
+        upload(lut.paths, buffer_tag::raylut_path);
+        upload(lut.indices, buffer_tag::raylut_indices);
     }
 
     void do_all_sources_gpu(
@@ -175,7 +185,14 @@ namespace asora {
         int q_max = std::ceil(c::sqrt3<> * std::min(R, c::sqrt3<> * m1 / 2.0));
 
         // Build the LUT for the raytracing kernel.
-        auto lut_d = get_data_view<lut_entry>(buffer_tag::raytracing_lut);
+        raytracing_lut_ptr lut_d{
+            get_data_view<uint32_t>(buffer_tag::raylut_offsets),
+            get_data_view<double>(buffer_tag::raylut_multipliers),
+            get_data_view<double>(buffer_tag::raylut_dx),
+            get_data_view<double>(buffer_tag::raylut_dy),
+            get_data_view<double>(buffer_tag::raylut_path),
+            get_data_view<index4>(buffer_tag::raylut_indices)
+        };
 
         // Size of grid data.
         auto n_cells = m1 * m1 * m1;
@@ -242,8 +259,8 @@ namespace asora {
     // to the current cell and finds the photoionization rate
     // ========================================================================
     __global__ void evolve0D_gpu(
-        const lut_entry *__restrict__ lut, size_t m1, double dr, double R_max,
-        int q_max, size_t ns_start, size_t num_src, const int *__restrict__ src_pos,
+        raytracing_lut_ptr lut, size_t m1, double dr, double R_max, int q_max,
+        size_t ns_start, size_t num_src, const int *__restrict__ src_pos,
         const double *__restrict__ src_flux, element_data data_HI,
         density_maps densities, photo_tables ion_tables, linspace<double> logtau
     ) {
@@ -293,7 +310,7 @@ namespace asora {
             size_t s = threadIdx.x;
             while (s < cells_in_shell(q)) {
                 auto cd_index = cells_to_shell(q - 1) + s;
-                const auto &entry = lut[cd_index];
+                auto entry = lut[cd_index];
                 raytrace(
                     entry, cd_index, {i0, j0, k0}, strength, data_HI, dr, R_max,
                     densities, m1, ion_tables, logtau, {ll, lr}

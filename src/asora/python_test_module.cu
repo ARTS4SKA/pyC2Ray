@@ -1,7 +1,7 @@
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #define PY_SSIZE_T_CLEAN
 
-#include "lut.cuh"
+#include "raytracing_lut.cuh"
 #include "tests.cuh"
 #include "utils.cuh"
 
@@ -28,8 +28,8 @@ namespace {
         lut_entry_fields, 7
     };
 
-    /// Convert an asora::lut_entry to a LutEntry python object.
-    PyObject *build_lut_entry(const asora::lut_entry &item) {
+    /// Convert a asora lut_entry to a LutEntry python object.
+    PyObject *build_lut_entry(const asora::raytracing_lut::entry &item) {
         PyObject *obj = PyStructSequence_New(LutEntryType);
         if (!obj) return nullptr;
 
@@ -53,6 +53,22 @@ namespace {
         return obj;
     }
 
+    PyObject *create_lut_list(const asora::raytracing_lut &lut) {
+        PyObject *result = PyList_New(static_cast<Py_ssize_t>(lut.size()));
+        if (!result) return nullptr;
+
+        for (size_t i = 0; i < lut.size(); ++i) {
+            PyObject *entry = build_lut_entry(lut[i]);
+            if (!entry) {
+                Py_DECREF(result);
+                return nullptr;
+            }
+            PyList_SET_ITEM(result, static_cast<Py_ssize_t>(i), entry);
+        }
+
+        return result;
+    }
+
 }  // namespace
 
 PyObject *asora_test_create_lut([[maybe_unused]] PyObject *self, PyObject *args) {
@@ -60,7 +76,7 @@ PyObject *asora_test_create_lut([[maybe_unused]] PyObject *self, PyObject *args)
     int copy = true;
     if (!PyArg_ParseTuple(args, "i|p", &q_max, &copy)) return nullptr;
 
-    std::vector<asora::lut_entry> lut;
+    asora::raytracing_lut lut(0);
     try {
         lut = asora::create_lut(q_max);
     } catch (const std::exception &e) {
@@ -73,19 +89,7 @@ PyObject *asora_test_create_lut([[maybe_unused]] PyObject *self, PyObject *args)
         return PyLong_FromSize_t(lut.size());
     }
 
-    PyObject *result = PyList_New(static_cast<Py_ssize_t>(lut.size()));
-    if (!result) return nullptr;
-
-    for (size_t i = 0; const auto &item : lut) {
-        PyObject *entry = build_lut_entry(item);
-        if (!entry) {
-            Py_DECREF(result);
-            return nullptr;
-        }
-        PyList_SET_ITEM(result, static_cast<Py_ssize_t>(i++), entry);
-    }
-
-    return result;
+    return create_lut_list(lut);
 }
 
 PyObject *asora_test_create_lut_edge_cases(
@@ -93,27 +97,15 @@ PyObject *asora_test_create_lut_edge_cases(
 ) {
     if (!PyArg_ParseTuple(args, "")) return nullptr;
 
-    std::vector<asora::lut_entry> lut;
+    asora::raytracing_lut tables(0);
     try {
-        lut = asoratest::lut_edge_cases();
+        tables = asoratest::lut_edge_cases();
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return nullptr;
     }
 
-    PyObject *result = PyList_New(static_cast<Py_ssize_t>(lut.size()));
-    if (!result) return nullptr;
-
-    for (size_t i = 0; const auto &item : lut) {
-        PyObject *entry = build_lut_entry(item);
-        if (!entry) {
-            Py_DECREF(result);
-            return nullptr;
-        }
-        PyList_SET_ITEM(result, static_cast<Py_ssize_t>(i++), entry);
-    }
-
-    return result;
+    return create_lut_list(tables);
 }
 
 PyObject *asora_test_cell_interpolator(
