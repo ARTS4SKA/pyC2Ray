@@ -1,6 +1,6 @@
 #pragma once
 
-#include "lut.cuh"
+#include "raytracing_lut.cuh"
 
 #include <array>
 #include <vector>
@@ -20,6 +20,6 @@ namespace asoratest {
     std::array<int, 3> linthrd2cart(int q, int s);
     std::array<int, 2> cart2linthrd(int i, int j, int k);
 
-    std::vector<asora::lut_entry> lut_edge_cases();
+    asora::raytracing_lut lut_edge_cases();
 
 };  // namespace asoratest
