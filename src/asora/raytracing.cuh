@@ -1,7 +1,7 @@
 #pragma once
 
-#include "lut.cuh"
 #include "rates.cuh"
+#include "raytracing_lut.cuh"
 
 #include <cuda/std/array>
 
@@ -78,8 +78,8 @@ namespace asora {
      * @param logtau Logarithmically-spaced optical depth grid
      */
     __global__ void evolve0D_gpu(
-        const lut_entry *__restrict__ lut, size_t m1, double dr, double R_max,
-        int q_max, size_t ns_start, size_t num_src, const int *__restrict__ src_pos,
+        raytracing_lut_ptr lut, size_t m1, double dr, double R_max, int q_max,
+        size_t ns_start, size_t num_src, const int *__restrict__ src_pos,
         const double *__restrict__ src_flux, element_data data_HI,
         density_maps densities, photo_tables ion_tables, linspace<double> logtau
     );

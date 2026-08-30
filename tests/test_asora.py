@@ -141,12 +141,15 @@ class TestLibasoraTest:
             assert item.dx == pytest.approx(dx)
             assert item.dy == pytest.approx(dy)
 
+            weights = [(1 - dx) * (1 - dy), (1 - dy) * dx, (1 - dx) * dy, dx * dy]
+
             # Check that the interpolation indices are correct.
-            for index in item.indices:
-                other_item = lut[index]
-                assert abs(item.di - other_item.di) <= 1
-                assert abs(item.dj - other_item.dj) <= 1
-                assert abs(item.dk - other_item.dk) <= 1
+            for ws, index in zip(weights, item.indices):
+                if ws > 0:
+                    other_item = lut[index]
+                    assert abs(item.di - other_item.di) <= 1
+                    assert abs(item.dj - other_item.dj) <= 1
+                    assert abs(item.dk - other_item.dk) <= 1
 
         # Entries are sorted in lexicographic order of (di, dj, dk)
         # in each q-shell.

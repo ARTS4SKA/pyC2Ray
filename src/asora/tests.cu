@@ -170,24 +170,17 @@ namespace asoratest {
         return {q, s};
     }
 
-    std::vector<asora::lut_entry> lut_edge_cases() {
+    asora::raytracing_lut lut_edge_cases() {
         using namespace asora;
 
-        lut_entry entry;
-        std::vector<lut_entry> lut;
+        raytracing_lut lut(6);
 
-        entry.offset = pack_offset(Q_MAX, 0, 0);
-        lut.push_back(entry);
-        entry.offset = pack_offset(0, Q_MAX, 0);
-        lut.push_back(entry);
-        entry.offset = pack_offset(0, 0, Q_MAX);
-        lut.push_back(entry);
-        entry.offset = pack_offset(-Q_MAX, 0, 0);
-        lut.push_back(entry);
-        entry.offset = pack_offset(0, -Q_MAX, 0);
-        lut.push_back(entry);
-        entry.offset = pack_offset(0, 0, -Q_MAX);
-        lut.push_back(entry);
+        lut.offsets[0] = pack_offset(Q_MAX, 0, 0);
+        lut.offsets[1] = pack_offset(0, Q_MAX, 0);
+        lut.offsets[2] = pack_offset(0, 0, Q_MAX);
+        lut.offsets[3] = pack_offset(-Q_MAX, 0, 0);
+        lut.offsets[4] = pack_offset(0, -Q_MAX, 0);
+        lut.offsets[5] = pack_offset(0, 0, -Q_MAX);
 
         return lut;
     }
