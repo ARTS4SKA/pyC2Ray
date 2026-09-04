@@ -311,10 +311,27 @@ class C2Ray_fstar(C2Ray):
         """
         file = self.density_basename + fbase
         if file.endswith("npy"):
-            overd = np.load(file) - 1.0
+            # The PKDGrav3 .npy grids store rho_m / rho_crit,0 (comoving), whose
+            # box mean is Omega_m -- NOT 1 + delta. Divide by Omega_m before use:
+            # the expression below already supplies Omega_b, so feeding it the raw
+            # field under-densities the box by a factor Omega_m (~3.1x for
+            # Omega_m = 0.32), suppressing recombinations by ~10x and finishing
+            # reionization far too early. Same correction as C2Ray_Metals.
+            overd = np.load(file) / self.cosmology.Om0 - 1.0
         else:
             rdr = t2c.Pkdgrav3data(self.boxsize, self.N, Omega_m=self.cosmology.Om0)
             overd = rdr.load_density_field(file)
+
+        # A correctly normalised overdensity field has <1 + delta> = 1.
+        mean_1pd = float(np.mean(1.0 + overd))
+        if not 0.98 < mean_1pd < 1.02:
+            logger.warning(
+                "Density field %s has <1+delta> = %.4f, expected 1.0. The gas "
+                "density (and hence the recombination rate, which goes as n^2) "
+                "will be wrong by that factor. Check whether the file stores "
+                "1+delta or rho/rho_crit.",
+                file, mean_1pd,
+            )
 
         self.ndens = (
             self.cosmology.critical_density0.cgs.value
@@ -331,8 +348,10 @@ class C2Ray_fstar(C2Ray):
             """
 ---- Reading density file:
   %s
+ <1+delta> = %.4f (must be 1.0)
  min, mean and max density : %.3e  %.3e  %.3e [1/cm3]""",
             file,
+            mean_1pd,
             self.ndens.min(),
             self.ndens.mean(),
             self.ndens.max(),

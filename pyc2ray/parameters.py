@@ -348,12 +348,66 @@ class BPASSParameters(YmlParameters):
     #  'bpass_qion' : BPASS-shape tables + amplitude from q_ion(Z, age) [Option 2]
     #  'bb_qion'    : fitted-Teff black-body tables + amplitude from q_ion(Z, age) [Option 1]
     norm_scenario: str = "fixed_nion"
+    # Cell-by-cell metallicity regime (two-group: 'old' previously-enriched cells
+    # at their mean f_Z_cell vs 'new' cells at the base Z_min floor). Requires a
+    # q_ion scenario and a MetallicityEvolution section. Only 'bpass_qion' and
+    # 'bb_qion' are supported. See C2Ray_Metals.prepare_cellwise_slice.
+    cellwise_metallicity: bool = False
+    # OPTIONAL, physically non-standard: scale the q_ion amplitude by the surviving
+    # stellar-mass fraction (1 - F_return(age)), i.e. photon_rate =
+    # M_current(age) * q_ion(age) with M_current = M_initial * (1 - F_return).
+    # WARNING: q_ion is already per INITIAL mass and intrinsically fades as stars
+    # die, so this DOUBLE-COUNTS stellar mass loss. Off by default; applies only
+    # to the q_ion scenarios ('bpass_qion' / 'bb_qion').
+    qion_scale_surviving_mass: bool = False
+    # BENCHMARK/control: pin a single CONSTANT metallicity for ALL sources in ALL
+    # slices (same shape table + amplitude everywhere), overriding the per-slice
+    # volume average. Works with any norm_scenario: with 'fixed_nion' it gives a
+    # self-contained fiducial (constant Nion amplitude + constant shape, no
+    # metallicity-snapshot dependency); with the q_ion scenarios it pins the q_ion
+    # Z. Mutually exclusive with cellwise_metallicity. None = evolving metallicity.
+    fixed_metallicity: OptFloat = None
+    # Normalise the q_ion amplitude by the stellar mass FORMED IN THIS SLICE
+    # rather than the halo's cumulative stellar mass.
+    #
+    # q_ion(Z, age) is a rate per unit mass of a COEVAL population of that age,
+    # but M_star = f_star(M_h)*M_h is cumulative, with most of its mass far older
+    # than 10 Myr and contributing no ionizing photons. Multiplying the two
+    # asserts the whole stellar mass was just born. This flag applies the burst
+    # fraction min(1, dt_slice / t_form), t_form = source_lifetime(z), so the
+    # amplitude follows the star formation RATE:
+    #     normflux = f_esc * SFR * dt_slice * <q_ion> / S_star_ref
+    # Per-sub-step age resolution is unaffected -- only the mass is rescaled.
+    #
+    # The correction is redshift dependent (~1x at z~25, ~3x by z~12), so it is
+    # NOT absorbable into f_esc; leaving it off biases the late stages of
+    # reionization. Off by default (previous behaviour). q_ion scenarios only:
+    # 'fixed_nion' already divides by the source lifetime.
+    sfr_normalised_amplitude: bool = False
 
     def __post_init__(self) -> None:
         if self.norm_scenario not in ("fixed_nion", "bpass_qion", "bb_qion"):
             raise ValueError(
                 f"norm_scenario {self.norm_scenario} not implemented. "
                 "Choose from 'fixed_nion', 'bpass_qion' or 'bb_qion'."
+            )
+        if self.cellwise_metallicity and self.norm_scenario not in ("bpass_qion", "bb_qion"):
+            raise ValueError(
+                "cellwise_metallicity requires a q_ion scenario "
+                "('bpass_qion' or 'bb_qion'), not "
+                f"'{self.norm_scenario}'."
+            )
+        if self.fixed_metallicity is not None and self.cellwise_metallicity:
+            raise ValueError(
+                "fixed_metallicity and cellwise_metallicity are mutually "
+                "exclusive (one pins a constant Z, the other varies it per cell)."
+            )
+        if self.sfr_normalised_amplitude and self.norm_scenario == "fixed_nion":
+            raise ValueError(
+                "sfr_normalised_amplitude applies only to the q_ion scenarios "
+                "('bpass_qion' / 'bb_qion'); 'fixed_nion' already converts the "
+                "lifetime Nion budget into a rate by dividing by the source "
+                "lifetime."
             )
 
 
@@ -379,3 +433,34 @@ class MetallicityEvolutionParameters(YmlParameters):
     Z_min: float = 1e-5
     # Output directory for metallicity results (if None, uses current directory)
     output_dir: OptStr = None
+    # Add a self-enrichment term to the halo ISM metallicity:
+    #   f_Z_halo = f_Z_cell (accreted / environment, the default behaviour)
+    #            + y(Z) * metal_retention * M_star / (f_b * M_halo)   (retained)
+    # The cell metal budget (accumulate_metals) is NOT modified, so with this
+    # flag off the pipeline reproduces the previous behaviour exactly.
+    ism_self_enrichment: bool = False
+    # f_ret: fraction of a halo's lifetime metal production retained in its ISM
+    # rather than expelled. Only used when ism_self_enrichment is True.
+    metal_retention: float = 0.5
+    # Produce metals from the stellar mass FORMED IN THIS SNAPSHOT rather than
+    # the halo's cumulative stellar mass.
+    #
+    # BPASS yields are per unit mass of a COEVAL population, but M_star is
+    # cumulative, so evolving every snapshot from the full M_star re-creates and
+    # re-enriches from the same stars at every step -- ~28x over-production by
+    # z~5.5, where only ~3.6% of a halo's stars are new per 10 Myr snapshot.
+    # This applies the same burst fraction min(1, dt_slice / t_form) that
+    # BPASSSource.sfr_normalised_amplitude applies to the ionizing output, using
+    # the identical source_lifetime(z), so metals and photons agree on which
+    # stars are young.
+    #
+    # Metals still ACCUMULATE across snapshots: the total approaches
+    # y * M_star_cumulative, which is right. Only the per-snapshot double count
+    # is removed. Off by default (previous behaviour).
+    sfr_normalised_yield: bool = False
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.metal_retention <= 1.0:
+            raise ValueError(
+                f"metal_retention must be in [0, 1], got {self.metal_retention}."
+            )

@@ -64,9 +64,12 @@ class BPASSSource(BlackBodyBase):
     """
 
     # TO DO: Change to access directly from parameter file instead (?)
+    # The full BPASS v2.2.1 grid: must match the 13 entries of the BPASS
+    # distribution's metals.txt (which BPASSYieldTable reads directly), so that
+    # the spectral / q_ion bins and the yield bins share one metallicity grid.
     BPASS_METALLICITIES: list[float] = [
         0.00001, 0.0001, 0.001, 0.002, 0.003, 0.004, 0.006,
-        0.008, 0.01, 0.014, 0.03, 0.04,
+        0.008, 0.01, 0.014, 0.02, 0.03, 0.04,
     ]
     
     def __init__(

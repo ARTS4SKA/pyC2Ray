@@ -11,7 +11,7 @@ from .utils import display_time
 from .utils.logutils import allow_rank_logging
 from .utils.sourceutils import FloatArray, IntArray, format_sources
 
-__all__ = ["evolve3D"]
+__all__ = ["evolve3D", "evolve3D_multigroup"]
 
 logger = logging.getLogger(__name__)
 
@@ -384,6 +384,271 @@ Convergence Criterion (Number of points): {conv_criterion: n}
 
     if use_mpi:
         # braodcast final result
+        MPI.COMM_WORLD.Bcast([xh_new, MPI.DOUBLE], root=0)
+
+    return xh_new, phi_ion
+
+
+def evolve3D_multigroup(
+    dt: float,
+    dr: float,
+    groups: list,
+    src_batch_size: int,
+    use_gpu: bool,
+    max_subbox: int,
+    subboxsize: int,
+    loss_fraction: float,
+    use_mpi: bool,
+    rank: int,
+    nprocs: int,
+    temp: FloatArray,
+    ndens: FloatArray,
+    xh: FloatArray,
+    clump: FloatArray,
+    minlogtau: float,
+    dlogtau: float,
+    R_max_LLS: float,
+    convergence_fraction: float,
+    sig: float,
+    bh00: float,
+    albpow: float,
+    colh0: float,
+    temph0: float,
+    abu_c: float,
+) -> tuple[FloatArray, FloatArray]:
+    """Multi-group variant of evolve3D: several source groups, each with its OWN
+    photoionization table (spectral shape), share one gas grid.
+
+    This is the engine for the cell-by-cell metallicity regime. Since ASORA holds
+    a single table on the device at a time, each convergence iteration raytraces
+    every group in turn -- swapping that group's table (and sources) onto the
+    device -- and sums their photoionization rates before the (shared) chemistry
+    solve. The photon budgets of all groups act on the same ionization field, so
+    the summation must happen inside the convergence loop.
+
+    Parameters
+    ----------
+    groups : list of (src_pos, src_flux, photo_thin_table, photo_thick_table)
+        One entry per spectral shape. src_pos has shape (3, n_group); src_flux
+        shape (n_group,); the two tables share the common tau grid of all groups.
+        All other parameters match evolve3D and are shared across groups.
+
+    Returns
+    -------
+    xh_new, phi_ion : as in evolve3D (phi_ion is the summed rate over all groups).
+    """
+    rank_prefix = f"Rank={rank}: " if use_mpi else ""
+
+    if use_gpu and not is_device_init():
+        raise RuntimeError(
+            "GPU not initialized. Please initialize it by calling device_init(N)"
+        )
+    if len(groups) == 0:
+        raise ValueError("evolve3D_multigroup called with no source groups")
+
+    N = temp.shape[0]
+    NumCells = N * N * N
+    conv_flag = NumCells
+    NumTau = groups[0][2].shape[0]
+    total_src = int(sum(g[1].shape[0] for g in groups))
+
+    # A cellwise source is flux-split across its two bracketing metallicity bins,
+    # so it appears in `groups` about twice. The convergence criterion must count
+    # DISTINCT sources (as evolve3D does), otherwise the split inflates it and
+    # loosens convergence.
+    n_distinct_src = len(
+        {
+            tuple(pos)
+            for src_pos, _, _, _ in groups
+            for pos in np.asarray(src_pos).T
+        }
+    )
+    conv_criterion = min(
+        int(convergence_fraction * NumCells), (n_distinct_src - 1) / 3
+    )
+    prev_sum_xh1_int: float = 2 * NumCells
+    prev_sum_xh0_int: float = 2 * NumCells
+    converged = False
+    if rank != 0:
+        xh_new = np.empty_like(xh)
+
+    xh_av = np.copy(xh)
+    xh_intermed = np.copy(xh)
+
+    if use_gpu:
+        ndens_flat = np.ravel(ndens).astype("float64", copy=True)
+        assert libasora is not None
+        libasora.density_to_device(ndens_flat)
+        xh_av_flat = np.ravel(xh).astype("float64", copy=True)
+        phi_ion_flat = np.ravel(np.zeros((N, N, N), dtype="float64"))
+
+        # Pre-format each group's sources (applying the MPI source split per group).
+        prepared = []
+        for src_pos, src_flux, thin, thick in groups:
+            g_num = src_flux.shape[0]
+            if use_mpi:
+                perrank = g_num // nprocs
+                i_start = int(rank * perrank)
+                i_end = int((rank + 1) * perrank) if rank != nprocs - 1 else g_num
+                sp, sf = src_pos[:, i_start:i_end], src_flux[i_start:i_end]
+            else:
+                sp, sf = src_pos, src_flux
+            if sf.shape[0] == 0:
+                continue
+            srcpos_flat, normflux_flat = format_sources(sp, sf)
+            prepared.append(
+                (
+                    srcpos_flat,
+                    normflux_flat,
+                    sf.shape[0],
+                    np.ascontiguousarray(thin),
+                    np.ascontiguousarray(thick),
+                )
+            )
+    else:
+        prepared_cpu = [g for g in groups if g[1].shape[0] > 0]
+
+    if rank == 0:
+        n_count = 0
+
+    logger.info(f"""Calling evolve3D_multigroup...
+dr [Mpc]: {dr / 3.086e24:.3e}
+dt [years]: {dt / 3.15576e07:.3e}
+{len(groups)} spectral group(s), {total_src:n} group entries ({n_distinct_src:n} distinct source(s)), total normalized flux: {sum(g[1].sum() for g in groups):.2e}
+Convergence Criterion (Number of points): {conv_criterion: n}
+""")
+
+    while not converged:
+        trt0 = time.time()
+        with allow_rank_logging(rank):
+            logger.info(f"{rank_prefix}Doing Raytracing ({len(groups)} groups)...")
+
+        if use_gpu:
+            phi_ion = np.zeros((N, N, N))
+            assert libasora is not None
+            for srcpos_flat, normflux_flat, numsrc_g, thin, thick in prepared:
+                # Swap this group's table & sources onto the device, then raytrace.
+                libasora.photo_table_to_device(thin, thick)
+                libasora.source_data_to_device(srcpos_flat, normflux_flat)
+                phi_ion_flat[:] = 0.0
+                libasora.do_all_sources(
+                    R_max_LLS,
+                    sig,
+                    dr,
+                    xh_av_flat,
+                    phi_ion_flat,
+                    numsrc_g,
+                    N,
+                    minlogtau,
+                    dlogtau,
+                    NumTau,
+                    src_batch_size,
+                )
+                phi_ion += np.reshape(phi_ion_flat, (N, N, N))
+        else:
+            phi_ion = np.zeros((N, N, N), order="F")
+            for src_pos, src_flux, thin, thick in prepared_cpu:
+                phi_g = np.zeros((N, N, N), order="F")
+                phi_heat = np.zeros((N, N, N), order="F")
+                coldensh_out = np.zeros((N, N, N), order="F")
+                libc2ray.raytracing.do_all_sources(
+                    src_flux,
+                    src_pos,
+                    max_subbox,
+                    subboxsize,
+                    coldensh_out,
+                    sig,
+                    dr,
+                    ndens,
+                    xh_av,
+                    phi_g,
+                    phi_heat,
+                    loss_fraction,
+                    thin,
+                    thick,
+                    np.zeros(NumTau),
+                    np.zeros(NumTau),
+                    minlogtau,
+                    dlogtau,
+                    R_max_LLS,
+                )
+                phi_ion += phi_g
+
+        with allow_rank_logging(rank):
+            logger.info(f"took {display_time(time.time() - trt0)}.")
+
+        if use_mpi:
+            if rank == 0:
+                MPI.COMM_WORLD.Reduce(
+                    MPI.IN_PLACE, [phi_ion, MPI.DOUBLE], op=MPI.SUM, root=0
+                )
+            else:
+                MPI.COMM_WORLD.Reduce([phi_ion, MPI.DOUBLE], None, op=MPI.SUM, root=0)
+            MPI.COMM_WORLD.Bcast([phi_ion, MPI.DOUBLE], root=0)
+
+        if rank == 0:
+            tch0 = time.time()
+            logger.info("Doing Chemistry...")
+            conv_flag = libc2ray.chemistry.global_pass(
+                dt,
+                ndens,
+                temp,
+                xh,
+                xh_av,
+                xh_intermed,
+                phi_ion,
+                clump,
+                bh00,
+                albpow,
+                colh0,
+                temph0,
+                abu_c,
+            )
+            logger.info(f"took {(time.time() - tch0): .1f} s.")
+
+            sum_xh1_int = np.sum(xh_intermed)
+            sum_xh0_int = np.sum(1.0 - xh_intermed)
+            if sum_xh1_int > 0.0:
+                rel_change_xh1 = np.abs((sum_xh1_int - prev_sum_xh1_int) / sum_xh1_int)
+            else:
+                rel_change_xh1 = 1.0
+            if sum_xh0_int > 0.0:
+                rel_change_xh0 = np.abs((sum_xh0_int - prev_sum_xh0_int) / sum_xh0_int)
+            else:
+                rel_change_xh0 = 1.0
+
+            logger.info(
+                f"Number of non-converged points: {conv_flag} of {NumCells} "
+                f"({conv_flag / NumCells * 100: .3f} % ), "
+                f"Relative change in ionfrac: {rel_change_xh1: .2e}",
+            )
+
+            converged = (conv_flag < conv_criterion) or (
+                (rel_change_xh1 < convergence_fraction)
+                and (rel_change_xh0 < convergence_fraction)
+            )
+            n_count += 1
+            prev_sum_xh1_int = sum_xh1_int
+            prev_sum_xh0_int = sum_xh0_int
+
+            if use_gpu and not converged:
+                xh_av_flat = np.ravel(xh_av)
+
+        if use_mpi:
+            MPI.COMM_WORLD.Bcast([xh_av_flat, MPI.DOUBLE], root=0)
+            MPI.COMM_WORLD.Bcast([xh_intermed, MPI.DOUBLE], root=0)
+            converged_array = array.array("i", [int(converged)])
+            MPI.COMM_WORLD.Bcast(converged_array, root=0)
+            if rank != 0:
+                converged = bool(converged_array[0])
+
+    if rank == 0:
+        logger.info(
+            f"Multiple source convergence reached after {n_count} ray-tracing iterations."
+        )
+        xh_new = xh_intermed
+
+    if use_mpi:
         MPI.COMM_WORLD.Bcast([xh_new, MPI.DOUBLE], root=0)
 
     return xh_new, phi_ion
