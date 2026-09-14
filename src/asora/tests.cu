@@ -170,19 +170,4 @@ namespace asoratest {
         return {q, s};
     }
 
-    asora::raytracing_lut lut_edge_cases() {
-        using namespace asora;
-
-        raytracing_lut lut(6);
-
-        lut.offsets[0] = pack_offset(Q_MAX, 0, 0);
-        lut.offsets[1] = pack_offset(0, Q_MAX, 0);
-        lut.offsets[2] = pack_offset(0, 0, Q_MAX);
-        lut.offsets[3] = pack_offset(-Q_MAX, 0, 0);
-        lut.offsets[4] = pack_offset(0, -Q_MAX, 0);
-        lut.offsets[5] = pack_offset(0, 0, -Q_MAX);
-
-        return lut;
-    }
-
 }  // namespace asoratest
