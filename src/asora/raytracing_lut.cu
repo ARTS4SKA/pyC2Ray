@@ -1,31 +1,38 @@
 #include "raytracing_lut.cuh"
 
+#include "memory.h"
 #include "utils.cuh"
 
-#include <array>
-#include <bit>
 #include <cassert>
 #include <cmath>
-#include <map>
+#include <cuda/std/array>
 #include <vector>
 
 namespace {
 
-    struct array_hash {
-        array_hash(size_t N) : N(N), N2(N * N) {}
+    // Cells in shell q preceding row i.
+    __host__ __device__ inline int row_offset(int q, int i) {
+        if (i == -q) return 0;
 
-        size_t operator()(const std::array<int, 3>& a) const {
-            return N2 * a[0] + N * a[1] + a[2];
-        }
+        auto x = 1 + 2 * (q + i) * (q + i) - 2 * q;
+        if (i <= 0) return x - 2 * i;
+        return x + 2 * i - 4 * i * i;
+    }
 
-       private:
-        size_t N;
-        size_t N2;
-    };
+    __host__ __device__ size_t cart2slot(int3 pos) {
+        auto&& [i, j, k] = pos;
+        int q = abs(i) + abs(j) + abs(k);
+        if (q == 0) return 0;
 
-    using inverse_lut_t = std::unordered_map<std::array<int, 3>, size_t, array_hash>;
+        int m = q - abs(i);
+        int P = row_offset(q, i);
+        int Q = (m == 0 || j == -m) ? 0 : 1 + 2 * (j + m - 1);
 
-    std::array<double, 3> compute_geometric_factors(int di, int dj, int dk) {
+        return asora::cells_to_shell(q - 1) + P + Q + (k > 0);
+    }
+
+    // Return dx, dy, path
+    __device__ double3 compute_geometric_factors(int di, int dj, int dk) {
         assert(std::abs(dk) >= std::abs(di) && std::abs(dk) >= std::abs(dj) && dk != 0);
         auto inv_dk = 1.0 / dk;
         return {
@@ -35,34 +42,33 @@ namespace {
         };
     }
 
-    void fill_lut_entry(
-        asora::raytracing_lut& raylut, size_t idx, std::array<int, 3> pos,
-        const inverse_lut_t& inverse_lut
+    __device__ void fill_lut_entry(
+        asora::raytracing_lut& raylut, size_t idx, int3 pos
     ) {
+        // Check that q > 0.
+        assert(std::abs(pos.x) + std::abs(pos.y) + std::abs(pos.z) > 0);
+
         using namespace asora;
 
+        raylut.offsets[idx] = pack_offset(pos);
+
         auto&& [di, dj, dk] = pos;
-
-        // Boundary checks.
-        assert(abs(di) + abs(dj) + abs(dk) > 0);
-        assert(abs(di) + abs(dj) + abs(dk) <= Q_MAX);
-
-        raylut.offsets[idx] = pack_offset(di, dj, dk);
-
-        double ai = std::abs(di);
-        double aj = std::abs(dj);
-        double ak = std::abs(dk);
+        auto ai = std::abs(di);
+        auto aj = std::abs(dj);
+        auto ak = std::abs(dk);
 
         if (ai <= 1 && aj <= 1 && ak <= 1)
             raylut.multipliers[idx] = sqrt(static_cast<double>(ai + ak + aj));
+        else
+            raylut.multipliers[idx] = 1.0;
 
         // Compute geometric factors and interpolation indices using inverse_lut.
         int si = (di > 0) - (di < 0);
         int sj = (dj > 0) - (dj < 0);
         int sk = (dk > 0) - (dk < 0);
 
-        std::array<int, 12> shifts;
-        std::array<double, 3> factors;
+        cuda::std::array<int, 12> shifts;
+        double3 dd;
         if (ak >= ai && ak >= aj) {
             shifts = {
                 si, sj, sk,  //
@@ -70,7 +76,7 @@ namespace {
                 si, 0,  sk,  //
                 0,  0,  sk   //
             };
-            factors = compute_geometric_factors(di, dj, dk);
+            dd = compute_geometric_factors(di, dj, dk);
         } else if (aj >= ai && aj >= ak) {
             shifts = {
                 si, sj, sk,  //
@@ -78,7 +84,7 @@ namespace {
                 si, sj, 0,   //
                 0,  sj, 0    //
             };
-            factors = compute_geometric_factors(di, dk, dj);
+            dd = compute_geometric_factors(di, dk, dj);
         } else {  // if (ai >= aj && ai >= ak)
             shifts = {
                 si, sj, sk,  //
@@ -86,36 +92,28 @@ namespace {
                 si, sj, 0,   //
                 si, 0,  0    //
             };
-            factors = compute_geometric_factors(dj, dk, di);
+            dd = compute_geometric_factors(dj, dk, di);
         }
-        raylut.dxs[idx] = factors[0];
-        raylut.dys[idx] = factors[1];
-        raylut.paths[idx] = factors[2];
+        raylut.dxs[idx] = dd.x;
+        raylut.dys[idx] = dd.y;
+        raylut.paths[idx] = dd.z;
 
-        const std::array<double, 4> weights = {
-            (1. - factors[0]) * (1. - factors[1]), (1. - factors[1]) * factors[0],
-            (1. - factors[0]) * factors[1], factors[0] * factors[1]
+        const cuda::std::array<double, 4> weights = {
+            (1. - dd.x) * (1. - dd.y), (1. - dd.y) * dd.x, (1. - dd.x) * dd.y,
+            dd.x * dd.y
         };
 
-        auto sx = shifts.data();
-        auto& indices = raylut.indices[idx];
         size_t index = 0;
+        auto& indices = raylut.indices[idx];
+        auto sx = shifts.data();
 #pragma unroll 4
-        for (size_t k = 0; k < 4; ++k, sx += 3) {
-            if (weights[k] > 0.0) {
-                auto it = inverse_lut.find({di - sx[0], dj - sx[1], dk - sx[2]});
-                assert(it != inverse_lut.end());
-                index = it->second;
-            }
+        for (size_t k = 0; k < 4; ++k) {
+            if (weights[k] > 0.0)
+                index = cart2slot({di - sx[0], dj - sx[1], dk - sx[2]});
             indices[k] = index;
+            sx += 3;
         }
     }
-
-    // Helper struct to hold cell coordinates and slot index for parallel work.
-    struct cell {
-        std::array<int, 3> pos;
-        size_t slot;
-    };
 
 }  // namespace
 
@@ -123,16 +121,18 @@ namespace asora {
 
     // With OFFSET_BITS = 10 and Q_MAX = 512, not every point is representable. The
     // maximum representable point is (511, 511, 511). The minimum representable point
-    // is (-512, -512, -512). We use the remaining 2 bits to represent the 3 missing
-    // points:
+    // is (-512, -512, -512). We use the remaining 2 bits to represent the following 3
+    // missing points, which are valid octahedral offsets:
     //
     // di = Q_MAX, dj = 0, dk = 0 -> 11...
     // di = 0, dj = Q_MAX, dk = 0 -> 10...
     // di = 0, dj = 0, dk = Q_MAX -> 01...
     //            everything else -> 00xxxxx
     //
-    uint32_t pack_offset(int di, int dj, int dk) {
+    __host__ __device__ uint32_t pack_offset(int3 pos) {
         using namespace asora;
+
+        auto&& [di, dj, dk] = pos;
 
         if (di == Q_MAX) {
             assert(dj == 0 && dk == 0);
@@ -149,6 +149,10 @@ namespace asora {
             return uint32_t(1) << (3 * OFFSET_BITS);
         }
 
+        assert(-Q_MAX <= di && di < Q_MAX);
+        assert(-Q_MAX <= dj && dj < Q_MAX);
+        assert(-Q_MAX <= dk && dk < Q_MAX);
+
         // 3 x 10 bits = 30 bits used, 2 bits spare in the uint32.
         auto pi = static_cast<uint32_t>(di + Q_MAX) & OFFSET_MASK;
         auto pj = static_cast<uint32_t>(dj + Q_MAX) & OFFSET_MASK;
@@ -156,7 +160,7 @@ namespace asora {
         return (pi << 2 * OFFSET_BITS) | (pj << OFFSET_BITS) | pk;
     }
 
-    __host__ __device__ cuda::std::array<int, 3> unpack_offset(uint32_t offset) {
+    __host__ __device__ int3 unpack_offset(uint32_t offset) {
         switch (offset >> (3 * OFFSET_BITS)) {
             case 3:
                 return {Q_MAX, 0, 0};
@@ -173,46 +177,121 @@ namespace asora {
         return {di, dj, dk};
     }
 
-    raytracing_lut create_lut(int q_max) {
+    raytracing_lut::raytracing_lut() {
+        offsets = device::get(buffer_tag::raylut_offsets).data<uint32_t>();
+        multipliers = device::get(buffer_tag::raylut_multipliers).data<double>();
+        dxs = device::get(buffer_tag::raylut_dx).data<double>();
+        dys = device::get(buffer_tag::raylut_dy).data<double>();
+        paths = device::get(buffer_tag::raylut_path).data<double>();
+        indices = device::get(buffer_tag::raylut_indices).data<index4>();
+    }
+
+    // Performed by a single block for now
+    __global__ void fill_lut_kernel(
+        raytracing_lut raylut, int q_max, const int3* __restrict__ cells
+    ) {
+        // q = 0:
+        if (threadIdx.x == 0) {
+            raylut.offsets[0] = pack_offset({0, 0, 0});
+            raylut.multipliers[0] = 1.0;
+            raylut.dxs[0] = 0.0;
+            raylut.dys[0] = 0.0;
+            raylut.paths[0] = 0.5;
+            raylut.indices[0] = {0, 0, 0, 0};
+        }
+        __syncthreads();
+
+        for (int q = 1; q <= q_max; ++q) {
+            // Each thread can process multiple cells.
+            for (size_t s = cells_to_shell(q - 1) + threadIdx.x; s < cells_to_shell(q);
+                 s += blockDim.x) {
+                fill_lut_entry(raylut, s, cells[s]);
+            }
+            __syncthreads();
+        }
+    }
+
+    size_t create_raytracing_lut(int q_max) {
+        if (q_max < 0 || q_max > Q_MAX) {
+            throw std::invalid_argument("q_max must be in the range [0, Q_MAX]");
+        }
+
         auto n_cells = asora::cells_to_shell(q_max);
 
-        raytracing_lut lut(n_cells);
+        // Check first if the LUT already exists and has the correct size.
+        if (device::contains(buffer_tag::raylut_offsets)) {
+            auto existing_size =
+                device::get(buffer_tag::raylut_offsets).size<uint32_t>();
+            if (existing_size >= n_cells) return n_cells;
+        }
 
-        // Inverse LUT for interpolation indices.
-        array_hash hash(2 * q_max + 1);
-        inverse_lut_t inverse_lut(n_cells, hash);
-        inverse_lut.try_emplace({0, 0, 0}, 0);
+        // Create array of cells to process
+        std::vector<int3> cells;
+        cells.reserve(n_cells);
 
-        // Add q = 0 entry.
-        lut.paths[0] = 0.5;
-        lut.offsets[0] = pack_offset(0, 0, 0);
-
-        // Work is parallelized over each q-shell.
-        size_t slot = 0;
-        for (int q = 1; q <= q_max; ++q) {
-            std::vector<cell> cells;
-            cells.reserve(asora::cells_in_shell(q));
-
-            // Collect cell slots.
+        for (int q = 0; q <= q_max; ++q) {
             for (int i = -q; i <= q; ++i) {
                 auto ai = std::abs(i);
                 for (int j = ai - q; j <= q - ai; ++j) {
                     int k = q - ai - abs(j);
-                    cells.push_back({{i, j, -k}, ++slot});
-                    if (k != 0) cells.push_back({{i, j, k}, ++slot});
+                    if (k != 0) cells.push_back({i, j, -k});
+                    cells.push_back({i, j, k});
                 }
             }
-
-            // Perform parallel work.
-#pragma omp parallel for schedule(static)
-            for (size_t c = 0; c < cells.size(); ++c) {
-                const auto& cell = cells[c];
-                fill_lut_entry(lut, cell.slot, cell.pos, inverse_lut);
-            }
-
-            // Update inverse LUT.
-            for (const auto& cell : cells) inverse_lut.try_emplace(cell.pos, cell.slot);
         }
+
+        // Create device buffer and move cells array
+        device_buffer cells_buffer(n_cells * sizeof(int3));
+        cells_buffer.copyFromHost(cells.data(), n_cells * sizeof(int3));
+
+        // Allocate lut memory on device
+        device::ensure<uint32_t>(buffer_tag::raylut_offsets, n_cells);
+        device::ensure<double>(buffer_tag::raylut_multipliers, n_cells);
+        device::ensure<double>(buffer_tag::raylut_dx, n_cells);
+        device::ensure<double>(buffer_tag::raylut_dy, n_cells);
+        device::ensure<double>(buffer_tag::raylut_path, n_cells);
+        device::ensure<index4>(buffer_tag::raylut_indices, n_cells);
+
+        // Launch kernel to fill lut
+        raytracing_lut lut_d{};
+
+        fill_lut_kernel<<<1, 256>>>(lut_d, q_max, cells_buffer.data<int3>());
+        safe_cuda(cudaDeviceSynchronize());
+
+        return n_cells;
+    }
+
+    raytracing_lut_entries copy_lut_to_host() {
+        auto offsets = device::get(buffer_tag::raylut_offsets);
+        auto multipliers = device::get(buffer_tag::raylut_multipliers);
+        auto dxs = device::get(buffer_tag::raylut_dx);
+        auto dys = device::get(buffer_tag::raylut_dy);
+        auto paths = device::get(buffer_tag::raylut_path);
+        auto indices = device::get(buffer_tag::raylut_indices);
+
+        auto n_cells = offsets.size<uint32_t>();
+
+        std::vector<uint32_t> offsets_h(n_cells);
+        std::vector<double> multipliers_h(n_cells);
+        std::vector<double> dxs_h(n_cells);
+        std::vector<double> dys_h(n_cells);
+        std::vector<double> paths_h(n_cells);
+        std::vector<index4> indices_h(n_cells);
+
+        offsets.copyToHost(offsets_h.data());
+        multipliers.copyToHost(multipliers_h.data());
+        dxs.copyToHost(dxs_h.data());
+        dys.copyToHost(dys_h.data());
+        paths.copyToHost(paths_h.data());
+        indices.copyToHost(indices_h.data());
+
+        raytracing_lut_entries lut;
+        lut.reserve(n_cells);
+        for (size_t i = 0; i < n_cells; ++i)
+            lut.push_back(
+                {offsets_h[i], multipliers_h[i], dxs_h[i], dys_h[i], paths_h[i],
+                 indices_h[i]}
+            );
 
         return lut;
     }
