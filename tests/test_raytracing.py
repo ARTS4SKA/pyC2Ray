@@ -60,7 +60,7 @@ def setup_do_all_sources(
     libasora.source_data_to_device(src_pos, src_flux)
 
     q_max = math.ceil(math.sqrt(3) * min(radius, math.sqrt(3) * mesh_size / 2.0))
-    libasora.create_lut(q_max)
+    libasora.create_raytracing_lut(q_max)
 
     # Size of a cell
     box = 50.0 * u.pc
