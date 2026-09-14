@@ -20,6 +20,4 @@ namespace asoratest {
     std::array<int, 3> linthrd2cart(int q, int s);
     std::array<int, 2> cart2linthrd(int i, int j, int k);
 
-    asora::raytracing_lut lut_edge_cases();
-
 };  // namespace asoratest

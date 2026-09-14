@@ -123,23 +123,6 @@ namespace {
 
 namespace asora {
 
-    void create_raytracing_lut(int q_max) {
-        if (device::contains(buffer_tag::raylut_offsets)) return;
-
-        auto lut = create_lut(q_max);
-
-        auto upload = [](const auto &vec, buffer_tag tag) {
-            device::ensure_transfer(tag, vec.data(), vec.size());
-        };
-
-        upload(lut.offsets, buffer_tag::raylut_offsets);
-        upload(lut.multipliers, buffer_tag::raylut_multipliers);
-        upload(lut.dxs, buffer_tag::raylut_dx);
-        upload(lut.dys, buffer_tag::raylut_dy);
-        upload(lut.paths, buffer_tag::raylut_path);
-        upload(lut.indices, buffer_tag::raylut_indices);
-    }
-
     void do_all_sources_gpu(
         double R, double sigma, double dr, const double *xh_av, double *phi_ion,
         size_t num_src, size_t m1, double minlogtau, double dlogtau, size_t num_tau,
@@ -160,16 +143,6 @@ namespace asora {
         // faces of the octahedron. To raytrace the whole volume, the octahedron must
         // be 1.5*N in size. Allocate (if necessary) the column density array.
         int q_max = std::ceil(c::sqrt3<> * std::min(R, c::sqrt3<> * m1 / 2.0));
-
-        // Build the LUT for the raytracing kernel.
-        raytracing_lut_ptr lut_d{
-            get_data_view<uint32_t>(buffer_tag::raylut_offsets),
-            get_data_view<double>(buffer_tag::raylut_multipliers),
-            get_data_view<double>(buffer_tag::raylut_dx),
-            get_data_view<double>(buffer_tag::raylut_dy),
-            get_data_view<double>(buffer_tag::raylut_path),
-            get_data_view<index4>(buffer_tag::raylut_indices)
-        };
 
         // Size of grid data.
         auto n_cells = m1 * m1 * m1;
@@ -215,6 +188,9 @@ namespace asora {
 
         linspace<double> logtau{minlogtau, dlogtau, static_cast<size_t>(num_tau)};
 
+        // Collect the LUT for raytracing kernel.
+        raytracing_lut lut_d{};
+
         // Loop over batches of sources
         for (size_t ns = 0; ns < num_src; ns += grid_size) {
             // Raytrace the current batch of sources in parallel
@@ -237,7 +213,7 @@ namespace asora {
     // to the current cell and finds the photoionization rate
     // ========================================================================
     __global__ void evolve0D_gpu(
-        raytracing_lut_ptr lut, size_t m1, double dr, double R_max, int q_max,
+        raytracing_lut lut, size_t m1, double dr, double R_max, int q_max,
         size_t ns_start, size_t num_src, const int *__restrict__ src_pos,
         const double *__restrict__ src_flux, element_data data_HI,
         density_maps densities, photo_tables ion_tables, linspace<double> logtau
