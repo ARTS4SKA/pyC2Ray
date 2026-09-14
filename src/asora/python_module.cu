@@ -2,6 +2,8 @@
 #include "chemistry.h"
 #include "memory.h"
 #include "raytracing.cuh"
+#include "raytracing_lut.cuh"
+#include "utils.cuh"
 
 #include <Python.h>
 #include <numpy/arrayobject.h>
@@ -15,6 +17,65 @@
  */
 
 namespace {
+
+    PyTypeObject *LutEntryType = nullptr;
+
+    PyStructSequence_Field lut_entry_fields[] = {
+        {"di", "cell offset in the i direction"},
+        {"dj", "cell offset in the j direction"},
+        {"dk", "cell offset in the k direction"},
+        {"dx", "geometric factor along x"},
+        {"dy", "geometric factor along y"},
+        {"path", "path length through the cell"},
+        {"indices", "tuple of 4 LUT indices of the interpolation neighbours"},
+        {nullptr, nullptr}
+    };
+
+    PyStructSequence_Desc lut_entry_desc = {
+        "libasora.LutEntry", "Look-up table entry produced by asora::create_lut",
+        lut_entry_fields, 7
+    };
+
+    /// Convert a asora lut_entry to a LutEntry python object.
+    PyObject *build_lut_entry(const asora::raytracing_lut::entry &item) {
+        PyObject *obj = PyStructSequence_New(LutEntryType);
+        if (!obj) return nullptr;
+
+        PyObject *indices = Py_BuildValue(
+            "kkkk", item.indices[0], item.indices[1], item.indices[2], item.indices[3]
+        );
+        if (!indices) {
+            Py_DECREF(obj);
+            return nullptr;
+        }
+
+        auto &&[di, dj, dk] = asora::unpack_offset(item.offset);
+        PyStructSequence_SetItem(obj, 0, PyLong_FromLong(di));
+        PyStructSequence_SetItem(obj, 1, PyLong_FromLong(dj));
+        PyStructSequence_SetItem(obj, 2, PyLong_FromLong(dk));
+        PyStructSequence_SetItem(obj, 3, PyFloat_FromDouble(item.dx));
+        PyStructSequence_SetItem(obj, 4, PyFloat_FromDouble(item.dy));
+        PyStructSequence_SetItem(obj, 5, PyFloat_FromDouble(item.path));
+        PyStructSequence_SetItem(obj, 6, indices);
+
+        return obj;
+    }
+
+    PyObject *create_lut_list(const asora::raytracing_lut_entries &lut) {
+        PyObject *result = PyList_New(static_cast<Py_ssize_t>(lut.size()));
+        if (!result) return nullptr;
+
+        for (size_t i = 0; i < lut.size(); ++i) {
+            PyObject *entry = build_lut_entry(lut[i]);
+            if (!entry) {
+                Py_DECREF(result);
+                return nullptr;
+            }
+            PyList_SET_ITEM(result, static_cast<Py_ssize_t>(i), entry);
+        }
+
+        return result;
+    }
 
     /// Helper function to map C++ types to NPY_TYPES for type checking
     template <typename T>
@@ -62,60 +123,88 @@ namespace {
 
 }  // namespace
 
-/// Expose asora::do_all_sources
-PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) {
-    double R;
-    double sig;
-    double dr;
-    PyArrayObject *xh_av;
-    PyArrayObject *phi_ion;
-    size_t num_src;
-    size_t m1;
-    double minlogtau;
-    double dlogtau;
-    size_t num_tau;
-    size_t grid_size;
-    size_t block_size = 256;
+PyObject *asora_cells_in_shell([[maybe_unused]] PyObject *self, PyObject *args) {
+    int q;
+    if (!PyArg_ParseTuple(args, "i", &q)) return nullptr;
 
-    if (!PyArg_ParseTuple(
-            args, "dddOOkkddkk|k", &R, &sig, &dr, &xh_av, &phi_ion, &num_src, &m1,
-            &minlogtau, &dlogtau, &num_tau, &grid_size, &block_size
-        ))
-        return nullptr;
-
-    // Error checking
-    if (!numpy_check<double>(xh_av) || !numpy_check<double>(phi_ion)) return nullptr;
-
-    // Get Array data
-    auto xh_av_data = static_cast<double *>(PyArray_DATA(xh_av));
-    auto phi_ion_data = static_cast<double *>(PyArray_DATA(phi_ion));
-
-    try {
-        asora::do_all_sources_gpu(
-            R, sig, dr, xh_av_data, phi_ion_data, num_src, m1, minlogtau, dlogtau,
-            num_tau, grid_size, block_size
-        );
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
-        return nullptr;
-    }
-
-    return Py_None;
+    auto n = asora::cells_in_shell(q);
+    return Py_BuildValue("i", n);
 }
 
-PyObject *asora_create_lut([[maybe_unused]] PyObject *self, PyObject *args) {
-    size_t q_max = 0;
-    if (!PyArg_ParseTuple(args, "k", &q_max)) return nullptr;
+PyObject *asora_cells_to_shell([[maybe_unused]] PyObject *self, PyObject *args) {
+    int q;
+    if (!PyArg_ParseTuple(args, "i", &q)) return nullptr;
 
+    auto n = asora::cells_to_shell(q);
+    return Py_BuildValue("i", n);
+}
+
+PyObject *asora_create_raytracing_lut([[maybe_unused]] PyObject *self, PyObject *args) {
+    int q_max = 0;
+    if (!PyArg_ParseTuple(args, "i", &q_max)) return nullptr;
+
+    size_t n_cells = 0;
     try {
         // Initialize the device
-        asora::create_raytracing_lut(q_max);
+        n_cells = asora::create_raytracing_lut(q_max);
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_MemoryError, e.what());
         return nullptr;
     }
 
-    return Py_None;
+    return Py_BuildValue("k", n_cells);
+}
+
+PyObject *asora_get_raytracing_lut([[maybe_unused]] PyObject *self, PyObject *args) {
+    int q_max = 0;
+    if (!PyArg_ParseTuple(args, "i", &q_max)) return nullptr;
+
+    try {
+        asora::create_raytracing_lut(q_max);
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return nullptr;
+    }
+
+    auto lut = asora::copy_lut_to_host();
+    return create_lut_list(lut);
+}
+
+PyObject *asora_pack_offset([[maybe_unused]] PyObject *self, PyObject *args) {
+    int i = 0;
+    int j = 0;
+    int k = 0;
+    if (!PyArg_ParseTuple(args, "iii", &i, &j, &k)) return nullptr;
+
+    uint32_t offset = 0;
+    try {
+        offset = asora::pack_offset({i, j, k});
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return nullptr;
+    }
+
+    return PyLong_FromUnsignedLong(offset);
+}
+
+PyObject *asora_unpack_offset([[maybe_unused]] PyObject *self, PyObject *args) {
+    uint32_t offset = 0;
+    if (!PyArg_ParseTuple(args, "k", &offset)) return nullptr;
+
+    int i = 0;
+    int j = 0;
+    int k = 0;
+    try {
+        auto &&[di, dj, dk] = asora::unpack_offset(offset);
+        i = di;
+        j = dj;
+        k = dk;
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return nullptr;
+    }
+
+    return Py_BuildValue("iii", i, j, k);
 }
 
 /// Expose asora::device::initialize
@@ -233,6 +322,46 @@ PyObject *asora_prepare_grid_buffers([[maybe_unused]] PyObject *self, PyObject *
     return Py_None;
 }
 
+PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) {
+    double R;
+    double sig;
+    double dr;
+    PyArrayObject *xh_av;
+    PyArrayObject *phi_ion;
+    size_t num_src;
+    size_t m1;
+    double minlogtau;
+    double dlogtau;
+    size_t num_tau;
+    size_t grid_size;
+    size_t block_size = 256;
+
+    if (!PyArg_ParseTuple(
+            args, "dddOOkkddkk|k", &R, &sig, &dr, &xh_av, &phi_ion, &num_src, &m1,
+            &minlogtau, &dlogtau, &num_tau, &grid_size, &block_size
+        ))
+        return nullptr;
+
+    // Error checking
+    if (!numpy_check<double>(xh_av) || !numpy_check<double>(phi_ion)) return nullptr;
+
+    // Get Array data
+    auto xh_av_data = static_cast<double *>(PyArray_DATA(xh_av));
+    auto phi_ion_data = static_cast<double *>(PyArray_DATA(phi_ion));
+
+    try {
+        asora::do_all_sources_gpu(
+            R, sig, dr, xh_av_data, phi_ion_data, num_src, m1, minlogtau, dlogtau,
+            num_tau, grid_size, block_size
+        );
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return nullptr;
+    }
+
+    return Py_None;
+}
+
 PyObject *asora_chemistry_global_pass([[maybe_unused]] PyObject *self, PyObject *args) {
     double dt;
     PyArrayObject *temp;
@@ -281,8 +410,18 @@ extern "C" {
 #endif  // __cplusplus
 
 static PyMethodDef asoraMethods[] = {
-    {"do_all_sources", asora_do_all_sources, METH_VARARGS, "Perform ASORA raytracing"},
-    {"create_lut", asora_create_lut, METH_VARARGS, "Create LUT for ASORA raytracing"},
+    {"cells_in_shell", asora_cells_in_shell, METH_VARARGS,
+     "Number of cells in q-shell"},
+    {"cells_to_shell", asora_cells_to_shell, METH_VARARGS,
+     "Cumulative number of cells up to q-shell"},
+    {"create_raytracing_lut", asora_create_raytracing_lut, METH_VARARGS,
+     "Create LUT for ASORA raytracing"},
+    {"get_raytracing_lut", asora_get_raytracing_lut, METH_VARARGS,
+     "Create and copy look-up table for raytracing"},
+    {"pack_offset", asora_pack_offset, METH_VARARGS,
+     "Pack cell offset into a single integer"},
+    {"unpack_offset", asora_unpack_offset, METH_VARARGS,
+     "Unpack cell offset from a single integer"},
     {"device_init", asora_device_init, METH_VARARGS,
      "Initialize device and allocate memory"},
     {"device_close", asora_device_close, METH_VARARGS, "Close device and free memory"},
@@ -298,6 +437,7 @@ static PyMethodDef asoraMethods[] = {
      "Copy source data to the device"},
     {"prepare_grid_buffers", asora_prepare_grid_buffers, METH_VARARGS,
      "Ensure grid buffers are allocated with exact size for mesh m1"},
+    {"do_all_sources", asora_do_all_sources, METH_VARARGS, "Perform ASORA raytracing"},
     {"chemistry_global_pass", asora_chemistry_global_pass, METH_VARARGS,
      "Solve chemistry ODE"},
     {NULL, NULL, 0, NULL} /* Sentinel */
@@ -312,6 +452,24 @@ PyMODINIT_FUNC PyInit_libasora(void) {
     PyObject *mod = PyModule_Create(&asoramodule);
     if (!mod) return nullptr;
     import_array();
+
+    if (!LutEntryType) {
+        LutEntryType = PyStructSequence_NewType(&lut_entry_desc);
+        if (!LutEntryType) {
+            Py_DECREF(mod);
+            return nullptr;
+        }
+    }
+
+    Py_INCREF(LutEntryType);
+    if (PyModule_AddObject(
+            mod, "LutEntry", reinterpret_cast<PyObject *>(LutEntryType)
+        ) < 0) {
+        Py_DECREF(LutEntryType);
+        Py_DECREF(mod);
+        return nullptr;
+    }
+
     return mod;
 }
 
