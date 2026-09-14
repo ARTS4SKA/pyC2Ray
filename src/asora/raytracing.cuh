@@ -4,8 +4,6 @@
 #include "raytracing_lut.cuh"
 
 namespace asora {
-    void create_raytracing_lut(int q_max);
-
     /* @brief Raytrace all sources and compute photoionization rates
      *
      * Performs GPU-accelerated raytracing for all radiation sources to calculate
@@ -76,7 +74,7 @@ namespace asora {
      * @param logtau Logarithmically-spaced optical depth grid
      */
     __global__ void evolve0D_gpu(
-        raytracing_lut_ptr lut, size_t m1, double dr, double R_max, int q_max,
+        raytracing_lut lut, size_t m1, double dr, double R_max, int q_max,
         size_t ns_start, size_t num_src, const int *__restrict__ src_pos,
         const double *__restrict__ src_flux, element_data data_HI,
         density_maps densities, photo_tables ion_tables, linspace<double> logtau
