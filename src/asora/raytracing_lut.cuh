@@ -26,7 +26,7 @@ namespace asora {
     __host__ __device__ uint32_t pack_offset(const int3 &pos);
     __host__ __device__ int3 unpack_offset(uint32_t offset);
 
-    /* @brief Structure to hold a fixed-size array of indices, aligned to 4 bytes.
+    /* @brief Structure to hold a fixed-size array of indices, aligned to 16 bytes.
      *
      * This structure is used to store the short-characteristic indices with element
      * access by index. The alignment ensures that the structure can be safely used in
@@ -91,6 +91,13 @@ namespace asora {
     size_t create_raytracing_lut(int q_max);
 
     using raytracing_lut_entries = std::vector<asora::raytracing_lut::entry>;
-    raytracing_lut_entries copy_lut_to_host();
+
+    /* @brief Copy the raytracing lookup table from device to host.
+     *
+     * @param q_max Maximum q-shell index, included.
+     * @return A vector of raytracing_lut::entry structures containing the lookup table
+     *         data on the host.
+     */
+    raytracing_lut_entries copy_lut_to_host(int q_max);
 
 }  // namespace asora
