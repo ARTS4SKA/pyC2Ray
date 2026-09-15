@@ -181,26 +181,21 @@ class TestLibasora:
         dens = np.full(20**3, 0.5, dtype=np.float64)
         libasora.density_to_device(dens)
 
+    def test_pack_offsets_out_of_bounds(self) -> None:
+        assert libasora is not None
+        with pytest.raises(RuntimeError):
+            libasora.pack_offset(512, 1, -1)
+        with pytest.raises(RuntimeError):
+            libasora.pack_offset(0, 513, 0)
+        with pytest.raises(RuntimeError):
+            libasora.pack_offset(0, 0, -513)
+
     def test_pack_unpack_offsets(self) -> None:
         assert libasora is not None
         for pos in itertools.product(range(-Q_MAX, Q_MAX + 1), repeat=3):
             packed = libasora.pack_offset(*pos)
             unpacked = libasora.unpack_offset(packed)
             assert pos == unpacked
-
-    def test_cells_in_shell(self) -> None:
-        assert libasora is not None
-        assert libasora.cells_in_shell(0) == 1
-        for q in range(1, Q_MAX):
-            assert libasora.cells_in_shell(q) == 4 * q**2 + 2
-
-    def test_cells_to_shell(self) -> None:
-        q_tot = 1
-        assert libasora is not None
-        assert libasora.cells_to_shell(0) == q_tot
-        for q in range(1, Q_MAX):
-            q_tot += 4 * q**2 + 2
-            assert libasora.cells_to_shell(q) == q_tot
 
     @pytest.mark.parametrize(
         "pos",
@@ -217,6 +212,20 @@ class TestLibasora:
         packed = libasora.pack_offset(*pos)
         unpacked = libasora.unpack_offset(packed)
         assert pos == unpacked
+
+    def test_cells_in_shell(self) -> None:
+        assert libasora is not None
+        assert libasora.cells_in_shell(0) == 1
+        for q in range(1, Q_MAX):
+            assert libasora.cells_in_shell(q) == 4 * q**2 + 2
+
+    def test_cells_to_shell(self) -> None:
+        q_tot = 1
+        assert libasora is not None
+        assert libasora.cells_to_shell(0) == q_tot
+        for q in range(1, Q_MAX):
+            q_tot += 4 * q**2 + 2
+            assert libasora.cells_to_shell(q) == q_tot
 
     def test_raytracing_lut(self, init_device) -> None:
         def geometric_factors(di: int, dj: int, dk: int) -> tuple[float, float, float]:
@@ -281,11 +290,3 @@ class TestLibasora:
             assert (ijk == ijk[indices]).all()
 
             start += ncells
-
-    @pytest.mark.parametrize("q_max", [50, 100, 150, 200, 250])
-    def test_benchmark_create_raytracing_lut(
-        self, benchmark, init_device, q_max: int
-    ) -> None:
-        assert libasora is not None
-        libasora.create_raytracing_lut(q_max)
-        benchmark(libasora.create_raytracing_lut, q_max)

@@ -127,7 +127,7 @@ PyObject *asora_cells_in_shell([[maybe_unused]] PyObject *self, PyObject *args) 
     if (!PyArg_ParseTuple(args, "i", &q)) return nullptr;
 
     auto n = asora::cells_in_shell(q);
-    return Py_BuildValue("i", n);
+    return PyLong_FromSize_t(n);
 }
 
 PyObject *asora_cells_to_shell([[maybe_unused]] PyObject *self, PyObject *args) {
@@ -135,7 +135,7 @@ PyObject *asora_cells_to_shell([[maybe_unused]] PyObject *self, PyObject *args) 
     if (!PyArg_ParseTuple(args, "i", &q)) return nullptr;
 
     auto n = asora::cells_to_shell(q);
-    return Py_BuildValue("i", n);
+    return PyLong_FromSize_t(n);
 }
 
 PyObject *asora_create_raytracing_lut([[maybe_unused]] PyObject *self, PyObject *args) {
@@ -147,7 +147,7 @@ PyObject *asora_create_raytracing_lut([[maybe_unused]] PyObject *self, PyObject 
         // Initialize the device
         n_cells = asora::create_raytracing_lut(q_max);
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_MemoryError, e.what());
+        PyErr_SetString(PyExc_RuntimeError, e.what());
         return nullptr;
     }
 
@@ -158,14 +158,15 @@ PyObject *asora_get_raytracing_lut([[maybe_unused]] PyObject *self, PyObject *ar
     int q_max = 0;
     if (!PyArg_ParseTuple(args, "i", &q_max)) return nullptr;
 
+    asora::raytracing_lut_entries lut;
     try {
         asora::create_raytracing_lut(q_max);
+        lut = asora::copy_lut_to_host(q_max);
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return nullptr;
     }
 
-    auto lut = asora::copy_lut_to_host();
     return create_lut_list(lut);
 }
 
@@ -185,12 +186,12 @@ PyObject *asora_pack_offset([[maybe_unused]] PyObject *self, PyObject *args) {
 }
 
 PyObject *asora_unpack_offset([[maybe_unused]] PyObject *self, PyObject *args) {
-    uint32_t offset = 0;
-    if (!PyArg_ParseTuple(args, "k", &offset)) return nullptr;
+    unsigned int offset = 0;
+    if (!PyArg_ParseTuple(args, "I", &offset)) return nullptr;
 
     int3 pos;
     try {
-        pos = asora::unpack_offset(offset);
+        pos = asora::unpack_offset(static_cast<uint32_t>(offset));
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return nullptr;
