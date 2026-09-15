@@ -157,7 +157,7 @@ namespace asora {
         clumping_factor,         ///< Clumping factor array (23)
         // Ray-tracing LUT arrays
         raylut_offsets,      ///< di, dj, dk offsets
-        raylut_multipliers,  ///< interpolation mulitpliers
+        raylut_multipliers,  ///< interpolation multipliers
         raylut_dx,           ///< dx weight component
         raylut_dy,           ///< dy weight component
         raylut_path,         ///< path length through each cell
