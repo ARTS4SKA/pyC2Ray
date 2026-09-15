@@ -50,17 +50,13 @@ def setup_do_all_sources(
     # Copy density field to GPU device
     libasora.density_to_device(ndens)
 
-    # Efficiency factor (converting mass to photons)
-    f_gamma = 100.0
-
     # Define some random sources
     rng = np.random.default_rng(918)
     src_pos = rng.integers(0, mesh_size, size=(3 * num_sources), dtype=np.int32)
-    norm_flux = rng.uniform(1e10, 1e14, size=num_sources).astype(np.float64)
-    norm_flux *= f_gamma / 1e48
+    src_flux = rng.uniform(1e4, 1e8, size=num_sources).astype(np.float64)
 
     # Copy source list to GPU device
-    libasora.source_data_to_device(src_pos, norm_flux)
+    libasora.source_data_to_device(src_pos, src_flux)
 
     # Size of a cell
     box = 50.0 * u.pc
@@ -86,10 +82,8 @@ def test_do_all_sources(data_dir, init_device):
     with setup_do_all_sources() as args:
         libasora.do_all_sources(*args)
 
+        phi_ion = args[4]
         expected_phi_ion = np.load(data_dir / "photo_ionization_rate.npy")
-
-        phi_ion = args[4] * 1e40
-        expected_phi_ion *= 1e40
 
         assert np.allclose(phi_ion, expected_phi_ion)
 
@@ -102,4 +96,12 @@ def test_benchmark_do_all_sources(
     benchmark, init_device, mesh_size, batch_size, block_size
 ):
     with setup_do_all_sources(10000, mesh_size, batch_size, block_size) as args:
+        benchmark(libasora.do_all_sources, *args)
+
+
+@pytest.mark.parametrize("log_ns", range(7))
+@pytest.mark.benchmark(warmup=True, warmup_iterations=1)
+def test_benchmark_do_all_sources_vary_sources(benchmark, init_device, log_ns):
+    sources = int(10**log_ns)
+    with setup_do_all_sources(sources, 200, 64, 256, 10.0) as args:
         benchmark(libasora.do_all_sources, *args)
