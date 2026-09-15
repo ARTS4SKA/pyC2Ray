@@ -87,7 +87,9 @@ namespace {
         const density_maps &densities, size_t m1, const photo_tables &ion_tables,
         const linspace<double> &logtau, const int2 &limit
     ) {
-        auto &&[di, dj, dk] = unpack_offset(entry.offset);
+        const auto &di = entry.di;
+        const auto &dj = entry.dj;
+        const auto &dk = entry.dk;
 
         if ((di < limit.x) || (di > limit.y) || (dj < limit.x) || (dj > limit.y) ||
             (dk < limit.x) || (dk > limit.y))
