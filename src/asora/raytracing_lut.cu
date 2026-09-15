@@ -6,9 +6,18 @@
 #include <cassert>
 #include <cmath>
 #include <cuda/std/array>
+#include <ranges>
 #include <vector>
 
 namespace {
+
+    constexpr size_t LUT_SIZE = asora::Q_MAX + 1;
+    __device__ __constant__ size_t cells_in_shell_cache[LUT_SIZE];
+    __device__ __constant__ size_t cells_to_shell_cache[LUT_SIZE];
+
+    // 2^10 = 1024, possible values in range [-512, 512)
+    constexpr uint32_t OFFSET_BITS = 10;
+    constexpr uint32_t OFFSET_MASK = (1u << OFFSET_BITS) - 1;
 
     // Cells in shell q preceding row i.
     __host__ __device__ inline int row_offset(int q, int i) {
@@ -19,7 +28,7 @@ namespace {
         return x + 2 * i - 4 * i * i;
     }
 
-    __host__ __device__ size_t cart2slot(int3 pos) {
+    __host__ __device__ size_t cart2slot(const int3& pos) {
         auto&& [i, j, k] = pos;
         int q = abs(i) + abs(j) + abs(k);
         if (q == 0) return 0;
@@ -34,16 +43,16 @@ namespace {
     // Return dx, dy, path
     __device__ double3 compute_geometric_factors(int di, int dj, int dk) {
         assert(std::abs(dk) >= std::abs(di) && std::abs(dk) >= std::abs(dj) && dk != 0);
-        auto inv_dk = 1.0 / dk;
+        auto inv_dk = 1.0 / std::abs(dk);
+        auto xi = di * inv_dk;
+        auto xj = dj * inv_dk;
         return {
-            std::abs((std::copysignf(dk, di) - di) * inv_dk),
-            std::abs((std::copysignf(dk, dj) - dj) * inv_dk),
-            std::sqrt(1.0 + (di * di + dj * dj) * inv_dk * inv_dk)
+            1.0 - std::abs(xi), 1.0 - std::abs(xj), std::sqrt(1.0 + xi * xi + xj * xj)
         };
     }
 
     __device__ void fill_lut_entry(
-        asora::raytracing_lut& raylut, size_t idx, int3 pos
+        asora::raytracing_lut& raylut, size_t idx, const int3& pos
     ) {
         // Check that q > 0.
         assert(std::abs(pos.x) + std::abs(pos.y) + std::abs(pos.z) > 0);
@@ -129,7 +138,7 @@ namespace asora {
     // di = 0, dj = 0, dk = Q_MAX -> 01...
     //            everything else -> 00xxxxx
     //
-    __host__ __device__ uint32_t pack_offset(int3 pos) {
+    __host__ __device__ uint32_t pack_offset(const int3& pos) {
         using namespace asora;
 
         auto&& [di, dj, dk] = pos;
@@ -175,6 +184,42 @@ namespace asora {
         auto dj = static_cast<int>((offset >> OFFSET_BITS) & OFFSET_MASK) - Q_MAX;
         auto dk = static_cast<int>(offset & OFFSET_MASK) - Q_MAX;
         return {di, dj, dk};
+    }
+
+    void setup_cells_to_shell_luts() {
+        auto fill_and_load_lut = [](auto func, auto& cache) {
+            std::array<size_t, LUT_SIZE> host_lut;
+            std::ranges::copy(
+                std::views::iota(0ul, LUT_SIZE) | std::views::transform(func),
+                host_lut.begin()
+            );
+            safe_cuda(
+                cudaMemcpyToSymbol(cache, host_lut.data(), LUT_SIZE * sizeof(size_t))
+            );
+        };
+
+        fill_and_load_lut(cells_in_shell, cells_in_shell_cache);
+        fill_and_load_lut(cells_to_shell, cells_to_shell_cache);
+    }
+
+    __host__ __device__ size_t cells_in_shell(int q) {
+        // Defined also for negative q to avoid bound checking.
+        if (q < 0) return 0;
+#ifdef __CUDA_ARCH__
+        if (static_cast<size_t>(q) <= Q_MAX) return cells_in_shell_cache[q];
+#else
+        if (q == 0) return 1;
+#endif
+        return 4 * q * q + 2;
+    }
+
+    __host__ __device__ size_t cells_to_shell(int q) {
+        // This formula comes from the series sum of cells_in_shell(p) for p = 0 to q.
+        if (q < 0) return 0;
+#ifdef __CUDA_ARCH__
+        if (static_cast<size_t>(q) <= Q_MAX) return cells_to_shell_cache[q];
+#endif
+        return (1 + 2 * q) * (3 + 2 * q * (1 + q)) / 3;
     }
 
     raytracing_lut::raytracing_lut() {
@@ -287,11 +332,13 @@ namespace asora {
 
         raytracing_lut_entries lut;
         lut.reserve(n_cells);
-        for (size_t i = 0; i < n_cells; ++i)
+        for (size_t i = 0; i < n_cells; ++i) {
+            auto&& [di, dj, dk] = unpack_offset(offsets_h[i]);
             lut.push_back(
-                {offsets_h[i], multipliers_h[i], dxs_h[i], dys_h[i], paths_h[i],
+                {di, dj, dk, multipliers_h[i], dxs_h[i], dys_h[i], paths_h[i],
                  indices_h[i]}
             );
+        }
 
         return lut;
     }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cuda_runtime.h>
 #include <array>
 #include <cassert>
 #include <cstdint>
@@ -9,10 +10,6 @@ namespace asora {
 
     /// Maximum allowed q-shell index, included.
     constexpr int Q_MAX = 512;
-
-    // 2^10 = 1024, possible values in range [-512, 512)
-    constexpr uint32_t OFFSET_BITS = 10;
-    constexpr uint32_t OFFSET_MASK = (1u << OFFSET_BITS) - 1;
 
     /* @brief Pack the integer coordinates (di, dj, dk) of a cell in the q-shell into a
      * single 32bit value.
@@ -26,15 +23,30 @@ namespace asora {
      * di = 0, dj = 0, dk = Q_MAX -> 01...
      *            everything else -> 00...
      */
-    __host__ __device__ uint32_t pack_offset(int3 pos);
+    __host__ __device__ uint32_t pack_offset(const int3 &pos);
     __host__ __device__ int3 unpack_offset(uint32_t offset);
 
+    /* @brief Structure to hold a fixed-size array of indices, aligned to 4 bytes.
+     *
+     * This structure is used to store the short-characteristic indices with element
+     * access by index. The alignment ensures that the structure can be safely used in
+     * device code.
+     */
     struct alignas(16) index4 {
         uint32_t d[4];
 
         __host__ __device__ uint32_t operator[](size_t i) const { return d[i]; }
         __host__ __device__ uint32_t &operator[](size_t i) { return d[i]; }
     };
+
+    /// Get number of cells in octahedral shell q.
+    __host__ __device__ size_t cells_in_shell(int q);
+
+    /// Get cumulative number of cells up to and including shell q.
+    __host__ __device__ size_t cells_to_shell(int q);
+
+    /// Initialize lookup tables for octahedral indexing.
+    void setup_cells_to_shell_luts();
 
     /// Structure of arrays for the LUT on device.
     struct raytracing_lut {
@@ -49,10 +61,11 @@ namespace asora {
         raytracing_lut(const raytracing_lut &) = default;
         raytracing_lut &operator=(const raytracing_lut &) = default;
 
-        // FIXME: add constructor that unpacks offset
         struct entry {
-            /// Packed cell offset (di, dj, dk).
-            uint32_t offset;
+            /// Cell offsets.
+            int di;
+            int dj;
+            int dk;
 
             /// Geometric factors.
             double multiplier;
@@ -65,7 +78,8 @@ namespace asora {
         };
 
         __device__ entry operator[](size_t i) const {
-            return {offsets[i], multipliers[i], dxs[i], dys[i], paths[i], indices[i]};
+            auto &&[di, dj, dk] = unpack_offset(offsets[i]);
+            return {di, dj, dk, multipliers[i], dxs[i], dys[i], paths[i], indices[i]};
         }
     };
 
