@@ -46,9 +46,6 @@ namespace asora {
 
     }  // namespace c
 
-    /// Initialize lookup tables for octahedral indexing.
-    void setup_luts();
-
     /* @brief Fortran/Python-style modulo operation (always non-negative).
      *
      * Reminder: "%" in C is the remainder operator which preserves sign.
@@ -107,6 +104,7 @@ namespace asora {
      * @param[in] s Position index within shell q
      * @return Array containing {i, j, k} offsets
      */
+    [[deprecated("Not used anymore")]]
     __host__ __device__ cuda::std::array<int, 3> linthrd2cart(int q, int s);
 
     /* @brief Convert Cartesian (i,j,k) coordinates to octahedral (q,s).
@@ -120,13 +118,8 @@ namespace asora {
      * @param[in] k Z-offset
      * @return Array containing {q, s}
      */
+    [[deprecated("Not used anymore")]]
     __host__ __device__ cuda::std::array<int, 2> cart2linthrd(int i, int j, int k);
-
-    /// Get number of cells in octahedral shell q.
-    __host__ __device__ size_t cells_in_shell(int q);
-
-    /// Get cumulative number of cells up to and including shell q.
-    __host__ __device__ size_t cells_to_shell(int q);
 
     /* @brief Calculate geometric path length of a ray through a cell.
      *
@@ -135,6 +128,7 @@ namespace asora {
      * @param[in] dk Z-component of direction
      * @return Path length in units of cell size
      */
+    [[deprecated("Not used anymore")]]
     __host__ __device__ double path_in_cell(int di, int dj, int dk);
 
     /* @brief Compute interpolation weights for 4 adjacent upstream cells.
@@ -147,9 +141,9 @@ namespace asora {
      * @param[in] dk Z-component of direction
      * @return Array of 4 geometric weighting factors
      */
-    __host__ __device__ cuda::std::array<double, 4> geometric_factors(
-        int di, int dj, int dk
-    );
+    [[deprecated("Not used anymore")]]
+    __host__ __device__
+        cuda::std::array<double, 4> geometric_factors(int di, int dj, int dk);
 
     /* @brief Short-characteristics interpolator for radiative transfer.
      *
@@ -157,7 +151,7 @@ namespace asora {
      * along rays. Interpolates values from 4 upstream cells using geometric weights
      * based on ray direction.
      */
-    class cell_interpolator {
+    class [[deprecated("Not used anymore")]] cell_interpolator {
        public:
         /* @brief Construct interpolator for the cell at position (di, dj, dk) for
          * a ray coming from the origin of the coordinate system.

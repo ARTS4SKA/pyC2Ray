@@ -1,6 +1,7 @@
 #include "tests.cuh"
 
 #include "memory.h"
+#include "raytracing_lut.cuh"
 #include "utils.cuh"
 
 #include <algorithm>
@@ -79,7 +80,7 @@ namespace asoratest {
     void cell_interpolator(
         double *coldens_data, double *dens_data, const std::array<size_t, 3> &shape
     ) {
-        asora::setup_luts();
+        asora::setup_cells_to_shell_luts();
         size_t size =
             std::accumulate(shape.begin(), shape.end(), 1u, std::multiplies<>());
 

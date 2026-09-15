@@ -49,10 +49,9 @@ namespace {
             return nullptr;
         }
 
-        auto &&[di, dj, dk] = asora::unpack_offset(item.offset);
-        PyStructSequence_SetItem(obj, 0, PyLong_FromLong(di));
-        PyStructSequence_SetItem(obj, 1, PyLong_FromLong(dj));
-        PyStructSequence_SetItem(obj, 2, PyLong_FromLong(dk));
+        PyStructSequence_SetItem(obj, 0, PyLong_FromLong(item.di));
+        PyStructSequence_SetItem(obj, 1, PyLong_FromLong(item.dj));
+        PyStructSequence_SetItem(obj, 2, PyLong_FromLong(item.dk));
         PyStructSequence_SetItem(obj, 3, PyFloat_FromDouble(item.dx));
         PyStructSequence_SetItem(obj, 4, PyFloat_FromDouble(item.dy));
         PyStructSequence_SetItem(obj, 5, PyFloat_FromDouble(item.path));
@@ -171,14 +170,12 @@ PyObject *asora_get_raytracing_lut([[maybe_unused]] PyObject *self, PyObject *ar
 }
 
 PyObject *asora_pack_offset([[maybe_unused]] PyObject *self, PyObject *args) {
-    int i = 0;
-    int j = 0;
-    int k = 0;
-    if (!PyArg_ParseTuple(args, "iii", &i, &j, &k)) return nullptr;
+    int3 pos;
+    if (!PyArg_ParseTuple(args, "iii", &pos.x, &pos.y, &pos.z)) return nullptr;
 
     uint32_t offset = 0;
     try {
-        offset = asora::pack_offset({i, j, k});
+        offset = asora::pack_offset(pos);
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return nullptr;
@@ -191,20 +188,15 @@ PyObject *asora_unpack_offset([[maybe_unused]] PyObject *self, PyObject *args) {
     uint32_t offset = 0;
     if (!PyArg_ParseTuple(args, "k", &offset)) return nullptr;
 
-    int i = 0;
-    int j = 0;
-    int k = 0;
+    int3 pos;
     try {
-        auto &&[di, dj, dk] = asora::unpack_offset(offset);
-        i = di;
-        j = dj;
-        k = dk;
+        pos = asora::unpack_offset(offset);
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return nullptr;
     }
 
-    return Py_BuildValue("iii", i, j, k);
+    return Py_BuildValue("iii", pos.x, pos.y, pos.z);
 }
 
 /// Expose asora::device::initialize
