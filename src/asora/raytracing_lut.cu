@@ -6,8 +6,19 @@
 #include <cassert>
 #include <cmath>
 #include <cuda/std/array>
+#include <format>
 #include <ranges>
 #include <vector>
+
+#ifdef __CUDA_ARCH__
+#define assert_or_throw(condition, pos) assert(condition)
+#else
+#define assert_or_throw(condition, pos)                              \
+    if (!(condition))                                                \
+        throw std::runtime_error(                                    \
+            std::format("({}, {}, {}) is out of bounds", di, dj, dk) \
+        );
+#endif
 
 namespace {
 
@@ -144,23 +155,23 @@ namespace asora {
         auto&& [di, dj, dk] = pos;
 
         if (di == Q_MAX) {
-            assert(dj == 0 && dk == 0);
+            assert_or_throw(dj == 0 && dk == 0, pos);
             return uint32_t(3) << (3 * OFFSET_BITS);
         }
 
         if (dj == Q_MAX) {
-            assert(di == 0 && dk == 0);
+            assert_or_throw(di == 0 && dk == 0, pos);
             return uint32_t(2) << (3 * OFFSET_BITS);
         }
 
         if (dk == Q_MAX) {
-            assert(di == 0 && dj == 0);
+            assert_or_throw(di == 0 && dj == 0, pos);
             return uint32_t(1) << (3 * OFFSET_BITS);
         }
 
-        assert(-Q_MAX <= di && di < Q_MAX);
-        assert(-Q_MAX <= dj && dj < Q_MAX);
-        assert(-Q_MAX <= dk && dk < Q_MAX);
+        assert_or_throw(-Q_MAX <= di && di < Q_MAX, pos);
+        assert_or_throw(-Q_MAX <= dj && dj < Q_MAX, pos);
+        assert_or_throw(-Q_MAX <= dk && dk < Q_MAX, pos);
 
         // 3 x 10 bits = 30 bits used, 2 bits spare in the uint32.
         auto pi = static_cast<uint32_t>(di + Q_MAX) & OFFSET_MASK;
@@ -306,7 +317,7 @@ namespace asora {
         return n_cells;
     }
 
-    raytracing_lut_entries copy_lut_to_host() {
+    raytracing_lut_entries copy_lut_to_host(int q_max) {
         auto offsets = device::get(buffer_tag::raylut_offsets);
         auto multipliers = device::get(buffer_tag::raylut_multipliers);
         auto dxs = device::get(buffer_tag::raylut_dx);
@@ -314,7 +325,12 @@ namespace asora {
         auto paths = device::get(buffer_tag::raylut_path);
         auto indices = device::get(buffer_tag::raylut_indices);
 
-        auto n_cells = offsets.size<uint32_t>();
+        auto n_cells = asora::cells_to_shell(q_max);
+        if (n_cells > offsets.size<uint32_t>())
+            throw std::runtime_error(
+                "Requested a larger LUT than what available. Call "
+                "create_raytracing_lut(q_max) with the correct q_max value first"
+            );
 
         std::vector<uint32_t> offsets_h(n_cells);
         std::vector<double> multipliers_h(n_cells);
@@ -323,12 +339,12 @@ namespace asora {
         std::vector<double> paths_h(n_cells);
         std::vector<index4> indices_h(n_cells);
 
-        offsets.copyToHost(offsets_h.data());
-        multipliers.copyToHost(multipliers_h.data());
-        dxs.copyToHost(dxs_h.data());
-        dys.copyToHost(dys_h.data());
-        paths.copyToHost(paths_h.data());
-        indices.copyToHost(indices_h.data());
+        offsets.copyToHost(offsets_h.data(), sizeof(uint32_t) * n_cells);
+        multipliers.copyToHost(multipliers_h.data(), sizeof(double) * n_cells);
+        dxs.copyToHost(dxs_h.data(), sizeof(double) * n_cells);
+        dys.copyToHost(dys_h.data(), sizeof(double) * n_cells);
+        paths.copyToHost(paths_h.data(), sizeof(double) * n_cells);
+        indices.copyToHost(indices_h.data(), sizeof(index4) * n_cells);
 
         raytracing_lut_entries lut;
         lut.reserve(n_cells);
