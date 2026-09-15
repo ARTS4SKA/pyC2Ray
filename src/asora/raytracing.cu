@@ -133,6 +133,12 @@ namespace asora {
     ) {
         device::check_initialized();
 
+        if (!device::contains(buffer_tag::raylut_offsets))
+            throw std::runtime_error(
+                "Raytracing lookup table must be allocated on the device before "
+                "calling do_all_sources_gpu; call setup_raytracing_lut_gpu(q_max) first"
+            );
+
         // Number density array is not modified, it is assumed that it is already on the
         // device.
         if (!device::contains(buffer_tag::number_density))
