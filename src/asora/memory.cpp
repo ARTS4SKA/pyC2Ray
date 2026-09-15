@@ -1,4 +1,5 @@
 #include "memory.h"
+#include "raytracing_lut.cuh"
 #include "utils.cuh"
 
 #include <format>
@@ -57,7 +58,6 @@ namespace asora {
     }
 
     device &device::initialize(unsigned int rank) {
-        // TODO: add log
         auto &self = instance();
         if (is_initialized()) return self;
 
@@ -66,7 +66,7 @@ namespace asora {
         safe_cuda(cudaGetDeviceCount(&device_count));
         self._gpu_id = rank % device_count;
         safe_cuda(cudaSetDevice(self._gpu_id));
-        setup_luts();
+        setup_cells_to_shell_luts();
         return self;
     }
 

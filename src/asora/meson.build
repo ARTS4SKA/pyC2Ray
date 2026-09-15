@@ -41,9 +41,6 @@ if get_option('buildtype') in ['release', 'minsize']
     nvlink_flags += ['-dlto']
 endif
 
-# OpenMP
-openmp_dep = dependency('openmp')
-
 # CUDA sources for ASORA
 asora_sources = [
     'memory.cpp',
