@@ -2,6 +2,8 @@
 #include "utils.cuh"
 
 #include <format>
+#include <iostream>
+#include <span>
 
 namespace asora {
 
@@ -127,6 +129,62 @@ namespace asora {
 
         // Copy host data whenever a source pointer is provided.
         if (src) it->second.copyFromHost(src, nbytes);
+    }
+
+    void enable_persistent_L2_memory(
+        void *ptr, size_t nbytes, cudaStream_t stream, float hit_ratio
+    ) {
+        // Query GPU properties.
+        cudaDeviceProp prop;
+        safe_cuda(cudaGetDeviceProperties(&prop, static_cast<int>(device::get_id())));
+
+        if (prop.major < 8) {
+            throw std::runtime_error(
+                "Persistent L2 memory is only supported with compute capability >= 8.0"
+            );
+        }
+
+        // CHECK: cudaDeviceSetLimit clamps the size to the maximum allowed value.
+        // Set the required size of persisting L2 cache memory.
+        size_t size =
+            std::min(nbytes, static_cast<size_t>(prop.persistingL2CacheMaxSize));
+        safe_cuda(cudaDeviceSetLimit(cudaLimitPersistingL2CacheSize, size));
+
+        // Set access policy window for the desired memory span.
+        cudaStreamAttrValue attr;
+
+        attr.accessPolicyWindow.base_ptr = ptr;
+        attr.accessPolicyWindow.num_bytes =
+            std::min(prop.accessPolicyMaxWindowSize, static_cast<int>(nbytes));
+        attr.accessPolicyWindow.hitRatio = hit_ratio;
+        attr.accessPolicyWindow.hitProp = cudaAccessPropertyPersisting;
+        attr.accessPolicyWindow.missProp = cudaAccessPropertyStreaming;
+
+        safe_cuda(
+            cudaStreamSetAttribute(stream, cudaStreamAttributeAccessPolicyWindow, &attr)
+        );
+    }
+
+    void disable_persistent_L2_memory(cudaStream_t stream) {
+        cudaDeviceProp prop;
+        safe_cuda(cudaGetDeviceProperties(&prop, static_cast<int>(device::get_id())));
+
+        if (prop.major < 8) return;
+
+        // Disable by setting null window size.
+        cudaStreamAttrValue attr;
+        safe_cuda(
+            cudaStreamGetAttribute(stream, cudaStreamAttributeAccessPolicyWindow, &attr)
+        );
+
+        attr.accessPolicyWindow.num_bytes = 0;
+        safe_cuda(
+            cudaStreamSetAttribute(stream, cudaStreamAttributeAccessPolicyWindow, &attr)
+        );
+
+        // Remove any persistent lines in L2
+        safe_cuda(cudaCtxResetPersistingL2Cache());
+        safe_cuda(cudaDeviceSetLimit(cudaLimitPersistingL2CacheSize, 0));
     }
 
 }  // namespace asora
