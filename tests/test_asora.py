@@ -219,19 +219,10 @@ class TestLibasora:
         assert pos == unpacked
 
     def test_raytracing_lut(self, init_device) -> None:
-        def path(di: int, dj: int, dk: int) -> float:
+        def geometric_factors(di: int, dj: int, dk: int) -> tuple[float, float, float]:
             if di == 0 and dj == 0 and dk == 0:
-                return 0.5
+                return 0.0, 0.0, 0.5
 
-            di2 = di * di
-            dj2 = dj * dj
-            dk2 = dk * dk
-            delta_max = np.maximum(di2, np.maximum(dj2, dk2))
-            return np.sqrt((di2 + dj2 + dk2) / delta_max)
-
-        def geometric_factors(di: int, dj: int, dk: int) -> tuple[float, float]:
-            if di == 0 and dj == 0 and dk == 0:
-                return 0.0, 0.0
             ai = abs(di)
             aj = abs(dj)
             ak = abs(dk)
@@ -244,9 +235,12 @@ class TestLibasora:
                 di, dk = dk, di
                 di, dj = dj, di
 
-            dx = abs(math.copysign(1, di) - di / abs(dk))
-            dy = abs(math.copysign(1, dj) - dj / abs(dk))
-            return dx, dy
+            di /= abs(dk)
+            dj /= abs(dk)
+            dx = 1 - abs(di)
+            dy = 1 - abs(dj)
+            path = math.sqrt(1 + di * di + dj * dj)
+            return dx, dy, path
 
         q_max = 50
         assert libasora is not None
@@ -256,11 +250,10 @@ class TestLibasora:
 
         for item in lut:
             # Check that the path and geometric factors match.
-            assert item.path == pytest.approx(path(item.di, item.dj, item.dk))
-
-            dx, dy = geometric_factors(item.di, item.dj, item.dk)
+            dx, dy, path = geometric_factors(item.di, item.dj, item.dk)
             assert item.dx == pytest.approx(dx)
             assert item.dy == pytest.approx(dy)
+            assert item.path == pytest.approx(path)
 
             weights = [(1 - dx) * (1 - dy), (1 - dy) * dx, (1 - dx) * dy, dx * dy]
 
