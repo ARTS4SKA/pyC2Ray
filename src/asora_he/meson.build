@@ -1,64 +1,30 @@
-# CUDA compiler is optional, required to build ASORA
-if not has_cuda
-    subdir_done()
-endif
+# CUDA setup (compute capability, nvcc/nvlink flags, cuda_dep, cccl_dep) is shared
+# with asora and lives in src/meson.build.
 
-# Get CUDA architecture to be used for compilation
-compute_cap = get_option('gpu-architecture')
-if compute_cap == ''
-    message('CUDA compute capability was not specified by the user')
-    r_compute_cap = run_command(
-        'nvidia-smi',
-        '--query-gpu=compute_cap',
-        '--format=csv,noheader',
-        check: false,
-    )
-    if r_compute_cap.returncode() != 0
-        warning('nvidia-smi not detected; defaulting to compute capability 6.0')
-        compute_cap = '60'
-    else
-        cc = r_compute_cap.stdout().strip()
-        message(f'Local compute capability is determined to be @cc@')
-        compute_cap = cc[0] + '0'
-    endif
-endif
-
-# Target only one GPU
-compute_cap = '-arch=sm_' + compute_cap
-
-nvcc_flags = [
-    compute_cap,
-    '-rdc=true',
-    '-DPERIODIC',
-    '-DLOCALRATES',
-    '-use_fast_math',
+# CUDA sources for ASORA-He: utils and memory management are reused from asora.
+asora_he_sources = [
+    '../asora/utils.cu',
+    '../asora/memory.cpp',
+    'raytracing.cu',
+    'chemistry.cu',
 ]
-nvlink_flags = [compute_cap]
 
-if get_option('buildtype') in ['release', 'minsize']
-  nvcc_flags += ['-dlto']
-  nvlink_flags += ['-dlto']
-endif
-
-# CUDA sources for ASORA
-asora_sources = ['../asora/utils.cu', '../asora/memory.cpp', 'raytracing.cu', 'chemistry.cu']
-cuda_dep = dependency('cuda', version: '>=12', static: false)
-asora_core = static_library(
-    'asora_core',
-    asora_sources,
-    dependencies: cuda_dep,
+asora_he_core = static_library(
+    'asora_he_core',
+    asora_he_sources,
+    dependencies: asora_cuda_deps,
     cuda_args: nvcc_flags,
     link_args: nvlink_flags,
 )
 
-# Build ASORA module with nvcc
+# Build ASORA-He module with nvcc
 py.extension_module(
     'libasora_He',
     'python_module.cpp',
-    dependencies: [py_dep, np_dep, cuda_dep],
+    dependencies: [py_dep, np_dep] + asora_cuda_deps,
     install: true,
     subdir: 'pyc2ray/lib',
-    link_with: asora_core,
+    link_with: asora_he_core,
     cuda_args: nvcc_flags,
     link_args: nvlink_flags,
 )
