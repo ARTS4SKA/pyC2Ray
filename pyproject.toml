@@ -28,7 +28,7 @@ classifiers = [
 dependencies = [
   "astropy==7.2.1",
   "h5py",
-  "mpi4py==4.0.3",
+  "mpi4py",
   "numpy>=2",
   "scipy",
   "tools21cm",
@@ -54,7 +54,10 @@ testpaths = ["tests"]
 addopts = ["--benchmark-skip"]
 
 [tool.meson-python.args]
-setup = ["-Dbuildtype=release"]
+setup = [
+  "-Dbuildtype=release",
+  "--native-file=$PWD/meson-compile-tools.ini",
+]
 
 [tool.mypy]
 ignore_missing_imports = true
