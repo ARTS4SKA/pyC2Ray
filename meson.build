@@ -21,6 +21,7 @@ if not has_cuda
     warning('CUDA compiler not found, will not build ASORA library')
 endif
 
+fs = import('fs')
 py = import('python').find_installation(pure: false)
 py_dep = py.dependency()
 np_dep = dependency('numpy', version: '>=2', method: 'config-tool')
