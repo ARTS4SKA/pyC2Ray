@@ -51,10 +51,10 @@ namespace asora {
     /// Structure of arrays for the LUT on device.
     struct raytracing_lut {
         uint32_t *__restrict__ offsets;
-        double *__restrict__ multipliers;
-        double *__restrict__ dxs;
-        double *__restrict__ dys;
-        double *__restrict__ paths;
+        float *__restrict__ multipliers;
+        float *__restrict__ dxs;
+        float *__restrict__ dys;
+        float *__restrict__ paths;
         index4 *__restrict__ indices;
 
         raytracing_lut();
@@ -68,10 +68,10 @@ namespace asora {
             int dk;
 
             /// Geometric factors.
-            double multiplier;
-            double dx;
-            double dy;
-            double path;
+            float multiplier;
+            float dx;
+            float dy;
+            float path;
 
             /// Offset indices for short-characteristic interpolation.
             index4 indices;
