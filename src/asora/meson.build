@@ -17,9 +17,17 @@ if compute_cap == ''
         warning('nvidia-smi not detected; defaulting to compute capability 6.0')
         compute_cap = '60'
     else
-        cc = r_compute_cap.stdout().strip()
+        # With several GPUs present, nvidia-smi reports one line each; use the first.
+        cc = r_compute_cap.stdout().strip().split('\n')[0].strip()
         message(f'Local compute capability is determined to be @cc@')
-        compute_cap = cc[0] + '0'
+        # Keep the minor version: 8.9 is sm_89, not sm_80.
+        cc_parts = cc.split('.')
+        if cc_parts.length() < 2
+            warning('Unexpected compute capability format; defaulting to 6.0')
+            compute_cap = '60'
+        else
+            compute_cap = cc_parts[0] + cc_parts[1]
+        endif
     endif
 endif
 

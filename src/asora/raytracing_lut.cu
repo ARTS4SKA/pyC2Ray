@@ -52,13 +52,13 @@ namespace {
     }
 
     // Return dx, dy, path
-    __device__ double3 compute_geometric_factors(int di, int dj, int dk) {
+    __device__ float3 compute_geometric_factors(int di, int dj, int dk) {
         assert(std::abs(dk) >= std::abs(di) && std::abs(dk) >= std::abs(dj) && dk != 0);
-        auto inv_dk = 1.0 / std::abs(dk);
+        auto inv_dk = 1.f / std::abs(dk);
         auto xi = di * inv_dk;
         auto xj = dj * inv_dk;
         return {
-            1.0 - std::abs(xi), 1.0 - std::abs(xj), std::sqrt(1.0 + xi * xi + xj * xj)
+            1.f - std::abs(xi), 1.f - std::abs(xj), std::sqrt(1.f + xi * xi + xj * xj)
         };
     }
 
@@ -78,9 +78,9 @@ namespace {
         auto ak = std::abs(dk);
 
         if (ai <= 1 && aj <= 1 && ak <= 1)
-            raylut.multipliers[idx] = sqrt(static_cast<double>(ai + ak + aj));
+            raylut.multipliers[idx] = sqrt(static_cast<float>(ai + ak + aj));
         else
-            raylut.multipliers[idx] = 1.0;
+            raylut.multipliers[idx] = 1.f;
 
         // Compute geometric factors and interpolation indices using inverse_lut.
         int si = (di > 0) - (di < 0);
@@ -88,7 +88,7 @@ namespace {
         int sk = (dk > 0) - (dk < 0);
 
         cuda::std::array<int, 12> shifts;
-        double3 dd;
+        float3 dd;
         if (ak >= ai && ak >= aj) {
             shifts = {
                 si, sj, sk,  //
@@ -118,8 +118,8 @@ namespace {
         raylut.dys[idx] = dd.y;
         raylut.paths[idx] = dd.z;
 
-        const cuda::std::array<double, 4> weights = {
-            (1. - dd.x) * (1. - dd.y), (1. - dd.y) * dd.x, (1. - dd.x) * dd.y,
+        const cuda::std::array<float, 4> weights = {
+            (1.f - dd.x) * (1.f - dd.y), (1.f - dd.y) * dd.x, (1.f - dd.x) * dd.y,
             dd.x * dd.y
         };
 
@@ -235,10 +235,10 @@ namespace asora {
 
     raytracing_lut::raytracing_lut() {
         offsets = device::get(buffer_tag::raylut_offsets).data<uint32_t>();
-        multipliers = device::get(buffer_tag::raylut_multipliers).data<double>();
-        dxs = device::get(buffer_tag::raylut_dx).data<double>();
-        dys = device::get(buffer_tag::raylut_dy).data<double>();
-        paths = device::get(buffer_tag::raylut_path).data<double>();
+        multipliers = device::get(buffer_tag::raylut_multipliers).data<float>();
+        dxs = device::get(buffer_tag::raylut_dx).data<float>();
+        dys = device::get(buffer_tag::raylut_dy).data<float>();
+        paths = device::get(buffer_tag::raylut_path).data<float>();
         indices = device::get(buffer_tag::raylut_indices).data<index4>();
     }
 
@@ -249,10 +249,10 @@ namespace asora {
         // q = 0:
         if (threadIdx.x == 0) {
             raylut.offsets[0] = pack_offset({0, 0, 0});
-            raylut.multipliers[0] = 1.0;
-            raylut.dxs[0] = 0.0;
-            raylut.dys[0] = 0.0;
-            raylut.paths[0] = 0.5;
+            raylut.multipliers[0] = 1.f;
+            raylut.dxs[0] = 0.f;
+            raylut.dys[0] = 0.f;
+            raylut.paths[0] = 0.5f;
             raylut.indices[0] = {0, 0, 0, 0};
         }
         __syncthreads();
@@ -302,10 +302,10 @@ namespace asora {
 
         // Allocate lut memory on device
         device::ensure<uint32_t>(buffer_tag::raylut_offsets, n_cells);
-        device::ensure<double>(buffer_tag::raylut_multipliers, n_cells);
-        device::ensure<double>(buffer_tag::raylut_dx, n_cells);
-        device::ensure<double>(buffer_tag::raylut_dy, n_cells);
-        device::ensure<double>(buffer_tag::raylut_path, n_cells);
+        device::ensure<float>(buffer_tag::raylut_multipliers, n_cells);
+        device::ensure<float>(buffer_tag::raylut_dx, n_cells);
+        device::ensure<float>(buffer_tag::raylut_dy, n_cells);
+        device::ensure<float>(buffer_tag::raylut_path, n_cells);
         device::ensure<index4>(buffer_tag::raylut_indices, n_cells);
 
         // Launch kernel to fill lut
@@ -333,17 +333,17 @@ namespace asora {
             );
 
         std::vector<uint32_t> offsets_h(n_cells);
-        std::vector<double> multipliers_h(n_cells);
-        std::vector<double> dxs_h(n_cells);
-        std::vector<double> dys_h(n_cells);
-        std::vector<double> paths_h(n_cells);
+        std::vector<float> multipliers_h(n_cells);
+        std::vector<float> dxs_h(n_cells);
+        std::vector<float> dys_h(n_cells);
+        std::vector<float> paths_h(n_cells);
         std::vector<index4> indices_h(n_cells);
 
         offsets.copyToHost(offsets_h.data(), sizeof(uint32_t) * n_cells);
-        multipliers.copyToHost(multipliers_h.data(), sizeof(double) * n_cells);
-        dxs.copyToHost(dxs_h.data(), sizeof(double) * n_cells);
-        dys.copyToHost(dys_h.data(), sizeof(double) * n_cells);
-        paths.copyToHost(paths_h.data(), sizeof(double) * n_cells);
+        multipliers.copyToHost(multipliers_h.data(), sizeof(float) * n_cells);
+        dxs.copyToHost(dxs_h.data(), sizeof(float) * n_cells);
+        dys.copyToHost(dys_h.data(), sizeof(float) * n_cells);
+        paths.copyToHost(paths_h.data(), sizeof(float) * n_cells);
         indices.copyToHost(indices_h.data(), sizeof(index4) * n_cells);
 
         raytracing_lut_entries lut;
