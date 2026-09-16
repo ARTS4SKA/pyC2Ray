@@ -31,19 +31,20 @@ namespace {
         const double *__restrict__ column_dens, double cross_section
     ) {
         // Reference optical depth from C2-Ray interpolation function.
-        constexpr double tau_0 = 0.6;
+        constexpr float tau_0 = 0.6f;
 
-        const cuda::std::array<double, 4> factors = {
-            (1. - entry.dx) * (1. - entry.dy), (1. - entry.dy) * entry.dx,
-            (1. - entry.dx) * entry.dy, entry.dx * entry.dy
+        cuda::std::array<float, 4> factors = {
+            (1.f - entry.dx) * (1.f - entry.dy), (1.f - entry.dy) * entry.dx,
+            (1.f - entry.dx) * entry.dy, entry.dx * entry.dy
         };
 
         // Column density at the crossing point is a weighted average.
         double cdens = 0.0;
         double wtot = 0.0;
+#pragma unroll 4
         for (size_t i = 0; i < 4; ++i) {
             auto c = column_dens[entry.indices[i]];
-            auto w = factors[i] / max(tau_0, c * cross_section);
+            auto w = factors[i] / max(tau_0, static_cast<float>(c * cross_section));
 
             cdens += w * c;
             wtot += w;
@@ -56,8 +57,8 @@ namespace {
     // density and the pre-computed photoionization tables.
     __device__ void update_photo_rates(
         element_data &data_HI, size_t cd_index, size_t ph_index, double coldens_in,
-        double nHI, double path, double strength, double vol,
-        const photo_tables &ion_tables, const linspace<double> &logtau
+        double nHI, double path, double scale, const photo_tables &ion_tables,
+        const linspace<double> &logtau
     ) {
         // Compute outgoing column density and add to array for subsequent
         // interpolations
@@ -74,8 +75,9 @@ namespace {
 #endif
         // Rescale the photo-ionization rate by the flux strength normalized per volume
         // and per neutral density (part of the photon-conserving rate prescription) and
-        // add it to the global array
-        atomicAdd(data_HI.photo_ionization + ph_index, phion * strength / vol / nHI);
+        // add it to the global array. Dividing by the product uses one FP64 division
+        // instead of two; vol is a cell volume, so the product cannot underflow.
+        atomicAdd(data_HI.photo_ionization + ph_index, phion * scale / nHI);
     }
 
     // Raytracing operation on a given cell, identified by (q, s). This is performed by
@@ -83,7 +85,7 @@ namespace {
     // cover the full q-shell.
     __device__ void raytrace(
         const raytracing_lut::entry &entry, size_t cd_index, const int3 &pos,
-        double strength, element_data &data_HI, double dr, double R_max,
+        double scale, element_data &data_HI, double dr, double R_max,
         const density_maps &densities, size_t m1, const photo_tables &ion_tables,
         const linspace<double> &logtau, const int2 &limit
     ) {
@@ -109,7 +111,10 @@ namespace {
         if (coldens_in > max_coldens) return;
 
         auto path = dr * entry.path;
-        auto vol_ph = 4 * c::pi<> * dist2 * path * dr * dr;
+
+        // vol_ph = 4*pi * dist2 * path * dr^2, with path = dr * entry.path. The
+        // 4*pi*dr^3 factor does not depend on the cell and is hoisted to the caller.
+        auto vol_ph = dist2 * entry.path;
 
         // Get local ionization fraction & neutral hydrogen density in the cell
         const auto ph_index = ravel_index(pos.x + di, pos.y + dj, pos.z + dk, m1);
@@ -117,7 +122,7 @@ namespace {
 
         // Compute photoionization rates from column density.
         update_photo_rates(
-            data_HI, cd_index, ph_index, coldens_in, nHI, path, strength, vol_ph,
+            data_HI, cd_index, ph_index, coldens_in, nHI, path, scale / vol_ph,
             ion_tables, logtau
         );
     }
@@ -174,20 +179,6 @@ namespace asora {
         // faces of the octahedron. To raytrace the whole volume, the octahedron must
         // be 1.5*N in size. Allocate (if necessary) the column density array.
         int q_max = std::ceil(c::sqrt3<> * std::min(R, c::sqrt3<> * m1 / 2.0));
-
-        // Size of grid data.
-        auto n_cells = m1 * m1 * m1;
-
-        // Allocate (if necessary) and copy the ionized fraction array to the device.
-        device::ensure_transfer<double>(buffer_tag::fraction_HII, xh_av, n_cells);
-
-        // Allocate (if necessary) and zero the output array for the photoionization
-        // rate.
-        device::ensure<double>(buffer_tag::photo_ionization_HI, n_cells);
-        auto phi_buf = device::get(buffer_tag::photo_ionization_HI);
-        auto phi_d = phi_buf.data<double>();
-        safe_cuda(cudaMemset(phi_d, 0, phi_buf.size()));
-
         device::ensure<double>(
             buffer_tag::column_density_HI, grid_size * cells_to_shell(q_max)
         );
@@ -201,12 +192,6 @@ namespace asora {
             );
         auto src_flux_d = get_data_view<double>(buffer_tag::source_flux);
         auto src_pos_d = get_data_view<int>(buffer_tag::source_position);
-
-        // Create helper data structures: density maps, data_HI, ion_tables, logtau.
-        density_maps densities{
-            get_data_view<double>(buffer_tag::number_density),
-            get_data_view<double>(buffer_tag::fraction_HII)
-        };
 
         element_data data_HI{
             phi_d, get_data_view<double>(buffer_tag::column_density_HI), sigma
@@ -266,7 +251,7 @@ namespace asora {
         const auto i0 = src_pos[3 * ns + 0];
         const auto j0 = src_pos[3 * ns + 1];
         const auto k0 = src_pos[3 * ns + 2];
-        const auto strength = src_flux[ns];
+        auto scale = src_flux[ns] / (dr * dr * dr);
 
         // Offset pointer to the outgoing column density array used for
         // interpolation (each block works on its own array).
@@ -280,14 +265,16 @@ namespace asora {
             const auto index = ravel_index(i0, j0, k0, m1);
             const auto &nHI = densities.nHI[index];
             update_photo_rates(
-                data_HI, 0, index, 0.0, nHI, 0.5 * dr, strength, dr * dr * dr,
-                ion_tables, logtau
+                data_HI, 0, index, 0.0, nHI, 0.5 * dr, scale, ion_tables, logtau
             );
         }
         __syncthreads();
 
         int ll = -m1 / 2;
         int lr = m1 % 2 - 1 - ll;
+
+        // Cell-independent part of the photon volume 4*pi * dist2 * path * dr^2.
+        scale /= 4 * c::pi<>;
 
         for (int q = 1; q <= q_max; ++q) {
             // Each thread can process multiple cells.
@@ -296,8 +283,8 @@ namespace asora {
                 auto cd_index = cells_to_shell(q - 1) + s;
                 auto entry = lut[cd_index];
                 raytrace(
-                    entry, cd_index, {i0, j0, k0}, strength, data_HI, dr, R_max,
-                    densities, m1, ion_tables, logtau, {ll, lr}
+                    entry, cd_index, {i0, j0, k0}, scale, data_HI, dr, R_max, densities,
+                    m1, ion_tables, logtau, {ll, lr}
                 );
 
                 s += blockDim.x;
