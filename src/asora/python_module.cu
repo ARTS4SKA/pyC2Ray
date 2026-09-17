@@ -1,8 +1,9 @@
 
 #include "chemistry.h"
 #include "memory.h"
+#include "octahedron.cuh"
 #include "raytracing.cuh"
-#include "raytracing_lut.cuh"
+#include "shortchar.cuh"
 #include "utils.cuh"
 
 #include <Python.h>
@@ -37,30 +38,30 @@ namespace {
     };
 
     /// Convert a asora lut_entry to a LutEntry python object.
-    PyObject *build_lut_entry(const asora::raytracing_lut::entry &item) {
+    PyObject *build_lut_entry(const asora::shortchar_info &info) {
         PyObject *obj = PyStructSequence_New(LutEntryType);
         if (!obj) return nullptr;
 
         PyObject *indices = Py_BuildValue(
-            "kkkk", item.indices[0], item.indices[1], item.indices[2], item.indices[3]
+            "kkkk", info.indices[0], info.indices[1], info.indices[2], info.indices[3]
         );
         if (!indices) {
             Py_DECREF(obj);
             return nullptr;
         }
 
-        PyStructSequence_SetItem(obj, 0, PyLong_FromLong(item.di));
-        PyStructSequence_SetItem(obj, 1, PyLong_FromLong(item.dj));
-        PyStructSequence_SetItem(obj, 2, PyLong_FromLong(item.dk));
-        PyStructSequence_SetItem(obj, 3, PyFloat_FromDouble(item.dx));
-        PyStructSequence_SetItem(obj, 4, PyFloat_FromDouble(item.dy));
-        PyStructSequence_SetItem(obj, 5, PyFloat_FromDouble(item.path));
+        PyStructSequence_SetItem(obj, 0, PyLong_FromLong(info.pos.x));
+        PyStructSequence_SetItem(obj, 1, PyLong_FromLong(info.pos.y));
+        PyStructSequence_SetItem(obj, 2, PyLong_FromLong(info.pos.z));
+        PyStructSequence_SetItem(obj, 3, PyFloat_FromDouble(info.dx));
+        PyStructSequence_SetItem(obj, 4, PyFloat_FromDouble(info.dy));
+        PyStructSequence_SetItem(obj, 5, PyFloat_FromDouble(info.path));
         PyStructSequence_SetItem(obj, 6, indices);
 
         return obj;
     }
 
-    PyObject *create_lut_list(const asora::raytracing_lut_entries &lut) {
+    PyObject *create_lut_list(const asora::shortchar_entries &lut) {
         PyObject *result = PyList_New(static_cast<Py_ssize_t>(lut.size()));
         if (!result) return nullptr;
 
@@ -164,14 +165,14 @@ PyObject *asora_cart2shell([[maybe_unused]] PyObject *self, PyObject *args) {
     }
 }
 
-PyObject *asora_create_raytracing_lut([[maybe_unused]] PyObject *self, PyObject *args) {
+PyObject *asora_create_shortchar_lut([[maybe_unused]] PyObject *self, PyObject *args) {
     int q_max = 0;
     if (!PyArg_ParseTuple(args, "i", &q_max)) return nullptr;
 
     size_t n_cells = 0;
     try {
         // Initialize the device
-        n_cells = asora::create_raytracing_lut(q_max);
+        n_cells = asora::create_shortchar_interp_lut(q_max);
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return nullptr;
@@ -180,13 +181,13 @@ PyObject *asora_create_raytracing_lut([[maybe_unused]] PyObject *self, PyObject 
     return Py_BuildValue("k", n_cells);
 }
 
-PyObject *asora_get_raytracing_lut([[maybe_unused]] PyObject *self, PyObject *args) {
+PyObject *asora_get_shortchar_lut([[maybe_unused]] PyObject *self, PyObject *args) {
     int q_max = 0;
     if (!PyArg_ParseTuple(args, "i", &q_max)) return nullptr;
 
-    asora::raytracing_lut_entries lut;
+    asora::shortchar_entries lut;
     try {
-        asora::create_raytracing_lut(q_max);
+        asora::create_shortchar_interp_lut(q_max);
         lut = asora::copy_lut_to_host(q_max);
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
@@ -224,6 +225,23 @@ PyObject *asora_unpack_offset([[maybe_unused]] PyObject *self, PyObject *args) {
     }
 
     return Py_BuildValue("iii", pos.x, pos.y, pos.z);
+}
+
+PyObject *asora_compute_shortchar_factors(
+    [[maybe_unused]] PyObject *self, PyObject *args
+) {
+    int di, dj, dk;
+    if (!PyArg_ParseTuple(args, "iii", &di, &dj, &dk)) return nullptr;
+
+    float3 factors;
+    try {
+        factors = asora::compute_shortchar_factors(di, dj, dk);
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return nullptr;
+    }
+
+    return Py_BuildValue("fff", factors.x, factors.y, factors.z);
 }
 
 /// Expose asora::device::initialize
@@ -437,14 +455,16 @@ static PyMethodDef asoraMethods[] = {
      "Convert shell indexing to cartesian coordinates"},
     {"cart2shell", asora_cart2shell, METH_VARARGS,
      "Convert cartesian coordinates to shell indexing"},
-    {"create_raytracing_lut", asora_create_raytracing_lut, METH_VARARGS,
-     "Create LUT for ASORA raytracing"},
-    {"get_raytracing_lut", asora_get_raytracing_lut, METH_VARARGS,
-     "Create and copy look-up table for raytracing"},
+    {"create_shortchar_lut", asora_create_shortchar_lut, METH_VARARGS,
+     "Create LUT for ASORA short-characteristic interpolation"},
+    {"get_shortchar_lut", asora_get_shortchar_lut, METH_VARARGS,
+     "Create and copy short-characteristic interpolation LUT to Python"},
     {"pack_offset", asora_pack_offset, METH_VARARGS,
      "Pack cell offset into a single integer"},
     {"unpack_offset", asora_unpack_offset, METH_VARARGS,
      "Unpack cell offset from a single integer"},
+    {"compute_shortchar_factors", asora_compute_shortchar_factors, METH_VARARGS,
+     "Compute geometric factors for short-characteristic interpolation"},
     {"device_init", asora_device_init, METH_VARARGS,
      "Initialize device and allocate memory"},
     {"device_close", asora_device_close, METH_VARARGS, "Close device and free memory"},

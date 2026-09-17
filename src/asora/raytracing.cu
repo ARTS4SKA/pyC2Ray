@@ -1,6 +1,8 @@
 #include "raytracing.cuh"
 
 #include "memory.h"
+#include "octahedron.cuh"
+#include "shortchar.cuh"
 #include "utils.cuh"
 
 #include <cuda_runtime.h>
@@ -24,33 +26,6 @@ namespace {
     template <typename T>
     T *get_data_view(asora::buffer_tag tag) {
         return asora::device::get(tag).data<T>();
-    }
-
-    __device__ double cinterp(
-        const raytracing_lut::entry &__restrict__ entry,
-        const double *__restrict__ column_dens, double cross_section
-    ) {
-        // Reference optical depth from C2-Ray interpolation function.
-        constexpr float tau_0 = 0.6f;
-
-        cuda::std::array<float, 4> factors = {
-            (1.f - entry.dx) * (1.f - entry.dy), (1.f - entry.dy) * entry.dx,
-            (1.f - entry.dx) * entry.dy, entry.dx * entry.dy
-        };
-
-        // Column density at the crossing point is a weighted average.
-        double cdens = 0.0;
-        double wtot = 0.0;
-#pragma unroll 4
-        for (size_t i = 0; i < 4; ++i) {
-            auto c = column_dens[entry.indices[i]];
-            auto w = factors[i] / max(tau_0, static_cast<float>(c * cross_section));
-
-            cdens += w * c;
-            wtot += w;
-        }
-
-        return cdens / wtot * entry.multiplier;
     }
 
     // Compute the photoionization rate for a given cell based on the incoming column
@@ -84,14 +59,12 @@ namespace {
     // a single thread. Threads may call this function multiple times if required to
     // cover the full q-shell.
     __device__ void raytrace(
-        const raytracing_lut::entry &entry, size_t cd_index, const int3 &pos,
-        double scale, element_data &data_HI, double dr, double R_max,
-        const density_maps &densities, size_t m1, const photo_tables &ion_tables,
-        const linspace<double> &logtau, const int2 &limit
+        const shortchar_info &info, size_t cd_index, const int3 &pos, double scale,
+        element_data &data_HI, double dr, double R_max, const density_maps &densities,
+        size_t m1, const photo_tables &ion_tables, const linspace<double> &logtau,
+        const int2 &limit
     ) {
-        const auto &di = entry.di;
-        const auto &dj = entry.dj;
-        const auto &dk = entry.dk;
+        const auto &[di, dj, dk] = info.pos;
 
         if ((di < limit.x) || (di > limit.y) || (dj < limit.x) || (dj > limit.y) ||
             (dk < limit.x) || (dk > limit.y))
@@ -105,16 +78,18 @@ namespace {
         auto dist2 = di * di + dj * dj + dk * dk;
         if (dist2 > static_cast<int>(R_max * R_max)) return;
 
-        auto coldens_in = cinterp(entry, data_HI.column_density, data_HI.cross_section);
+        auto coldens_in = shortchar_interpolation(
+            info, data_HI.column_density, data_HI.cross_section
+        );
 
         constexpr double max_coldens = 2e30;
         if (coldens_in > max_coldens) return;
 
-        auto path = dr * entry.path;
+        auto path = dr * info.path;
 
-        // vol_ph = 4*pi * dist2 * path * dr^2, with path = dr * entry.path. The
+        // vol_ph = 4*pi * dist2 * path * dr^2, with path = dr * info.path. The
         // 4*pi*dr^3 factor does not depend on the cell and is hoisted to the caller.
-        auto vol_ph = dist2 * entry.path;
+        auto vol_ph = dist2 * info.path;
 
         // Get local ionization fraction & neutral hydrogen density in the cell
         const auto ph_index = ravel_index(pos.x + di, pos.y + dj, pos.z + dk, m1);
@@ -200,13 +175,13 @@ namespace asora {
 
         // Collect the LUT for raytracing kernel.
         try {
-            create_raytracing_lut(q_max);
+            create_shortchar_interp_lut(q_max);
         } catch (const std::exception &e) {
             // If the LUT cannot be created, lut_d below will be empty.
             std::cerr << "Error creating raytracing lookup table: " << e.what()
                       << "; calculating cinterp on the fly\n";
         }
-        raytracing_lut lut_d{};
+        shortchar_lut lut_d{};
 
         // Loop over batches of sources
         for (size_t ns = 0; ns < num_src; ns += grid_size) {
@@ -229,7 +204,7 @@ namespace asora {
     // to the current cell and finds the photoionization rate
     // ========================================================================
     __global__ void evolve0D_gpu(
-        raytracing_lut lut, size_t m1, double dr, double R_max, int q_max,
+        shortchar_lut lut, size_t m1, double dr, double R_max, int q_max,
         size_t ns_start, size_t num_src, const int *__restrict__ src_pos,
         const double *__restrict__ src_flux, element_data data_HI,
         density_maps densities, photo_tables ion_tables, linspace<double> logtau
@@ -284,9 +259,11 @@ namespace asora {
             size_t s = threadIdx.x;
             while (s < cells_in_shell(q)) {
                 auto cd_index = cells_to_shell(q - 1) + s;
-                auto entry = use_lut ? lut[cd_index] : make_lut_entry(shell2cart(q, s));
+                auto info = use_lut
+                                ? lut[cd_index]
+                                : make_shortchar_interpolation_info(shell2cart(q, s));
                 raytrace(
-                    entry, cd_index, {i0, j0, k0}, scale, data_HI, dr, R_max, densities,
+                    info, cd_index, {i0, j0, k0}, scale, data_HI, dr, R_max, densities,
                     m1, ion_tables, logtau, {ll, lr}
                 );
 
