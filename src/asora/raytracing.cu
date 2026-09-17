@@ -138,12 +138,6 @@ namespace asora {
     ) {
         device::check_initialized();
 
-        if (!device::contains(buffer_tag::raylut_offsets))
-            throw std::runtime_error(
-                "Raytracing lookup table must be allocated on the device before "
-                "calling do_all_sources_gpu; call setup_raytracing_lut_gpu(q_max) first"
-            );
-
         // Number density array is not modified, it is assumed that it is already on the
         // device.
         if (!device::contains(buffer_tag::number_density))
@@ -205,6 +199,13 @@ namespace asora {
         linspace<double> logtau{minlogtau, dlogtau, static_cast<size_t>(num_tau)};
 
         // Collect the LUT for raytracing kernel.
+        try {
+            create_raytracing_lut(q_max);
+        } catch (const std::exception &e) {
+            // If the LUT cannot be created, lut_d below will be empty.
+            std::cerr << "Error creating raytracing lookup table: " << e.what()
+                      << "; calculating cinterp on the fly\n";
+        }
         raytracing_lut lut_d{};
 
         // Loop over batches of sources
@@ -276,12 +277,14 @@ namespace asora {
         // Cell-independent part of the photon volume 4*pi * dist2 * path * dr^2.
         scale /= 4 * c::pi<>;
 
+        const auto use_lut = lut.is_set();
+
         for (int q = 1; q <= q_max; ++q) {
             // Each thread can process multiple cells.
             size_t s = threadIdx.x;
             while (s < cells_in_shell(q)) {
                 auto cd_index = cells_to_shell(q - 1) + s;
-                auto entry = lut[cd_index];
+                auto entry = use_lut ? lut[cd_index] : make_lut_entry(shell2cart(q, s));
                 raytrace(
                     entry, cd_index, {i0, j0, k0}, scale, data_HI, dr, R_max, densities,
                     m1, ion_tables, logtau, {ll, lr}

@@ -138,6 +138,32 @@ PyObject *asora_cells_to_shell([[maybe_unused]] PyObject *self, PyObject *args) 
     return PyLong_FromSize_t(n);
 }
 
+PyObject *asora_shell2cart([[maybe_unused]] PyObject *self, PyObject *args) {
+    int q, s;
+    if (!PyArg_ParseTuple(args, "ii", &q, &s)) return nullptr;
+
+    try {
+        auto [i, j, k] = asora::shell2cart(q, s);
+        return Py_BuildValue("iii", i, j, k);
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_MemoryError, e.what());
+        return nullptr;
+    }
+}
+
+PyObject *asora_cart2shell([[maybe_unused]] PyObject *self, PyObject *args) {
+    int i, j, k;
+    if (!PyArg_ParseTuple(args, "iii", &i, &j, &k)) return nullptr;
+
+    try {
+        auto [q, s] = asora::cart2shell(i, j, k);
+        return Py_BuildValue("ii", q, s);
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_MemoryError, e.what());
+        return nullptr;
+    }
+}
+
 PyObject *asora_create_raytracing_lut([[maybe_unused]] PyObject *self, PyObject *args) {
     int q_max = 0;
     if (!PyArg_ParseTuple(args, "i", &q_max)) return nullptr;
@@ -407,6 +433,10 @@ static PyMethodDef asoraMethods[] = {
      "Number of cells in q-shell"},
     {"cells_to_shell", asora_cells_to_shell, METH_VARARGS,
      "Cumulative number of cells up to q-shell"},
+    {"shell2cart", asora_shell2cart, METH_VARARGS,
+     "Convert shell indexing to cartesian coordinates"},
+    {"cart2shell", asora_cart2shell, METH_VARARGS,
+     "Convert cartesian coordinates to shell indexing"},
     {"create_raytracing_lut", asora_create_raytracing_lut, METH_VARARGS,
      "Create LUT for ASORA raytracing"},
     {"get_raytracing_lut", asora_get_raytracing_lut, METH_VARARGS,
