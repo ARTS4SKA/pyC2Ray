@@ -50,16 +50,20 @@ namespace asora {
 
     /// Structure of arrays for the LUT on device.
     struct raytracing_lut {
-        uint32_t *__restrict__ offsets;
-        float *__restrict__ multipliers;
-        float *__restrict__ dxs;
-        float *__restrict__ dys;
-        float *__restrict__ paths;
-        index4 *__restrict__ indices;
+        uint32_t *__restrict__ offsets = nullptr;
+        float *__restrict__ multipliers = nullptr;
+        float *__restrict__ dxs = nullptr;
+        float *__restrict__ dys = nullptr;
+        float *__restrict__ paths = nullptr;
+        index4 *__restrict__ indices = nullptr;
 
         raytracing_lut();
         raytracing_lut(const raytracing_lut &) = default;
         raytracing_lut &operator=(const raytracing_lut &) = default;
+
+        __host__ __device__ bool is_set() const {
+            return offsets && multipliers && dxs && dys && paths && indices;
+        }
 
         struct entry {
             /// Cell offsets.
@@ -82,6 +86,13 @@ namespace asora {
             return {di, dj, dk, multipliers[i], dxs[i], dys[i], paths[i], indices[i]};
         }
     };
+
+    /* @brief Create a raytracing_lut::entry structure from cell coordinates.
+     *
+     * @param pos Integer coordinates of the cell (di, dj, dk).
+     * @return A raytracing_lut::entry structure containing the cell's properties.
+     */
+    __device__ raytracing_lut::entry make_lut_entry(const int3 &pos);
 
     /* @brief Create a lookup table for all cells in the q-shells up to q_max.
      *
