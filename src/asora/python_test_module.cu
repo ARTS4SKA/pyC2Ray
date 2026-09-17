@@ -107,32 +107,6 @@ PyObject *asora_test_path_in_cell([[maybe_unused]] PyObject *self, PyObject *arg
     return PyArray_Return(reinterpret_cast<PyArrayObject *>(path));
 }
 
-PyObject *asora_test_linthrd2cart([[maybe_unused]] PyObject *self, PyObject *args) {
-    int q, s;
-    if (!PyArg_ParseTuple(args, "ii", &q, &s)) return nullptr;
-
-    try {
-        auto [i, j, k] = asoratest::linthrd2cart(q, s);
-        return Py_BuildValue("iii", i, j, k);
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_MemoryError, e.what());
-        return nullptr;
-    }
-}
-
-PyObject *asora_test_cart2linthrd([[maybe_unused]] PyObject *self, PyObject *args) {
-    int i, j, k;
-    if (!PyArg_ParseTuple(args, "iii", &i, &j, &k)) return nullptr;
-
-    try {
-        auto [q, s] = asoratest::cart2linthrd(i, j, k);
-        return Py_BuildValue("ii", q, s);
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_MemoryError, e.what());
-        return nullptr;
-    }
-}
-
 #ifdef __cplusplus
 extern "C" {
 #endif  // __cplusplus
@@ -147,10 +121,6 @@ static PyMethodDef asoraMethods[] = {
      "Test geometric factors calculations"},
     {"path_in_cell", asora_test_path_in_cell, METH_VARARGS,
      "Test path-in-cell calculations"},
-    {"linthrd2cart", asora_test_linthrd2cart, METH_VARARGS,
-     "Shell indexing to cartesian coordinates"},
-    {"cart2linthrd", asora_test_cart2linthrd, METH_VARARGS,
-     "Cartesian coordinates to shell indexing"},
     {NULL, NULL, 0, NULL} /* Sentinel */
 };
 
