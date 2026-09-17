@@ -1,14 +1,13 @@
-#include "raytracing_lut.cuh"
+#include "shortchar.cuh"
 
 #include "memory.h"
+#include "octahedron.cuh"
 #include "utils.cuh"
 
 #include <cassert>
 #include <cmath>
 #include <cuda/std/array>
 #include <format>
-#include <ranges>
-#include <vector>
 
 #ifdef __CUDA_ARCH__
 #define assert_or_throw(condition, pos) assert(condition)
@@ -22,24 +21,11 @@
 
 namespace {
 
-    constexpr size_t LUT_SIZE = asora::Q_MAX + 1;
-    __device__ __constant__ size_t cells_in_shell_cache[LUT_SIZE];
-    __device__ __constant__ size_t cells_to_shell_cache[LUT_SIZE];
-
     // 2^10 = 1024, possible values in range [-512, 512)
     constexpr uint32_t OFFSET_BITS = 10;
     constexpr uint32_t OFFSET_MASK = (1u << OFFSET_BITS) - 1;
-
-    // Return dx, dy, path
-    __device__ float3 compute_geometric_factors(int di, int dj, int dk) {
-        assert(std::abs(dk) >= std::abs(di) && std::abs(dk) >= std::abs(dj) && dk != 0);
-        auto inv_dk = 1.f / std::abs(dk);
-        auto xi = di * inv_dk;
-        auto xj = dj * inv_dk;
-        return {
-            1.f - std::abs(xi), 1.f - std::abs(xj), std::sqrt(1.f + xi * xi + xj * xj)
-        };
-    }
+    /// Maximum allowed q-shell index, included.
+    constexpr int Q_MAX = 512;
 
 }  // namespace
 
@@ -103,61 +89,32 @@ namespace asora {
         return {di, dj, dk};
     }
 
-    void setup_cells_to_shell_luts() {
-        auto fill_and_load_lut = [](auto func, auto& cache) {
-            std::array<size_t, LUT_SIZE> host_lut;
-            std::ranges::copy(
-                std::views::iota(0ul, LUT_SIZE) | std::views::transform(func),
-                host_lut.begin()
-            );
-            safe_cuda(
-                cudaMemcpyToSymbol(cache, host_lut.data(), LUT_SIZE * sizeof(size_t))
-            );
+    // Return dx, dy, path
+    __host__ __device__ float3 compute_shortchar_factors(int di, int dj, int dk) {
+        assert(std::abs(dk) >= std::abs(di) && std::abs(dk) >= std::abs(dj) && dk != 0);
+        auto inv_dk = 1.f / std::abs(dk);
+        auto xi = di * inv_dk;
+        auto xj = dj * inv_dk;
+        return {
+            1.f - std::abs(xi), 1.f - std::abs(xj), std::sqrt(1.f + xi * xi + xj * xj)
         };
-
-        fill_and_load_lut(cells_in_shell, cells_in_shell_cache);
-        fill_and_load_lut(cells_to_shell, cells_to_shell_cache);
     }
 
-    __host__ __device__ size_t cells_in_shell(int q) {
-        // Defined also for negative q to avoid bound checking.
-        if (q < 0) return 0;
-#ifdef __CUDA_ARCH__
-        if (static_cast<size_t>(q) <= Q_MAX) return cells_in_shell_cache[q];
-#else
-        if (q == 0) return 1;
-#endif
-        return 4 * q * q + 2;
-    }
+    __device__ shortchar_info make_shortchar_interpolation_info(const int3& pos) {
+        if (pos.x == 0 && pos.y == 0 && pos.z == 0)
+            return {pos, 1.f, 0.f, 0.f, 0.5f, {0, 0, 0, 0}};
 
-    __host__ __device__ size_t cells_to_shell(int q) {
-        // This formula comes from the series sum of cells_in_shell(p) for p = 0 to q.
-        if (q < 0) return 0;
-#ifdef __CUDA_ARCH__
-        if (static_cast<size_t>(q) <= Q_MAX) return cells_to_shell_cache[q];
-#endif
-        return (1 + 2 * q) * (3 + 2 * q * (1 + q)) / 3;
-    }
-
-    __device__ raytracing_lut::entry make_lut_entry(const int3& pos) {
         assert(std::abs(pos.x) + std::abs(pos.y) + std::abs(pos.z) > 0);
 
-        raytracing_lut::entry entry;
-
         auto&& [di, dj, dk] = pos;
-
-        entry.di = di;
-        entry.dj = dj;
-        entry.dk = dk;
 
         auto ai = std::abs(di);
         auto aj = std::abs(dj);
         auto ak = std::abs(dk);
 
+        float multiplier = 1.f;
         if (ai <= 1 && aj <= 1 && ak <= 1)
-            entry.multiplier = sqrt(static_cast<float>(ai + ak + aj));
-        else
-            entry.multiplier = 1.f;
+            multiplier = sqrt(static_cast<float>(ai + ak + aj));
 
         // Compute geometric factors and interpolation indices using inverse_lut.
         int si = (di > 0) - (di < 0);
@@ -173,7 +130,7 @@ namespace asora {
                 si, 0,  sk,  //
                 0,  0,  sk   //
             };
-            dd = compute_geometric_factors(di, dj, dk);
+            dd = compute_shortchar_factors(di, dj, dk);
         } else if (aj >= ai && aj >= ak) {
             shifts = {
                 si, sj, sk,  //
@@ -181,7 +138,7 @@ namespace asora {
                 si, sj, 0,   //
                 0,  sj, 0    //
             };
-            dd = compute_geometric_factors(di, dk, dj);
+            dd = compute_shortchar_factors(di, dk, dj);
         } else {  // if (ai >= aj && ai >= ak)
             shifts = {
                 si, sj, sk,  //
@@ -189,11 +146,8 @@ namespace asora {
                 si, sj, 0,   //
                 si, 0,  0    //
             };
-            dd = compute_geometric_factors(dj, dk, di);
+            dd = compute_shortchar_factors(dj, dk, di);
         }
-        entry.dx = dd.x;
-        entry.dy = dd.y;
-        entry.path = dd.z;
 
         const cuda::std::array<float, 4> weights = {
             (1.f - dd.x) * (1.f - dd.y), (1.f - dd.y) * dd.x, (1.f - dd.x) * dd.y,
@@ -201,7 +155,7 @@ namespace asora {
         };
 
         size_t index = 0;
-        auto& indices = entry.indices;
+        index4 indices;
         auto sx = shifts.data();
 #pragma unroll 4
         for (size_t k = 0; k < 4; ++k) {
@@ -213,10 +167,10 @@ namespace asora {
             sx += 3;
         }
 
-        return entry;
+        return {pos, multiplier, dd.x, dd.y, dd.z, std::move(indices)};
     }
 
-    raytracing_lut::raytracing_lut() {
+    shortchar_lut::shortchar_lut() {
         // LUT not setup.
         if (!device::contains(buffer_tag::raylut_offsets)) return;
 
@@ -229,30 +183,18 @@ namespace asora {
     }
 
     // Performed by a single block for now
-    __global__ void fill_lut_kernel(raytracing_lut raylut, int q_max) {
-        // q = 0:
-        if (threadIdx.x == 0) {
-            raylut.offsets[0] = pack_offset({0, 0, 0});
-            raylut.multipliers[0] = 1.f;
-            raylut.dxs[0] = 0.f;
-            raylut.dys[0] = 0.f;
-            raylut.paths[0] = 0.5f;
-            raylut.indices[0] = {0, 0, 0, 0};
-        }
-        __syncthreads();
-
-        for (int q = 1; q <= q_max; ++q) {
-            // Each thread can process multiple cells.
+    __global__ void fill_lut_kernel(shortchar_lut sclut, int q_max) {
+        for (int q = 0; q <= q_max; ++q) {
             size_t s = threadIdx.x;
             while (s < cells_in_shell(q)) {
                 auto index = cells_to_shell(q - 1) + s;
-                auto entry = make_lut_entry(shell2cart(q, s));
-                raylut.offsets[index] = pack_offset({entry.di, entry.dj, entry.dk});
-                raylut.multipliers[index] = entry.multiplier;
-                raylut.dxs[index] = entry.dx;
-                raylut.dys[index] = entry.dy;
-                raylut.paths[index] = entry.path;
-                raylut.indices[index] = entry.indices;
+                auto info = make_shortchar_interpolation_info(shell2cart(q, s));
+                sclut.offsets[index] = pack_offset(info.pos);
+                sclut.multipliers[index] = info.multiplier;
+                sclut.dxs[index] = info.dx;
+                sclut.dys[index] = info.dy;
+                sclut.paths[index] = info.path;
+                sclut.indices[index] = info.indices;
 
                 s += blockDim.x;
             }
@@ -260,7 +202,7 @@ namespace asora {
         }
     }
 
-    size_t create_raytracing_lut(int q_max) {
+    size_t create_shortchar_interp_lut(int q_max) {
         if (q_max < 0 || q_max > Q_MAX) {
             throw std::invalid_argument("q_max must be in the range [0, Q_MAX]");
         }
@@ -283,7 +225,7 @@ namespace asora {
         device::ensure<index4>(buffer_tag::raylut_indices, n_cells);
 
         // Launch kernel to fill lut
-        raytracing_lut lut_d{};
+        shortchar_lut lut_d{};
 
         fill_lut_kernel<<<1, 1024>>>(lut_d, q_max);
         safe_cuda(cudaDeviceSynchronize());
@@ -291,7 +233,7 @@ namespace asora {
         return n_cells;
     }
 
-    raytracing_lut_entries copy_lut_to_host(int q_max) {
+    shortchar_entries copy_lut_to_host(int q_max) {
         auto offsets = device::get(buffer_tag::raylut_offsets);
         auto multipliers = device::get(buffer_tag::raylut_multipliers);
         auto dxs = device::get(buffer_tag::raylut_dx);
@@ -303,7 +245,7 @@ namespace asora {
         if (n_cells > offsets.size<uint32_t>())
             throw std::runtime_error(
                 "Requested a larger LUT than what available. Call "
-                "create_raytracing_lut(q_max) with the correct q_max value first"
+                "create_shortchar_interp_lut(q_max) with the correct q_max value first"
             );
 
         std::vector<uint32_t> offsets_h(n_cells);
@@ -320,7 +262,7 @@ namespace asora {
         paths.copyToHost(paths_h.data(), sizeof(float) * n_cells);
         indices.copyToHost(indices_h.data(), sizeof(index4) * n_cells);
 
-        raytracing_lut_entries lut;
+        shortchar_entries lut;
         lut.reserve(n_cells);
         for (size_t i = 0; i < n_cells; ++i) {
             auto&& [di, dj, dk] = unpack_offset(offsets_h[i]);
@@ -331,6 +273,33 @@ namespace asora {
         }
 
         return lut;
+    }
+
+    __device__ double shortchar_interpolation(
+        const shortchar_info& __restrict__ info, const double* __restrict__ column_dens,
+        double cross_section
+    ) {
+        // Reference optical depth from C2-Ray interpolation function.
+        constexpr float tau_0 = 0.6f;
+
+        cuda::std::array<float, 4> factors = {
+            (1.f - info.dx) * (1.f - info.dy), (1.f - info.dy) * info.dx,
+            (1.f - info.dx) * info.dy, info.dx * info.dy
+        };
+
+        // Column density at the crossing point is a weighted average.
+        double cdens = 0.0;
+        double wtot = 0.0;
+#pragma unroll 4
+        for (size_t i = 0; i < 4; ++i) {
+            auto c = column_dens[info.indices[i]];
+            auto w = factors[i] / max(tau_0, static_cast<float>(c * cross_section));
+
+            cdens += w * c;
+            wtot += w;
+        }
+
+        return cdens / wtot * info.multiplier;
     }
 
 }  // namespace asora
