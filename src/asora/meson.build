@@ -53,10 +53,11 @@ endif
 asora_sources = [
     'memory.cpp',
     'rates.cu',
-    'raytracing_lut.cu',
     'raytracing.cu',
+    'shortchar.cu',
     'utils.cu',
     'chemistry.cu',
+    'python_module.cu',
 ]
 cuda_dep = dependency('cuda', version: '>=12', static: false)
 
@@ -79,34 +80,13 @@ if cuda_dep.version().version_compare('>= 13.0')
 endif
 cccl_dep = declare_dependency(compile_args: cccl_args)
 
-asora_core = static_library(
-    'asora_core',
-    asora_sources,
-    dependencies: [cuda_dep, cccl_dep],
-    cuda_args: nvcc_flags,
-    link_args: nvlink_flags,
-)
-
 # Build ASORA module with nvcc
 py.extension_module(
     'libasora',
-    'python_module.cu',
+    asora_sources,
     dependencies: [py_dep, np_dep, cuda_dep, cccl_dep],
     install: true,
     subdir: 'pyc2ray/lib',
-    link_with: asora_core,
-    cuda_args: nvcc_flags,
-    link_args: nvlink_flags,
-)
-
-# Build ASORA test module with nvcc
-py.extension_module(
-    'libasoratest',
-    ['tests.cu', 'python_test_module.cu'],
-    dependencies: [py_dep, np_dep, cuda_dep, cccl_dep],
-    install: true,
-    subdir: 'pyc2ray/lib',
-    link_with: asora_core,
     cuda_args: nvcc_flags,
     link_args: nvlink_flags,
 )
