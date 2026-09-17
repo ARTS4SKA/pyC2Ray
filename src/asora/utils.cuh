@@ -78,48 +78,28 @@ namespace asora {
 
     /* @brief Convert octahedral (q,s) coordinates to Cartesian (i,j,k).
      *
-     * Maps from shell index q and position s within shell to 3D grid offsets
-     * relative to the source position.
-     * The ASORA algorithm uses a coordinate system based on nested octahedral shells
-     * around each source. Each q-shell contains cells indexed by s.
-     * Here follows an example of this mapping for the top part (k >= 0) and bottom part
-     * (k < 0) of the q = 3 shell. The cells are projected in the (i, j) plane and
-     * numbers correspond to their s-index.
+     * The mapping is such that for a given q shell, the s-index enumerates the cells
+     * ordered by ravel_index(i, j, k). This should partially help with memory access
+     * patterns when processing the cells in a shell.
      *
-     *           k >= 0                      k < 0
-     *              3
-     *           2  6 10                       27
-     *        1  5  9 13 17                 26 29 32
-     *     0  4  8 12 16 20 24           25 28 31 34 37
-     *        7 11 15 19 22                 30 33 36
-     *          14 18 22                       35
-     *             21
-     *
-     * Note that the bottom part (k < 0) is equivalent to the top part of the
-     * 2-shell with s-index shifted by (q+1)² + q².
-     *
-     * @see cart2linthrd() for the backward transformation.
+     * @see cart2shell() for the backward transformation.
      *
      * @param[in] q Shell index (distance from source)
      * @param[in] s Position index within shell q
      * @return Array containing {i, j, k} offsets
      */
-    [[deprecated("Not used anymore")]]
-    __host__ __device__ cuda::std::array<int, 3> linthrd2cart(int q, int s);
+    __host__ __device__ int3 shell2cart(int q, int s);
 
     /* @brief Convert Cartesian (i,j,k) coordinates to octahedral (q,s).
      *
-     * Inverse of linthrd2cart. Maps 3D grid offsets to octahedral shell coordinates.
-     *
-     * @see linthrd2cart() for the forward transformation.
+     * @see shell2cart() for the forward transformation.
      *
      * @param[in] i X-offset
      * @param[in] j Y-offset
      * @param[in] k Z-offset
      * @return Array containing {q, s}
      */
-    [[deprecated("Not used anymore")]]
-    __host__ __device__ cuda::std::array<int, 2> cart2linthrd(int i, int j, int k);
+    __host__ __device__ int2 cart2shell(int i, int j, int k);
 
     /* @brief Calculate geometric path length of a ray through a cell.
      *
