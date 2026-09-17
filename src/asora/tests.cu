@@ -95,7 +95,7 @@ namespace asoratest {
                     int di = i - shape[0] / 2;
                     int dj = j - shape[1] / 2;
                     int dk = k - shape[2] / 2;
-                    auto &&[q, s] = asora::cart2linthrd(di, dj, dk);
+                    auto &&[q, s] = asora::cart2shell(di, dj, dk);
                     auto i_off = k + shape[2] * (j + shape[1] * i);
                     auto q_off = asora::cells_to_shell(q - 1) + s;
                     dens_data_vec[q_off] = dens_data[i_off];
@@ -159,16 +159,6 @@ namespace asoratest {
 
         asora::safe_cuda(cudaPeekAtLastError());
         path_dev.copyToHost(path_data, path_dev.size());
-    }
-
-    std::array<int, 3> linthrd2cart(int q, int s) {
-        auto [i, j, k] = asora::linthrd2cart(q, s);
-        return {i, j, k};
-    }
-
-    std::array<int, 2> cart2linthrd(int i, int j, int k) {
-        auto [q, s] = asora::cart2linthrd(i, j, k);
-        return {q, s};
     }
 
 }  // namespace asoratest
