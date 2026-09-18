@@ -2,7 +2,6 @@ import atexit
 import logging
 from functools import cached_property
 from pathlib import Path
-from typing import TypeAlias
 
 import numpy as np
 import tools21cm as t2c
@@ -20,21 +19,7 @@ from pyc2ray.asora_core import (
 )
 from pyc2ray.domain.domain_decomposition_handler import DomainDecompositionHandler
 from pyc2ray.evolve import ChemistryParams, evolve3D
-from pyc2ray.parameters import (
-    AbundancesParameters,
-    BlackBodyParameters,
-    CGSParameters,
-    CosmologyParameters,
-    DomainDecompositionParameters,
-    GridParameters,
-    MaterialParameters,
-    OutputParameters,
-    PhotoParameters,
-    RaytracingParameters,
-    SinksParameters,
-    SourcesParameters,
-    YmlParameters,
-)
+from pyc2ray.parameters import SimulationParameters
 from pyc2ray.radiation import (
     BlackBodyBase,
     BlackBodySource,
@@ -47,8 +32,6 @@ from pyc2ray.utils.logutils import PathType, configure_logger
 from pyc2ray.utils.sourceutils import FloatArray, IntArray
 
 logger = logging.getLogger(__name__)
-
-ParameterClass: TypeAlias = type[YmlParameters]
 
 # ======================================================================
 # This file defines the abstract C2Ray object class, which is the basis
@@ -150,7 +133,7 @@ class C2Ray:
                 "Requested to enable MPI but there is only one process available. "
                 "Try to run this application with a higher number of processes. Disabling MPI."
             )
-            self.grid_params.mpi = False
+            self.parameters.grid.mpi = False
 
         # Set Raytracing mode
         if self.gpu:
@@ -172,17 +155,17 @@ class C2Ray:
             atexit.register(device_close)
 
         # Check if domain decomposion is compatible with MPI and GPU usage setup
-        if self.domain_decomposition_params.enabled:
+        if self.parameters.domain_decomposition.enabled:
             if not self.gpu:
                 logger.warning(
                     "Domain decomposition is only implemented for GPU raytracing. Disabling domain decomposition."
                 )
-                self.domain_decomposition_params.enabled = False
+                self.parameters.domain_decomposition.enabled = False
             if not self.mpi:
                 logger.warning(
                     "Domain decomposition is only implemented for MPI runs. Disabling domain decomposition."
                 )
-                self.domain_decomposition_params.enabled = False
+                self.parameters.domain_decomposition.enabled = False
             if not is_periodic_mode_active():
                 raise NotImplementedError(
                     "Domain decomposition is only supported with a periodic domain "
@@ -296,13 +279,13 @@ class C2Ray:
         # then call the evolve designed for the MPI source splitting.
         # Otherwise all ranks are calling (independently) the evolve
         # with no source splitting until the condition above is meet.
-        if not self.domain_decomposition_params.enabled:
+        if not self.parameters.domain_decomposition.enabled:
             use_mpi = NumSrc >= self.nprocs and self.mpi
         else:
             use_mpi = self.mpi
 
         # Update the persistent domain decomposition handler.
-        if self.domain_decomposition_params.enabled:
+        if self.parameters.domain_decomposition.enabled:
             if self._decomposition_handler is None:
                 self._decomposition_handler = DomainDecompositionHandler(MPI.COMM_WORLD)
             self._decomposition_handler.update_decomposition(
@@ -311,10 +294,10 @@ class C2Ray:
                 src_flux=src_flux,
                 N=self.N,
                 R_max_LLS=self.R_max_LLS,
-                src_batch_size=self.raytracing_params.source_batch_size,
+                src_batch_size=self.parameters.raytracing.source_batch_size,
                 num_tau=self.photo_thin_table.shape[0],
                 is_domain_periodic=bool(is_periodic_mode_active()),
-                domain_decomposition_params=self.domain_decomposition_params,
+                domain_decomposition_params=self.parameters.domain_decomposition,
             )
 
         self.xh, self.phi_ion = evolve3D(
@@ -322,7 +305,7 @@ class C2Ray:
             dr=self.dr,
             src_flux=src_flux,
             src_pos=src_pos,
-            src_batch_size=self.raytracing_params.source_batch_size,
+            src_batch_size=self.parameters.raytracing.source_batch_size,
             use_gpu=self.gpu,
             decomposition=self._decomposition_handler,
             max_subbox=self.max_subbox,
@@ -395,11 +378,11 @@ class C2Ray:
 
         # Set new mean-free-path if it is redshift dependent
         self.R_max_LLS: float
-        if self.sinks.mfp_model == "Worseck2014":
-            self.R_max_LLS = self.sinks.mfp_Worseck2014(z=self.zred)  # in cMpc
+        if self.sinks.mfp_model == "Worseck14":
+            self.R_max_LLS = self.sinks.mfp_Worseck14(z=self.zred)  # in cMpc
             self.R_max_LLS *= self.N / self.boxsize  # in number of grids
             logger.info(
-                """Mean-free-path for photons at z = %.3f (Worseck+ 2014): %.3e cMpc
+                """Mean-free-path for photons at z = %.3f (Worseck+14): %.3e cMpc
 This corresponds to %.3f grid cells.""",
                 self.zred,
                 self.R_max_LLS * self.boxsize / self.N,
@@ -544,7 +527,7 @@ This corresponds to %.3f grid cells.""",
     # TODO: figure out if all these propery methods are necessary
     @property
     def N(self) -> int:
-        return self.grid_params.meshsize
+        return self.parameters.grid.meshsize
 
     @property
     def shape(self) -> tuple[int, int, int]:
@@ -552,95 +535,87 @@ This corresponds to %.3f grid cells.""",
 
     @property
     def boxsize(self) -> float:
-        return self.grid_params.boxsize
+        return self.parameters.grid.boxsize
 
     @property
     def gpu(self) -> bool:
-        return bool(self.grid_params.gpu)
+        return bool(self.parameters.grid.gpu)
 
     @property
     def mpi(self) -> bool:
-        return bool(self.grid_params.mpi)
+        return bool(self.parameters.grid.mpi)
 
     @property
     def resume(self) -> bool:
-        return bool(self.grid_params.resume)
+        return bool(self.parameters.grid.resume)
 
     @property
-    def eth0(self) -> float:
-        return self.cgs_params.eth0
+    def ion_energy_HI(self) -> float:
+        return self.parameters.cgs.ion_energy_HI
 
     @property
-    def ethe0(self) -> float:
-        return self.cgs_params.ethe0
+    def ion_energy_HeI(self) -> float:
+        return self.parameters.cgs.ion_energy_HeI
 
     @property
-    def ethe1(self) -> float:
-        return self.cgs_params.ethe1
-
-    @property
-    def fh0(self) -> float:
-        return self.cgs_params.fh0
-
-    @property
-    def xih0(self) -> float:
-        return self.cgs_params.xih0
+    def ion_energy_HeII(self) -> float:
+        return self.parameters.cgs.ion_energy_HeII
 
     @property
     def abu_h(self) -> float:
-        return self.abundance_params.abu_h
+        return self.parameters.abundances.abu_h
 
     @property
     def abu_he(self) -> float:
-        return self.abundance_params.abu_he
+        return self.parameters.abundances.abu_he
 
     @property
     def mean_molecular(self) -> float:
-        return self.abundance_params.mean_molecular
+        return self.parameters.abundances.mean_molecular
 
     @property
     def sigma(self) -> float:
-        return self.photo_params.sigma_HI_at_ion_freq
+        return self.parameters.photo.sigma_HI_at_ion_freq
 
     @property
     def loss_fraction(self) -> float:
-        return self.raytracing_params.loss_fraction
+        return self.parameters.raytracing.loss_fraction
 
     @property
     def convergence_fraction(self) -> float:
-        return self.raytracing_params.convergence_fraction
+        return self.parameters.raytracing.convergence_fraction
 
     @property
     def max_subbox(self) -> int:
-        return self.raytracing_params.max_subbox
+        return self.parameters.raytracing.max_subbox
 
     @property
     def subboxsize(self) -> int:
-        return self.raytracing_params.subboxsize
+        return self.parameters.raytracing.subboxsize
 
     @property
     def cosmological(self) -> bool:
-        return self.cosmology_params.cosmological
+        return self.parameters.cosmology.cosmological
 
     @cached_property
     def chem_parms(self) -> ChemistryParams:
         return ChemistryParams(
-            self.cgs_params.bh00,
-            self.cgs_params.albpow,
-            self.cgs_params.colh0,
-            self.cgs_params.temph0,
-            self.abundance_params.abu_c,
+            self.parameters.cgs.b0_HI,
+            self.parameters.cgs.albpow,
+            self.parameters.cgs.col_HI,
+            self.parameters.cgs.temp_HI,
+            self.parameters.abundances.abu_c,
         )
 
     def _cosmology_init(self) -> None:
         """Set up cosmology from parameters (H0, Omega,..)"""
-        h = self.cosmology_params.h
-        Om0 = self.cosmology_params.Omega0
-        Ob0 = self.cosmology_params.Omega_B
-        Tcmb0 = self.cosmology_params.cmbtemp
+        h = self.parameters.cosmology.h
+        Om0 = self.parameters.cosmology.Omega0
+        Ob0 = self.parameters.cosmology.Omega_B
+        Tcmb0 = self.parameters.cosmology.cmbtemp
         H0 = 100 * h
         self.cosmology = FlatLambdaCDM(H0, Om0, Tcmb0, Ob0=Ob0)
-        self.zred_0 = self.cosmology_params.zred_0
+        self.zred_0 = self.parameters.cosmology.zred_0
 
         self.age_0 = self.zred2time(self.zred_0)
 
@@ -656,58 +631,58 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}""")
 
     @property
     def minlogtau(self) -> float:
-        return self.photo_params.minlogtau
+        return self.parameters.photo.minlogtau
 
     @property
     def maxlogtau(self) -> float:
-        return self.photo_params.maxlogtau
+        return self.parameters.photo.maxlogtau
 
     @property
-    def NumTau(self) -> int:
-        return self.photo_params.NumTau
+    def num_tau(self) -> int:
+        return self.parameters.photo.num_tau
 
     @property
-    def SourceType(self) -> str:
-        return self.photo_params.SourceType
+    def source_type(self) -> str:
+        return self.parameters.photo.source_type
 
     @property
     def grey(self) -> bool:
-        return self.photo_params.grey
+        return self.parameters.photo.grey
 
     @property
     def compute_heating_rates(self) -> bool:
-        return self.photo_params.compute_heating_rates
+        return self.parameters.photo.compute_heating_rates
 
     @property
     def cs_pl_idx_h(self) -> float:
-        return self.blackbody_params.cross_section_pl_index
+        return self.parameters.blackbody.cross_section_pl_index
 
     @property
     def bb_Teff(self) -> float:
-        return self.blackbody_params.Teff
+        return self.parameters.blackbody.Teff
 
     @property
     def results_basename(self) -> Path:
-        return Path(self.output_params.results_basename)
+        return Path(self.parameters.output.results_basename)
 
     @property
     def inputs_basename(self) -> Path:
-        assert self.output_params.inputs_basename is not None
-        return Path(self.output_params.inputs_basename)
+        assert self.parameters.output.inputs_basename is not None
+        return Path(self.parameters.output.inputs_basename)
 
     @property
     def sources_basename(self) -> Path:
-        assert self.output_params.sources_basename is not None
-        return Path(self.output_params.sources_basename)
+        assert self.parameters.output.sources_basename is not None
+        return Path(self.parameters.output.sources_basename)
 
     @property
     def density_basename(self) -> Path:
-        assert self.output_params.density_basename is not None
-        return Path(self.output_params.density_basename)
+        assert self.parameters.output.density_basename is not None
+        return Path(self.parameters.output.density_basename)
 
     @property
     def logfile(self) -> Path:
-        return self.results_basename / self.output_params.logfile
+        return self.results_basename / self.parameters.output.logfile
 
     def _radiation_init(self) -> None:
         """Set up radiation tables for ionization/heating rates"""
@@ -717,22 +692,22 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}""")
             logger.info("Warning: Using grey opacity")
         else:
             logger.info(
-                f"Using power-law opacity with {self.NumTau:n} table points between tau=10^({self.minlogtau:n}) "
+                f"Using power-law opacity with {self.num_tau:n} table points between tau=10^({self.minlogtau:n}) "
                 f"and tau=10^({self.maxlogtau:n})"
             )
 
-        # The actual table has NumTau + 1 points: the 0-th position is tau=0 and
-        # the remaining NumTau points are log-spaced from minlogtau to maxlogtau (same as in C2Ray)
+        # The actual table has num_tau + 1 points: the 0-th position is tau=0 and
+        # the remaining num_tau points are log-spaced from minlogtau to maxlogtau (same as in C2Ray)
         self.tau, self.dlogtau = make_tau_table(
-            self.minlogtau, self.maxlogtau, self.NumTau
+            self.minlogtau, self.maxlogtau, self.num_tau
         )
 
-        ion_freq_HI = c.ev2fr * self.eth0
-        ion_freq_HeII = c.ev2fr * self.ethe1
+        ion_freq_HI = c.ev2fr * self.ion_energy_HI
+        ion_freq_HeII = c.ev2fr * self.ion_energy_HeII
 
         radsource: BlackBodyBase
         # Black-Body source type
-        if self.SourceType == "blackbody":
+        if self.source_type == "blackbody":
             freq_min = ion_freq_HI
             freq_max = 10 * ion_freq_HeII
 
@@ -744,16 +719,15 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}""")
             logger.info(f"""Using Black-Body sources with effective temperature T = {radsource.temp:.1e} K and Radius {(radsource.R_star / cst.R_sun.to("cm")).value: .3e} rsun
 Spectrum Frequency Range: {freq_min:.3e} to {freq_max:.3e} Hz
 This is Energy:           {freq_min / c.ev2fr:.3e} to {freq_max / c.ev2fr:.3e} eV""")
-        elif self.SourceType == "powerlaw":
+        elif self.source_type == "powerlaw":
             # TODO: power law spectra is already implemented in radiation folder
             pass
-        elif self.SourceType == "Zackrisson2011":
+        elif self.source_type == "Zackrisson11":
             freq_min = ion_freq_HI
             freq_max = 10 * ion_freq_HI  # maximum frequency in Zackrisson tables
 
-            fname = self.photo_params.sed_table
             radsource = YggdrasilModel(
-                tabname=fname,
+                tabname=str(self.parameters.photo.sed_table_path),
                 grey=self.grey,
                 freq0=ion_freq_HI,
                 pl_index=self.cs_pl_idx_h,
@@ -761,12 +735,12 @@ This is Energy:           {freq_min / c.ev2fr:.3e} to {freq_max / c.ev2fr:.3e} e
             )
 
             logger.info(
-                """Using Yggdrasil Models for SED, Zackrisson et al (2011), for PopIII or PopII sources
+                """Using Yggdrasil Models for SED, Zackrisson et al ('11), for PopIII or PopII sources
 Spectrum Frequency Range: {freq_min:.3e} to {freq_max:.3e} Hz
 This is Energy:           {freq_min / c.ev2fr:.3e} to {freq_max / c.ev2fr:.3e} eV"""
             )
         else:
-            raise NameError("Unknown source type : ", self.SourceType)
+            raise NameError("Unknown source type : ", self.source_type)
 
         # Integrate table
         logger.info("Integrating photoionization rate tables...")
@@ -786,8 +760,8 @@ This is Energy:           {freq_min / c.ev2fr:.3e} to {freq_max / c.ev2fr:.3e} e
             )  # nb integration bounds are given in log10(freq/freq_HI)
         else:
             logger.warning("No heating rates")
-            self.heat_thin_table = np.zeros(self.NumTau + 1)
-            self.heat_thick_table = np.zeros(self.NumTau + 1)
+            self.heat_thin_table = np.zeros(self.num_tau + 1)
+            self.heat_thick_table = np.zeros(self.num_tau + 1)
 
         # Copy radiation table to GPU
         if self.gpu:
@@ -836,7 +810,7 @@ Simulation Box size (comoving Mpc): {self.boxsize:.3e}"""
         """Initialize sinks physics class for the mean-free path and clumping factor"""
 
         # init sink physics class for MFP and clumping
-        self.sinks = SinksPhysics(self.sinks_params, self.N, self.boxsize)
+        self.sinks = SinksPhysics(self.parameters.sinks, self.N, self.boxsize)
 
         # for clumping factor
         if self.sinks.clumping_model == "constant":
@@ -872,9 +846,9 @@ This corresponds to %.3f grid cells.
                 self.sinks.mfp_model,
                 self.R_max_LLS,
             )
-        elif self.sinks.mfp_model == "Worseck2014":
+        elif self.sinks.mfp_model == "Worseck14":
             # set mean-free-path to the initial redshift
-            self.R_max_LLS = self.sinks.mfp_Worseck2014(z=self.zred_0)  # in cMpc
+            self.R_max_LLS = self.sinks.mfp_Worseck14(z=self.zred_0)  # in cMpc
             self.R_max_LLS *= self.N / self.boxsize
             logger.info(
                 """
@@ -899,8 +873,8 @@ This corresponds to %.3f grid cells.
     def _material_init(self) -> None:
         """Initialize material properties of the grid"""
         self.ndens = np.empty(self.shape, order="F")
-        self.xh = np.full(self.shape, self.material_params.xh0, order="F")
-        self.temp = np.full(self.shape, self.material_params.temp0, order="F")
+        self.xh = np.full(self.shape, self.parameters.material.xHII, order="F")
+        self.temp = np.full(self.shape, self.parameters.material.temp0, order="F")
         self.phi_ion = np.zeros(self.shape, order="F")
 
     def _sources_init(self) -> None:
@@ -912,20 +886,7 @@ This corresponds to %.3f grid cells.
 
     def _read_paramfile(self, paramfile: PathType) -> None:
         """Read in YAML parameter file"""
-        ld = YmlParameters.load_yaml(paramfile)
-
-        self.output_params = OutputParameters.from_yml(ld)
-        self.grid_params = GridParameters.from_yml(ld)
-        self.raytracing_params = RaytracingParameters.from_yml(ld)
-        self.domain_decomposition_params = DomainDecompositionParameters.from_yml(ld)
-        self.material_params = MaterialParameters.from_yml(ld)
-        self.cgs_params = CGSParameters.from_yml(ld)
-        self.cosmology_params = CosmologyParameters.from_yml(ld)
-        self.abundance_params = AbundancesParameters.from_yml(ld)
-        self.photo_params = PhotoParameters.from_yml(ld)
-        self.sinks_params = SinksParameters.from_yml(ld)
-        self.blackbody_params = BlackBodyParameters.from_yml(ld)
-        self.sources_params = SourcesParameters.from_yml(ld)
+        self.parameters = SimulationParameters.from_file(paramfile)
 
     def _gpu_close(self) -> None:
         """Deallocate GPU memory"""

@@ -2,9 +2,14 @@ import datetime
 import glob
 import os
 import time
+from typing import NoReturn
 
 import numpy as np
 from scipy import stats
+
+
+def assert_never() -> NoReturn:
+    raise AssertionError("Expected code to be unreachable")
 
 
 def get_extension_in_folder(path):
