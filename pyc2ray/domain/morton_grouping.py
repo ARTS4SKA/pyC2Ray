@@ -11,7 +11,10 @@ from pyc2ray.domain.cost_model import CostModel
 from pyc2ray.domain.grid import Grid
 from pyc2ray.domain.source_grouping import GroupingParams, SourceGrouping
 from pyc2ray.domain.sources import Source, SourceGroup
-from pyc2ray.domain.utils import evaluate_sphere_intersection, find_enclosing_sphere
+from pyc2ray.domain.utils import (
+    evaluate_sphere_intersection,
+    find_enclosing_sphere,
+)
 
 
 @dataclass
@@ -174,17 +177,10 @@ class MortonSourceGrouping(SourceGrouping):
                 and g.mem_cost <= cost_model.max_memory_cost_per_group
             )
 
-        # TODO: optimize the loop below.
-        # For example: avoid rebuilding the same single source group at loop end when gtrial already matches current_group
-        # (last-source rejection/non-intersection path).
         source_groups: list[SourceGroup] = []
-        current_group: list[Source] = []
-        for s in ordered_sources:
-            if not current_group:
-                current_group = [s]
-                gtrial = self._build_group(current_group, grid, cost_model)
-                continue
-
+        current_group: list[Source] = [ordered_sources[0]]
+        gtrial = self._build_group(current_group, grid, cost_model)
+        for s in ordered_sources[1:]:
             # Check if the new source intersects with the current group. If not, we can start a new group.
             if not evaluate_sphere_intersection(
                 gtrial.center, gtrial.radius, s.pos, s.radius

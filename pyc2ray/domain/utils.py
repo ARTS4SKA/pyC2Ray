@@ -35,29 +35,46 @@ def find_enclosing_sphere(
     # Compute the initial guess as the mean of the centers. If all spheres have the same radius,
     # this is already the optimal solution. Otherwise, we will iteratively move towards the farthest sphere.
     c = centers.mean(axis=0)
+    tol2 = tol * tol
+    n = centers.shape[0]
+    all_radii_equal = bool(np.all(radii == radii[0]))
+    r0 = float(radii[0])
+    delta = np.empty((n, 3), dtype=float)
+    dist2 = np.empty(n, dtype=float)
+    d = np.empty(n, dtype=float)
 
     for k in range(max_iter):
         # Find the sphere that is farthest from the current center in terms of c2ray distance (center-to-center + radius).
-        d = np.linalg.norm(centers - c[None, :], axis=1) + radii
-        j = np.argmax(d)
-        direction = centers[j] - c
-        norm = np.linalg.norm(direction)
-        if norm > 0.0:
-            direction = direction / norm
+        np.subtract(centers, c[None, :], out=delta)
+        np.einsum("ij,ij->i", delta, delta, out=dist2)
+        # TODO: this check could be moved outside the loop but we need to avoid code duplication.
+        if all_radii_equal:
+            j = int(np.argmax(dist2))
         else:
-            direction = np.zeros(3)
+            np.sqrt(dist2, out=d)
+            d += radii
+            j = int(np.argmax(d))
 
         # Move the center towards the farthest sphere by a fraction of the distance.
         eta = 1.0 / (k + 2.0)
-        c_new = c + eta * direction * max(1e-12, norm)
+        step = eta * delta[j]
+        c_new = c + step
 
         # Check for convergence. If the center displacement is smaller than the tolerance, we consider it converged.
-        if np.linalg.norm(c_new - c) < tol:
+        if np.dot(step, step) < tol2:
             c = c_new
             break
         c = c_new
 
-    R = np.max(np.linalg.norm(centers - c[None, :], axis=1) + radii)
+    np.subtract(centers, c[None, :], out=delta)
+    np.einsum("ij,ij->i", delta, delta, out=dist2)
+
+    if all_radii_equal:
+        R = np.sqrt(np.max(dist2)) + r0
+    else:
+        np.sqrt(dist2, out=d)
+        d += radii
+        R = np.max(d)
     return c, float(R)
 
 
@@ -78,10 +95,9 @@ def evaluate_sphere_intersection(
     -------
     True if the two spheres intersect, False otherwise.
     """
-    d = np.linalg.norm(center_a - center_b)
     # TODO: Geometrically, tangency is typically considered intersection/touching.
     # In the grouping logic this can spuriously split groups for boundary cases.
-    return bool(d < radius_a + radius_b)
+    return bool(((center_a - center_b) ** 2).sum() < (radius_a + radius_b) ** 2)
 
 
 logger = logging.getLogger(__name__)
