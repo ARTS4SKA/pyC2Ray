@@ -1,11 +1,11 @@
 #pragma once
 
 #include "rates.cuh"
+#include "shortchar.cuh"
 
 #include <cuda/std/array>
 
 namespace asora {
-
     /* @brief Raytrace all sources and compute photoionization rates
      *
      * Performs GPU-accelerated raytracing for all radiation sources to calculate
@@ -41,34 +41,13 @@ namespace asora {
 
         /// Photoionization cross section
         double cross_section;
-
-        /// Shared memory banks for column density interpolation
-        cuda::std::array<const double *__restrict__, 3> shared_cdens = {};
-
-        /* @brief Prepare shared column density memory banks for cell interpolation
-         *
-         * Partitions the column density data into shared memory banks compatible with
-         * the asora::cell_interpolator class. The pointers are stored in the
-         * `shared_cdens` member.
-         *
-         * @param q Current q-index
-         * @see cell_interpolator::interpolate() for how these pointers are used in
-         *      interpolation
-         */
-        __device__ void partition_column_density(int q);
     };
 
     /* @brief Read-only maps of number and fractional densities
      */
     struct density_maps {
-        /// Number density data
-        const double *__restrict__ ndens;
-
         /// Ionized hydrogen fraction data
-        const double *__restrict__ xHII;
-
-        /// Get hydrogen density value at the specified index
-        __device__ double get(size_t index) const;
+        const double *__restrict__ nHI;
     };
 
     /* @brief GPU kernel for raytracing and photoionization evolution
@@ -91,9 +70,10 @@ namespace asora {
      * @param logtau Logarithmically-spaced optical depth grid
      */
     __global__ void evolve0D_gpu(
-        size_t m1, double dr, double R_max, int q_max, size_t ns_start, size_t num_src,
-        int *src_pos, double *src_flux, element_data data_HI, density_maps densities,
-        photo_tables ion_tables, linspace<double> logtau
+        shortchar_lut lut, size_t m1, double dr, double R_max, int q_max,
+        size_t ns_start, size_t num_src, const int *__restrict__ src_pos,
+        const double *__restrict__ src_flux, element_data data_HI,
+        density_maps densities, photo_tables ion_tables, linspace<double> logtau
     );
 
 }  // namespace asora

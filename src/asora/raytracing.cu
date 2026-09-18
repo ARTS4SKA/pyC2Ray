@@ -1,27 +1,21 @@
 #include "raytracing.cuh"
 
 #include "memory.h"
+#include "octahedron.cuh"
+#include "shortchar.cuh"
 #include "utils.cuh"
 
 #include <cuda_runtime.h>
-
+#include <thrust/execution_policy.h>
+#include <thrust/transform.h>
+#include <cuda/std/array>
 #include <exception>
 
 namespace asora {
 
-    __device__ void element_data::partition_column_density(int q) {
-        /// Partition the column density array into 3 shared memory banks for easier
-        /// interpolation
-        shared_cdens = {
-            column_density + cells_to_shell(q - 2),
-            column_density + cells_to_shell(q - 3),
-            column_density + cells_to_shell(q - 4)
-        };
-    }
-
-    __device__ double density_maps::get(size_t index) const {
-        return ndens[index] * (1.0 - xHII[index]);
-    }
+    struct neutral_density {
+        __device__ double operator()(double n, double x) const { return n * (1.0 - x); }
+    };
 
 }  // namespace asora
 
@@ -38,8 +32,8 @@ namespace {
     // density and the pre-computed photoionization tables.
     __device__ void update_photo_rates(
         element_data &data_HI, size_t cd_index, size_t ph_index, double coldens_in,
-        double nHI, double path, double strength, double vol,
-        const photo_tables &ion_tables, const linspace<double> &logtau
+        double nHI, double path, double scale, const photo_tables &ion_tables,
+        const linspace<double> &logtau
     ) {
         // Compute outgoing column density and add to array for subsequent
         // interpolations
@@ -56,58 +50,54 @@ namespace {
 #endif
         // Rescale the photo-ionization rate by the flux strength normalized per volume
         // and per neutral density (part of the photon-conserving rate prescription) and
-        // add it to the global array
-        atomicAdd(data_HI.photo_ionization + ph_index, phion * strength / vol / nHI);
+        // add it to the global array. Dividing by the product uses one FP64 division
+        // instead of two; vol is a cell volume, so the product cannot underflow.
+        atomicAdd(data_HI.photo_ionization + ph_index, phion * scale / nHI);
     }
 
     // Raytracing operation on a given cell, identified by (q, s). This is performed by
     // a single thread. Threads may call this function multiple times if required to
     // cover the full q-shell.
     __device__ void raytrace(
-        int q, int s, int i0, int j0, int k0, double strength, element_data &data_HI,
-        double dr, double R_max, const density_maps &densities, size_t m1,
-        const photo_tables &ion_tables, const linspace<double> &logtau
+        const shortchar_info &info, size_t cd_index, const int3 &pos, double scale,
+        element_data &data_HI, double dr, double R_max, const density_maps &densities,
+        size_t m1, const photo_tables &ion_tables, const linspace<double> &logtau,
+        const int2 &limit
     ) {
-        auto &&[di, dj, dk] = linthrd2cart(q, s);
+        const auto &[di, dj, dk] = info.pos;
 
-        // Since the grid is periodic, we limit the maximum size of the raytraced
-        // region to a cube as large as the mesh around the source. See line 93 of
-        // evolve_source in C2Ray, this size will depend on if the mesh is even or
-        // odd. Basically the idea is that you never touch a cell which is outside a
-        // cube of length ~N centered on the source.
-        // Only do cell if it is within the grid, shifted under periodicity
-        // which means most ~N cells away from the source.
-        int ll = -m1 / 2;
-        int lr = m1 % 2 - 1 - ll;
-        if ((di < ll) || (di > lr) || (dj < ll) || (dj > lr) || (dk < ll) || (dk > lr))
+        if ((di < limit.x) || (di > limit.y) || (dj < limit.x) || (dj > limit.y) ||
+            (dk < limit.x) || (dk > limit.y))
             return;
 
 #if !defined(PERIODIC)
         // When not in periodic mode, only treat cell if its in the grid
-        if (!in_box(i0 + di, j0 + dj, k0 + dk, m1)) return;
+        if (!in_box(pos.x + di, pos.y + dj, pos.z + dk, m1)) return;
 #endif
         // Using integers for threshold check as it is more consistent.
         auto dist2 = di * di + dj * dj + dk * dk;
         if (dist2 > static_cast<int>(R_max * R_max)) return;
 
-        cell_interpolator interp{di, dj, dk};
-        auto coldens_in =
-            interp.interpolate(data_HI.shared_cdens, data_HI.cross_section);
+        auto coldens_in = shortchar_interpolation(
+            info, data_HI.column_density, data_HI.cross_section
+        );
 
         constexpr double max_coldens = 2e30;
         if (coldens_in > max_coldens) return;
 
-        auto path = path_in_cell(di, dj, dk) * dr;
-        auto vol_ph = 4 * c::pi<> * dist2 * path * dr * dr;
+        auto path = dr * info.path;
+
+        // vol_ph = 4*pi * dist2 * path * dr^2, with path = dr * info.path. The
+        // 4*pi*dr^3 factor does not depend on the cell and is hoisted to the caller.
+        auto vol_ph = dist2 * info.path;
 
         // Get local ionization fraction & neutral hydrogen density in the cell
-        const auto index = ravel_index(i0 + di, j0 + dj, k0 + dk, m1);
-        const auto q_off = cells_to_shell(q - 1);
-        auto nHI = densities.get(index);
+        const auto ph_index = ravel_index(pos.x + di, pos.y + dj, pos.z + dk, m1);
+        const auto &nHI = densities.nHI[ph_index];
 
         // Compute photoionization rates from column density.
         update_photo_rates(
-            data_HI, q_off + s, index, coldens_in, nHI, path, strength, vol_ph,
+            data_HI, cd_index, ph_index, coldens_in, nHI, path, scale / vol_ph,
             ion_tables, logtau
         );
     }
@@ -123,23 +113,28 @@ namespace asora {
     ) {
         device::check_initialized();
 
+        // Number density array is not modified, it is assumed that it is already on the
+        // device.
+        if (!device::contains(buffer_tag::number_density))
+            throw std::runtime_error(
+                "Number density array must be allocated on the device before calling "
+                "do_all_sources_gpu"
+            );
         // Size of grid data
         auto n_cells = m1 * m1 * m1;
 
         // Allocate (if necessary) and copy the ionized fraction array to the device
         device::ensure_transfer<double>(buffer_tag::fraction_HII, xh_av, n_cells);
 
-        // Number density array is not modified, it is assumed that it is already on the
-        // device
-        if (!device::contains(buffer_tag::number_density))
-            throw std::runtime_error(
-                "Number density array must be allocated on the device before calling "
-                "do_all_sources_gpu"
-            );
-        density_maps densities{
-            get_data_view<double>(buffer_tag::number_density),
-            get_data_view<double>(buffer_tag::fraction_HII)
-        };
+        // Transform fraction in place to get number density.
+        auto ndens_d = get_data_view<double>(buffer_tag::number_density);
+        auto xHII_d = get_data_view<double>(buffer_tag::fraction_HII);
+        thrust::transform(
+            thrust::device, ndens_d, ndens_d + n_cells, xHII_d, xHII_d,
+            neutral_density{}
+        );
+
+        density_maps densities{xHII_d};
 
         // Allocate (if necessary) and zero the output array for the photoionization
         // rate
@@ -167,8 +162,6 @@ namespace asora {
         auto src_flux_d = get_data_view<double>(buffer_tag::source_flux);
         auto src_pos_d = get_data_view<int>(buffer_tag::source_position);
 
-        // Create helper data structures: data_HI, ion_tables, logtau
-
         element_data data_HI{
             phi_d, get_data_view<double>(buffer_tag::column_density_HI), sigma
         };
@@ -180,17 +173,26 @@ namespace asora {
 
         linspace<double> logtau{minlogtau, dlogtau, static_cast<size_t>(num_tau)};
 
+        // Collect the LUT for raytracing kernel.
+        try {
+            create_shortchar_interp_lut(q_max);
+        } catch (const std::exception &e) {
+            // If the LUT cannot be created, lut_d below will be empty.
+            std::cerr << "Error creating raytracing lookup table: " << e.what()
+                      << "; calculating cinterp on the fly\n";
+        }
+        shortchar_lut lut_d{};
+
         // Loop over batches of sources
         for (size_t ns = 0; ns < num_src; ns += grid_size) {
             // Raytrace the current batch of sources in parallel
             // Consecutive kernel launches are in the same stream and so are serialized
             evolve0D_gpu<<<grid_size, block_size>>>(
-                m1, dr, R, q_max, ns, num_src, src_pos_d, src_flux_d, data_HI,
+                lut_d, m1, dr, R, q_max, ns, num_src, src_pos_d, src_flux_d, data_HI,
                 densities, ion_tables, logtau
             );
-
-            safe_cuda(cudaPeekAtLastError());
         }
+        safe_cuda(cudaGetLastError());
 
         // Copy the accumulated ionization fraction back to the host.
         // Memcpy blocks until last kernel has finished.
@@ -202,8 +204,9 @@ namespace asora {
     // to the current cell and finds the photoionization rate
     // ========================================================================
     __global__ void evolve0D_gpu(
-        size_t m1, double dr, double R_max, int q_max, size_t ns_start, size_t num_src,
-        int *src_pos, double *__restrict__ src_flux, element_data data_HI,
+        shortchar_lut lut, size_t m1, double dr, double R_max, int q_max,
+        size_t ns_start, size_t num_src, const int *__restrict__ src_pos,
+        const double *__restrict__ src_flux, element_data data_HI,
         density_maps densities, photo_tables ion_tables, linspace<double> logtau
     ) {
         /* The raytracing kernel proceeds as follows:
@@ -224,7 +227,7 @@ namespace asora {
         const auto i0 = src_pos[3 * ns + 0];
         const auto j0 = src_pos[3 * ns + 1];
         const auto k0 = src_pos[3 * ns + 2];
-        const auto strength = src_flux[ns];
+        auto scale = src_flux[ns] / (dr * dr * dr);
 
         // Offset pointer to the outgoing column density array used for
         // interpolation (each block works on its own array).
@@ -236,29 +239,34 @@ namespace asora {
         // some simplifications.
         if (threadIdx.x == 0) {
             const auto index = ravel_index(i0, j0, k0, m1);
-            auto nHI = densities.get(index);
+            const auto &nHI = densities.nHI[index];
             update_photo_rates(
-                data_HI, 0, index, 0.0, nHI, 0.5 * dr, strength, dr * dr * dr,
-                ion_tables, logtau
+                data_HI, 0, index, 0.0, nHI, 0.5 * dr, scale, ion_tables, logtau
             );
         }
         __syncthreads();
 
-        // Loop over q-shells and each thread peforms raytracing on one or more
-        // cells. "s" is the index in the range [0, ..., 4q^2 + 2) that gets mapped to
-        // the cells in the shell. (q, s) indices are mapped to (i, j, k) indices via
-        // asora::linthrd2cart.
-        for (int q = 1; q <= q_max; ++q) {
-            // Prepare shared memory for column density interpolation for this shell.
-            data_HI.partition_column_density(q);
+        int ll = -m1 / 2;
+        int lr = m1 % 2 - 1 - ll;
 
+        // Cell-independent part of the photon volume 4*pi * dist2 * path * dr^2.
+        scale /= 4 * c::pi<>;
+
+        const auto use_lut = lut.is_set();
+
+        for (int q = 1; q <= q_max; ++q) {
             // Each thread can process multiple cells.
-            int s = threadIdx.x;
-            while (static_cast<size_t>(s) < cells_in_shell(q)) {
+            size_t s = threadIdx.x;
+            while (s < cells_in_shell(q)) {
+                auto cd_index = cells_to_shell(q - 1) + s;
+                auto info = use_lut
+                                ? lut[cd_index]
+                                : make_shortchar_interpolation_info(shell2cart(q, s));
                 raytrace(
-                    q, s, i0, j0, k0, strength, data_HI, dr, R_max, densities, m1,
-                    ion_tables, logtau
+                    info, cd_index, {i0, j0, k0}, scale, data_HI, dr, R_max, densities,
+                    m1, ion_tables, logtau, {ll, lr}
                 );
+
                 s += blockDim.x;
             }
             __syncthreads();

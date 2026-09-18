@@ -1,93 +1,151 @@
-from pathlib import Path
+import itertools
+import math
 
 import numpy as np
 import pytest
-from numpy.typing import NDArray
 
-from pyc2ray.lib import libasoratest
 from pyc2ray.load_extensions import libasora
 
+Q_MAX = 100
 
-@pytest.mark.skipif(libasora is None, reason="libasora.so missing, skipping tests")
-class TestLibasoraTest:
-    def test_path_in_cell(self) -> None:
-        def create_path_in_cell_data(N: int) -> NDArray:
-            """Return the length of the ray intersecting cell at pos emitted from pos0"""
-            N2 = N // 2
-            di, dj, dk = np.mgrid[-N2 : N2 + 1, -N2 : N2 + 1, -N2 : N2 + 1]
+if libasora is None:
+    pytest.skip("libasora.so missing, skipping tests", allow_module_level=True)
 
-            di2 = di * di
-            dj2 = dj * dj
-            dk2 = dk * dk
-            delta_max = np.maximum(di2, np.maximum(dj2, dk2))
 
-            paths = np.sqrt((di2 + dj2 + dk2) / delta_max)
-            paths[N2, N2, N2] = 0.5
-            return paths
+def geometric_factors(di: int, dj: int, dk: int) -> tuple[float, float, float]:
+    if di == 0 and dj == 0 and dk == 0:
+        return 0.0, 0.0, 0.5
 
-        N = 11
-        path = libasoratest.path_in_cell((N, N, N))
-        expected = create_path_in_cell_data(N)
+    ai = abs(di)
+    aj = abs(dj)
+    ak = abs(dk)
 
-        assert np.allclose(path, expected)
+    if ak >= ai and ak >= aj:
+        pass
+    elif aj >= ai and aj >= ak:
+        dj, dk = dk, dj
+    else:  # ai >= aj and ai >= ak
+        di, dk = dk, di
+        di, dj = dj, di
 
-    def test_geometric_factors(self) -> None:
-        def create_geometric_factors_data(N: int) -> NDArray:
-            """Return the geometric interpolation factors (weights) for the 4 adjacent cells"""
-            N2 = N // 2
-            grid = np.mgrid[-N2 : N2 + 1, -N2 : N2 + 1, -N2 : N2 + 1]
-            indices = np.abs(grid).argsort(axis=0)
-            di, dj, dk = np.take_along_axis(grid, indices, axis=0)
+    xi = di / abs(dk)
+    xj = dj / abs(dk)
 
-            dx = np.abs(np.copysign(1, di) - di / np.abs(dk))
-            dy = np.abs(np.copysign(1, dj) - dj / np.abs(dk))
+    dx = 1 - abs(xi)
+    dy = 1 - abs(xj)
+    path = math.sqrt(1 + xi**2 + xj**2)
+    return dx, dy, path
 
-            w1 = (1 - dx) * (1 - dy)
-            w2 = (1 - dy) * dx
-            w3 = (1 - dx) * dy
-            w4 = dx * dy
 
-            facts = np.stack((w1, w2, w3, w4), axis=-1)
-            facts[dk == 0] = 0.0
-            return facts
+class TestShortCharacteristicsInterpolation:
+    @pytest.mark.parametrize("dk", range(1, 11))
+    def test_compute_shortchar_factors(self, dk: int) -> None:
+        assert libasora is not None
+        ak = abs(dk)
+        for di, dj in itertools.product(range(-ak, ak + 1), repeat=2):
+            dx, dy, path = libasora.compute_shortchar_factors(di, dj, dk)
+            exp_dx, exp_dy, exp_path = geometric_factors(di, dj, dk)
+            assert dx == pytest.approx(exp_dx)
+            assert dy == pytest.approx(exp_dy)
+            assert path == pytest.approx(exp_path)
 
-        N = 11
-        facts = libasoratest.geometric_factors((N, N, N))
-        expected = create_geometric_factors_data(N)
+    def test_pack_offsets_out_of_bounds(self) -> None:
+        assert libasora is not None
+        with pytest.raises(RuntimeError):
+            libasora.pack_offset(512, 1, -1)
+        with pytest.raises(RuntimeError):
+            libasora.pack_offset(0, 513, 0)
+        with pytest.raises(RuntimeError):
+            libasora.pack_offset(0, 0, -513)
 
-        assert np.allclose(facts, expected)
+    def test_pack_unpack_offsets(self) -> None:
+        assert libasora is not None
+        for pos in itertools.product(range(-Q_MAX, Q_MAX + 1), repeat=3):
+            packed = libasora.pack_offset(*pos)
+            unpacked = libasora.unpack_offset(packed)
+            assert pos == unpacked
 
-    def test_cell_interpolator(self, data_dir: Path) -> None:
-        rng = np.random.default_rng(seed=42)
-        N = 11
-        dens = rng.random((N, N, N), dtype=np.float64)
+    @pytest.mark.parametrize(
+        "pos",
+        [
+            (-512, -512, -512),
+            (511, 511, 511),
+            (512, 0, 0),
+            (0, 512, 0),
+            (0, 0, 512),
+        ],
+    )
+    def test_pack_unpack_offsets_edge_cases(self, pos: tuple[int, int, int]) -> None:
+        assert libasora is not None
+        packed = libasora.pack_offset(*pos)
+        unpacked = libasora.unpack_offset(packed)
+        assert pos == unpacked
 
-        cdens = libasoratest.cell_interpolator(dens)
-        expected_output = np.load(data_dir / "cell_interpolator_output.npy")
+    def test_shortchar_lut(self, init_device) -> None:
+        q_max = 50
+        assert libasora is not None
+        lut = libasora.get_shortchar_lut(q_max)
 
-        assert np.allclose(cdens, expected_output)
+        assert len(lut) == libasora.cells_to_shell(q_max)
 
-    Q_MAX = 100
+        for item in lut:
+            # Check that the path and geometric factors match.
+            dx, dy, path = geometric_factors(item.di, item.dj, item.dk)
+            assert item.dx == pytest.approx(dx)
+            assert item.dy == pytest.approx(dy)
+            assert item.path == pytest.approx(path)
 
+            weights = [(1 - dx) * (1 - dy), (1 - dy) * dx, (1 - dx) * dy, dx * dy]
+
+            # Check that the interpolation indices are correct.
+            for ws, index in zip(weights, item.indices):
+                if ws > 0:
+                    other_item = lut[index]
+                    assert abs(item.di - other_item.di) <= 1
+                    assert abs(item.dj - other_item.dj) <= 1
+                    assert abs(item.dk - other_item.dk) <= 1
+
+        # Entries are sorted in lexicographic order of (di, dj, dk)
+        # in each q-shell.
+        start = 0
+        for q in range(q_max + 1):
+            ncells = libasora.cells_in_shell(q)
+            s = slice(start, start + ncells)
+            ijk = np.array(
+                [(item.di, item.dj, item.dk) for item in lut[s]], dtype=np.int32
+            )
+
+            # Assert lexicographic order.
+            indices = np.lexsort(ijk.T[::-1])
+            assert (ijk == ijk[indices]).all()
+
+            start += ncells
+
+
+class TestOctahedron:
     def test_cells_in_shell(self) -> None:
-        assert libasoratest.cells_in_shell(0) == 1
-        for q in range(1, self.Q_MAX):
-            assert libasoratest.cells_in_shell(q) == 4 * q**2 + 2
+        assert libasora is not None
+        assert libasora.cells_in_shell(0) == 1
+        for q in range(1, Q_MAX):
+            assert libasora.cells_in_shell(q) == 4 * q**2 + 2
 
     def test_cells_to_shell(self) -> None:
         q_tot = 1
-        assert libasoratest.cells_to_shell(0) == q_tot
-        for q in range(1, self.Q_MAX):
+        assert libasora is not None
+        assert libasora.cells_to_shell(0) == q_tot
+        for q in range(1, Q_MAX):
             q_tot += 4 * q**2 + 2
-            assert libasoratest.cells_to_shell(q) == q_tot
+            assert libasora.cells_to_shell(q) == q_tot
 
     @pytest.mark.parametrize("q", range(Q_MAX))
     def test_shell_mapping(self, q: int) -> None:
+        assert libasora is not None
+
         cells: set[tuple[int, int, int]] = set()
         q_max = 4 * q**2 + 2 if q > 0 else 1
         for s in range(q_max):
             # Check value makes sense
-            ijk = libasoratest.linthrd2cart(q, s)
+            ijk = libasora.shell2cart(q, s)
             assert q == sum(abs(x) for x in ijk)
 
             # Check it's unique
@@ -95,11 +153,10 @@ class TestLibasoraTest:
             cells.add(ijk)
 
             # Check inverse function
-            assert (q, s) == libasoratest.cart2linthrd(*ijk)
+            assert (q, s) == libasora.cart2shell(*ijk)
 
 
-@pytest.mark.skipif(libasora is None, reason="libasora.so missing, skipping tests")
-class TestLibasora:
+class TestModuleInterface:
     def test_device_init(self, init_device):
         libasora.is_device_init()
 
