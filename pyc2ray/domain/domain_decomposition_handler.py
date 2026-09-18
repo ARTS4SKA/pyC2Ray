@@ -183,7 +183,10 @@ class DomainDecompositionHandler:
         # Create grouping parameters
         # TODO: remove the if and create a factory function in the domain module
         grouping_params: GroupingParams | None = None
-        if domain_decomposition_params.grouping_algorithm == "morton":
+        if domain_decomposition_params.grouping_algorithm in (
+            "morton",
+            "morton_incremental",
+        ):
             grouping_params = MortonGroupingParams(
                 max_num_sources_per_group=domain_decomposition_params.max_num_sources_per_group,
                 morton_bits=domain_decomposition_params.morton_bits,
@@ -204,7 +207,7 @@ class DomainDecompositionHandler:
         global_grid: Grid,
         sources: list[Source],
         cost_model: CostModel,
-        grouping_algorithm: str = "morton",
+        grouping_algorithm: str = "morton_incremental",
         grouping_params: GroupingParams | None = None,
     ) -> list[SourceGroup]:
         """Build the groups of sources to be assigned to the ranks.
@@ -226,6 +229,11 @@ class DomainDecompositionHandler:
 
         if grouping_algorithm == "morton":
             return MortonSourceGrouping().build_groups(
+                sources, global_grid, grouping_params, cost_model
+            )
+
+        if grouping_algorithm == "morton_incremental":
+            return MortonSourceGrouping().build_groups_incremental(
                 sources, global_grid, grouping_params, cost_model
             )
 
@@ -265,7 +273,7 @@ class DomainDecompositionHandler:
         global_grid: Grid,
         sources: list[Source],
         cost_model: CostModel,
-        grouping_algorithm: str = "morton",
+        grouping_algorithm: str = "morton_incremental",
         grouping_params: GroupingParams | None = None,
     ) -> None:
         """Run the domain decomposition: build the source groups, assign them to the
