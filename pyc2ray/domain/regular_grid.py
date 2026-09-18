@@ -5,6 +5,8 @@ of the Grid interface for regular cubic grids.
 
 from __future__ import annotations
 
+from math import ceil, floor
+
 import numpy as np
 
 from pyc2ray.domain.grid import Grid
@@ -205,6 +207,7 @@ class RegularGrid(Grid):
                 'Invalid box: max corners must be "greater" than min corner.'
             )
 
+    # TODO: check code duplication with find_num_cells_in_box, maybe merge the two methods
     def _box_index_bounds(
         self, box_min: np.ndarray, box_max: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -214,6 +217,7 @@ class RegularGrid(Grid):
         max_indexes = np.ceil(box_max / self.cell_size).astype(np.int64) - 1
         return min_indexes, max_indexes
 
+    # TODO: not used anymore and not testes, remove
     def _clip_index_bounds_to_grid(
         self, min_indexes: np.ndarray, max_indexes: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -234,13 +238,26 @@ class RegularGrid(Grid):
         -------
         Intersection volume between the two boxes.
         """
-        self._validate_box(box_min, box_max)
-        overlap_min = np.maximum(self.offset * self.cell_size, box_min)
-        overlap_max = np.minimum(
-            self.offset * self.cell_size + self.num_cells * self.cell_size, box_max
-        )
-        d = np.maximum(0.0, overlap_max - overlap_min)
-        return np.prod(d)
+        if (
+            box_max[0] <= box_min[0]
+            or box_max[1] <= box_min[1]
+            or box_max[2] <= box_min[2]
+        ):
+            raise ValueError(
+                'Invalid box: max corners must be "greater" than min corner.'
+            )
+
+        domain_min_x = float(self.offset[0] * self.cell_size)
+        domain_min_y = float(self.offset[1] * self.cell_size)
+        domain_min_z = float(self.offset[2] * self.cell_size)
+        domain_max_x = domain_min_x + self.num_cells * self.cell_size
+        domain_max_y = domain_min_y + self.num_cells * self.cell_size
+        domain_max_z = domain_min_z + self.num_cells * self.cell_size
+
+        dx = max(0.0, min(domain_max_x, box_max[0]) - max(domain_min_x, box_min[0]))
+        dy = max(0.0, min(domain_max_y, box_max[1]) - max(domain_min_y, box_min[1]))
+        dz = max(0.0, min(domain_max_z, box_max[2]) - max(domain_min_z, box_min[2]))
+        return float(dx * dy * dz)
 
     # TODO: the SourceGroup should not be needed here, the bounding box is enough. More in general, since
     # the region of influence of a source group could be defined in more complex ways than just a box,
@@ -307,24 +324,45 @@ class RegularGrid(Grid):
         -------
         The number of cells in the box defined by the minimum and maximum corners.
         """
-        min_indexes, max_indexes = self._box_index_bounds(box_min, box_max)
-        vol = self._overlap_volume(box_min, box_max)
-        if vol > 0.0:
-            if self.is_periodic_mode_active:
-                # This calculation already accounts for the fact that the box may be partially outside the grid domain.
-                # A box spanning more than the whole grid on an axis wraps onto itself, so it still touches
-                # at most num_cells distinct cells on that axis: capping here keeps this count consistent
-                # with the local grid returned by get_local_grid.
-                side_lengths = np.minimum(max_indexes - min_indexes + 1, self.num_cells)
-                return int(np.prod(side_lengths))
+        # Scalar implementation of the same logic as _box_index_bounds /
+        # _clip_index_bounds_to_grid, kept inline because this method is called once per
+        # trial group during grouping. Checking the overlap first also lets a box outside
+        # the domain return without computing any index bound. Python ints are used
+        # throughout: the equivalent int(np.prod(...)) silently overflows int64 for very
+        # large spans, while these counts stay exact.
+        if self._overlap_volume(box_min, box_max) <= 0.0:
+            return 0
 
-            # In non-periodic mode, if the box extends outside the domain, we consider only the part inside the domain for the cell count
-            min_indexes_clipped, max_indexes_clipped = self._clip_index_bounds_to_grid(
-                min_indexes, max_indexes
+        cell_size = self.cell_size
+        min_x = floor(float(box_min[0]) / cell_size)
+        min_y = floor(float(box_min[1]) / cell_size)
+        min_z = floor(float(box_min[2]) / cell_size)
+        max_x = ceil(float(box_max[0]) / cell_size) - 1
+        max_y = ceil(float(box_max[1]) / cell_size) - 1
+        max_z = ceil(float(box_max[2]) / cell_size) - 1
+
+        if self.is_periodic_mode_active:
+            # This calculation already accounts for the fact that the box may be partially outside the grid domain.
+            # A box spanning more than the whole grid on an axis wraps onto itself, so it still touches
+            # at most num_cells distinct cells on that axis: capping here keeps this count consistent
+            # with the local grid returned by get_local_grid.
+            return (
+                min(max_x - min_x + 1, self.num_cells)
+                * min(max_y - min_y + 1, self.num_cells)
+                * min(max_z - min_z + 1, self.num_cells)
             )
-            return int(np.prod(max_indexes_clipped - min_indexes_clipped + 1))
 
-        return 0
+        # In non-periodic mode, if the box extends outside the domain, we consider only the part inside the domain for the cell count
+        offset_x = int(self.offset[0])
+        offset_y = int(self.offset[1])
+        offset_z = int(self.offset[2])
+        min_x = max(min_x, offset_x)
+        min_y = max(min_y, offset_y)
+        min_z = max(min_z, offset_z)
+        max_x = min(max_x, offset_x + self.num_cells - 1)
+        max_y = min(max_y, offset_y + self.num_cells - 1)
+        max_z = min(max_z, offset_z + self.num_cells - 1)
+        return (max_x - min_x + 1) * (max_y - min_y + 1) * (max_z - min_z + 1)
 
     def global_to_local_index_map(self, global_index: np.ndarray) -> np.ndarray:
         """Map a global grid index to the corresponding local grid index.

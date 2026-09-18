@@ -364,3 +364,43 @@ def test_regular_grid_overlap_volume_invalid_box_raises() -> None:
 
     with pytest.raises(ValueError):
         grid._overlap_volume(np.array([1.0, 1.0, 1.0]), np.array([1.0, 2.0, 2.0]))
+
+
+def test_regular_grid_overlap_volume_is_zero_outside_the_domain() -> None:
+    grid = RegularGrid(cell_size=1.0, num_cells=4)
+
+    # Disjoint on every axis, and disjoint on one axis only.
+    assert grid._overlap_volume(
+        np.array([5.0, 5.0, 5.0]), np.array([6.0, 6.0, 6.0])
+    ) == pytest.approx(0.0)
+    assert grid._overlap_volume(
+        np.array([5.0, 1.0, 1.0]), np.array([6.0, 2.0, 2.0])
+    ) == pytest.approx(0.0)
+    assert grid._overlap_volume(
+        np.array([1.0, 5.0, 1.0]), np.array([2.0, 6.0, 2.0])
+    ) == pytest.approx(0.0)
+    assert grid._overlap_volume(
+        np.array([1.0, 1.0, 5.0]), np.array([2.0, 2.0, 6.0])
+    ) == pytest.approx(0.0)
+
+    # Touching the far face contributes no volume either.
+    assert grid._overlap_volume(
+        np.array([4.0, 0.0, 0.0]), np.array([5.0, 1.0, 1.0])
+    ) == pytest.approx(0.0)
+
+
+def test_regular_grid_find_num_cells_in_box_is_zero_outside_the_domain() -> None:
+    """A box with no overlap should return 0 cells"""
+
+    grid = RegularGrid(cell_size=1.0, num_cells=4)
+
+    assert (
+        grid.find_num_cells_in_box(np.array([5.0, 5.0, 5.0]), np.array([6.0, 6.0, 6.0]))
+        == 0
+    )
+    assert (
+        grid.find_num_cells_in_box(
+            np.array([-3.0, 0.2, 0.2]), np.array([-1.0, 1.2, 1.2])
+        )
+        == 0
+    )
