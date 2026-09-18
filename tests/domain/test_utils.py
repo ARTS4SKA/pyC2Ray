@@ -7,6 +7,7 @@ import pytest
 
 from pyc2ray.domain.utils import (
     evaluate_sphere_intersection,
+    expand_enclosing_sphere,
     find_enclosing_sphere,
 )
 
@@ -151,3 +152,113 @@ def test_evaluate_sphere_intersection_handles_zero_radii_and_integer_centers() -
     center_b = center_a + np.array([2, 3, 6])
     assert evaluate_sphere_intersection(center_a, 3.0, center_b, 4.1)
     assert not evaluate_sphere_intersection(center_a, 3.0, center_b, 3.9)
+
+
+def assert_encloses(
+    center: tuple[float, float, float],
+    radius: float,
+    sphere_center: tuple[float, float, float],
+    sphere_radius: float,
+) -> None:
+    """Assert the sphere (center, radius) fully contains the second sphere."""
+    reach = float(np.linalg.norm(np.asarray(center) - np.asarray(sphere_center)))
+    assert reach + sphere_radius <= radius + 1e-10
+
+
+def test_expand_enclosing_sphere_keeps_the_larger_radius_when_concentric() -> None:
+    cx, cy, cz, radius = expand_enclosing_sphere(1.0, 2.0, 3.0, 0.5, 1.0, 2.0, 3.0, 2.0)
+
+    assert (cx, cy, cz) == (1.0, 2.0, 3.0)
+    assert radius == pytest.approx(2.0)
+
+
+def test_expand_enclosing_sphere_is_a_no_op_when_the_second_is_contained() -> None:
+    cx, cy, cz, radius = expand_enclosing_sphere(
+        0.0, 0.0, 0.0, 10.0, 1.0, 0.0, 0.0, 2.0
+    )
+
+    assert (cx, cy, cz) == (0.0, 0.0, 0.0)
+    assert radius == pytest.approx(10.0)
+
+
+def test_expand_enclosing_sphere_adopts_the_second_when_it_contains_the_first() -> None:
+    cx, cy, cz, radius = expand_enclosing_sphere(
+        1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 10.0
+    )
+
+    assert (cx, cy, cz) == (0.0, 0.0, 0.0)
+    assert radius == pytest.approx(10.0)
+
+
+def test_expand_enclosing_sphere_spans_both_spheres_when_they_only_overlap() -> None:
+    # Two unit spheres 4.0 apart along x: the result has to span from -1.0 to 5.0.
+    cx, cy, cz, radius = expand_enclosing_sphere(0.0, 0.0, 0.0, 1.0, 4.0, 0.0, 0.0, 1.0)
+
+    assert (cx, cy, cz) == pytest.approx((2.0, 0.0, 0.0))
+    assert radius == pytest.approx(3.0)
+
+    # The same, fully three-dimensional: the (2, 3, 6) offset is exactly 7.0 long, so
+    # the result spans 1 + 7 + 2 = 10 and its center sits 4/7 of the way along.
+    cx, cy, cz, radius = expand_enclosing_sphere(0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 6.0, 2.0)
+
+    assert radius == pytest.approx(5.0)
+    assert (cx, cy, cz) == pytest.approx((8 / 7, 12 / 7, 24 / 7))
+
+
+def test_expand_enclosing_sphere_encloses_both_inputs() -> None:
+    """Every branch of the merge must cover both input spheres."""
+    cases = [
+        ((0.0, 0.0, 0.0, 1.0), (4.0, 0.0, 0.0, 1.0)),  # disjoint
+        ((0.0, 0.0, 0.0, 1.0), (2.0, 3.0, 6.0, 2.0)),  # disjoint, all three axes
+        ((1.0, 2.0, 3.0, 0.5), (1.0, 2.0, 3.0, 2.0)),  # concentric
+        ((0.0, 0.0, 0.0, 10.0), (1.0, 0.0, 0.0, 2.0)),  # second contained
+        ((1.0, 0.0, 0.0, 2.0), (0.0, 0.0, 0.0, 10.0)),  # first contained
+        ((-3.0, 1.5, 0.25, 0.75), (2.5, -4.0, 3.0, 1.25)),  # overlapping, off-axis
+        ((0.0, 0.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.0)),  # degenerate points
+    ]
+
+    for first, second in cases:
+        cx, cy, cz, radius = expand_enclosing_sphere(*first, *second)
+
+        assert_encloses((cx, cy, cz), radius, first[:3], first[3])
+        assert_encloses((cx, cy, cz), radius, second[:3], second[3])
+
+
+def test_expand_enclosing_sphere_is_an_upper_bound_on_the_accurate_fit() -> None:
+    """Merging one sphere at a time may overshoot, but must never undershoot.
+
+    The incremental sphere is an upper bound on the best fitting one, so the result of
+    merging is always a valid upper bound. This is why the function is used for preliminary cost
+    evaluation, and why a group that is kept is re-fitted with :func:`find_enclosing_sphere` once closed.
+    """
+    centers = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [2.0, 3.0, 6.0],
+            [-1.5, 0.5, 2.0],
+            [4.0, -2.0, 1.0],
+            [0.25, 5.0, -3.0],
+            [-4.0, -4.0, -4.0],
+        ]
+    )
+    radii = np.full(len(centers), 0.3)
+
+    cx, cy, cz = (float(centers[0][0]), float(centers[0][1]), float(centers[0][2]))
+    radius = float(radii[0])
+    for center, sphere_radius in zip(centers[1:], radii[1:]):
+        cx, cy, cz, radius = expand_enclosing_sphere(
+            cx,
+            cy,
+            cz,
+            radius,
+            float(center[0]),
+            float(center[1]),
+            float(center[2]),
+            float(sphere_radius),
+        )
+
+    _, fitted_radius = find_enclosing_sphere(centers, radii)
+
+    assert radius >= fitted_radius - 1e-10
+    for center in centers:
+        assert_encloses((cx, cy, cz), radius, tuple(center), 0.3)

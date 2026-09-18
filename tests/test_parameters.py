@@ -102,7 +102,7 @@ class TestYmlParameters:
         obj = DomainDecompositionParameters.from_dict({})
 
         assert obj.enabled is False
-        assert obj.grouping_algorithm == "morton"
+        assert obj.grouping_algorithm == "morton_incremental"
         assert obj.max_num_sources_per_group == 1000
         assert obj.morton_bits == 10
         assert obj.max_memory_cost_per_group == 50.0e9
