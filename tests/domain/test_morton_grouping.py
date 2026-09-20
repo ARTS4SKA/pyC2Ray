@@ -160,3 +160,151 @@ def test_build_groups_splits_when_memory_limit_exceeded() -> None:
     assert len(groups) == 2
     assert [g.id for g in groups] == [0, 1]
     assert all(len(g) == 1 for g in groups)
+
+
+def test_build_groups_incremental_rejects_wrong_grouping_params_type() -> None:
+    grouping = MortonSourceGrouping()
+    grid: Grid = RegularGrid(cell_size=1.0, num_cells=8)
+    cost_model = DummyCostModel(max_memory_cost_per_group=10.0)
+    sources = [_src(1, 1.0, 1.0, 1.0)]
+
+    with pytest.raises(TypeError):
+        grouping.build_groups_incremental(
+            sources=sources,
+            grid=grid,
+            grouping_params=GroupingParams(max_num_sources_per_group=2),
+            cost_model=cost_model,
+        )
+
+
+def test_build_groups_incremental_returns_empty_for_no_sources() -> None:
+    grouping = MortonSourceGrouping()
+    grid: Grid = RegularGrid(cell_size=1.0, num_cells=8)
+    params = MortonGroupingParams(max_num_sources_per_group=4, morton_bits=8)
+    cost_model = DummyCostModel(max_memory_cost_per_group=10.0)
+
+    groups = grouping.build_groups_incremental([], grid, params, cost_model)
+
+    assert groups == []
+
+
+def test_build_groups_incremental_single_valid_group() -> None:
+    """Three nearby sources whose spheres intersect stay in one group."""
+    grouping = MortonSourceGrouping()
+    grid: Grid = RegularGrid(cell_size=1.0, num_cells=8)
+    params = MortonGroupingParams(max_num_sources_per_group=4, morton_bits=8)
+    cost_model = DummyCostModel(max_memory_cost_per_group=10.0)
+    sources = [
+        _src(10, 1.0, 1.0, 1.0, radius=0.5),
+        _src(11, 1.3, 1.1, 1.0, radius=0.5),
+        _src(12, 1.6, 1.0, 1.1, radius=0.5),
+    ]
+
+    groups = grouping.build_groups_incremental(sources, grid, params, cost_model)
+
+    assert len(groups) == 1
+    assert groups[0].id == 0
+    assert len(groups[0]) == 3
+    assert sorted(groups[0].get_source_ids()) == [10, 11, 12]
+
+
+def test_build_groups_incremental_splits_when_sources_do_not_intersect() -> None:
+    grouping = MortonSourceGrouping()
+    grid: Grid = RegularGrid(cell_size=1.0, num_cells=16)
+    params = MortonGroupingParams(max_num_sources_per_group=8, morton_bits=8)
+    cost_model = DummyCostModel(max_memory_cost_per_group=10.0)
+    sources = [
+        _src(1, 1.0, 1.0, 1.0, radius=0.2),
+        _src(2, 8.0, 8.0, 8.0, radius=0.2),
+    ]
+
+    groups = grouping.build_groups_incremental(sources, grid, params, cost_model)
+
+    assert len(groups) == 2
+    assert [g.id for g in groups] == [0, 1]
+    assert sorted(len(g) for g in groups) == [1, 1]
+
+
+def test_build_groups_incremental_splits_when_memory_limit_exceeded() -> None:
+    grouping = MortonSourceGrouping()
+    grid: Grid = RegularGrid(cell_size=1.0, num_cells=16)
+    params = MortonGroupingParams(max_num_sources_per_group=8, morton_bits=8)
+    # With DummyCostModel, mem_cost == n_src; setting max to 1 forces a split
+    # when trying to merge 2 intersecting sources.
+    cost_model = DummyCostModel(max_memory_cost_per_group=1.0)
+    sources = [
+        _src(20, 2.0, 2.0, 2.0, radius=0.5),
+        _src(21, 2.4, 2.0, 2.0, radius=0.5),
+    ]
+
+    groups = grouping.build_groups_incremental(sources, grid, params, cost_model)
+
+    assert len(groups) == 2
+    assert [g.id for g in groups] == [0, 1]
+    assert all(len(g) == 1 for g in groups)
+
+
+def test_build_groups_incremental_splits_when_source_cap_exceeded() -> None:
+    """The source-count cap closes a group even when everything intersects."""
+    grouping = MortonSourceGrouping()
+    grid: Grid = RegularGrid(cell_size=1.0, num_cells=16)
+    params = MortonGroupingParams(max_num_sources_per_group=2, morton_bits=8)
+    cost_model = DummyCostModel(max_memory_cost_per_group=1e9)
+    sources = [_src(30 + i, 2.0 + 0.1 * i, 2.0, 2.0, radius=1.0) for i in range(5)]
+
+    groups = grouping.build_groups_incremental(sources, grid, params, cost_model)
+
+    assert all(len(g) <= 2 for g in groups)
+    assert sum(len(g) for g in groups) == 5
+
+
+def test_build_groups_incremental_groups_enclose_their_sources() -> None:
+    """Every group sphere must contain the influence sphere of each of its members.
+
+    This is the property the incremental sphere has to preserve: the scan takes its
+    decisions on an upper bound, and the group is re-fitted when closed, so a member
+    poking out would mean the re-fit dropped below the bound it was checked against.
+    """
+    rng = np.random.default_rng(4321)
+    positions = rng.uniform(1.0, 15.0, size=(120, 3))
+    sources = [
+        _src(i, positions[i][0], positions[i][1], positions[i][2], radius=0.8)
+        for i in range(len(positions))
+    ]
+    grouping = MortonSourceGrouping()
+    grid: Grid = RegularGrid(cell_size=1.0, num_cells=16)
+    params = MortonGroupingParams(max_num_sources_per_group=16, morton_bits=8)
+    cost_model = DummyCostModel(max_memory_cost_per_group=1e9)
+
+    groups = grouping.build_groups_incremental(sources, grid, params, cost_model)
+
+    for group in groups:
+        for source in group.sources:
+            reach = float(np.linalg.norm(group.center - source.pos)) + source.radius
+            assert reach <= group.radius + 1e-9
+
+
+def test_build_groups_incremental_conserves_every_source_exactly_once() -> None:
+    """No source may be lost or duplicated when sources are split into groups."""
+    rng = np.random.default_rng(99)
+    positions = rng.uniform(1.0, 15.0, size=(200, 3))
+    sources = [
+        _src(i, positions[i][0], positions[i][1], positions[i][2], radius=0.6)
+        for i in range(len(positions))
+    ]
+    grouping = MortonSourceGrouping()
+    grid: Grid = RegularGrid(cell_size=1.0, num_cells=16)
+    params = MortonGroupingParams(max_num_sources_per_group=8, morton_bits=8)
+    cost_model = DummyCostModel(max_memory_cost_per_group=1e9)
+
+    groups = grouping.build_groups_incremental(sources, grid, params, cost_model)
+
+    # Guard against a vacuous pass: the sources must actually have been split into
+    # several groups, and at least one group must hold more than a single source.
+    assert len(groups) > 1
+    assert max(len(g) for g in groups) > 1
+    assert all(len(g) <= 8 for g in groups)
+
+    grouped_ids = [sid for g in groups for sid in g.get_source_ids()]
+    assert sorted(grouped_ids) == sorted(s.id for s in sources)
+    assert [g.id for g in groups] == list(range(len(groups)))
