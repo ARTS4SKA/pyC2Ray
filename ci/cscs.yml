@@ -3,15 +3,6 @@ include:
 stages:
   - build
 
-build prgenv 24.11:
-  extends: .uenv-runner-daint-gh200
-  stage: build
-  image: 'prgenv-gnu/24.11:v2'
-  script:
-    - ./ci/run-tests.sh
-  variables:
-    WITH_UENV_VIEW: default
-
 build prgenv 25.6:
   extends: .uenv-runner-daint-gh200
   stage: build
@@ -25,6 +16,15 @@ build prgenv 25.11:
   extends: .uenv-runner-daint-gh200
   stage: build
   image: 'prgenv-gnu/25.11:v1'
+  script:
+    - ./ci/run-tests.sh
+  variables:
+    WITH_UENV_VIEW: default
+
+build prgenv 26.3:
+  extends: .uenv-runner-daint-gh200
+  stage: build
+  image: 'prgenv-gnu/26.3:v1'
   script:
     - ./ci/run-tests.sh
   variables:
