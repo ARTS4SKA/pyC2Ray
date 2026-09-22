@@ -147,7 +147,7 @@ class C2Ray_Thesan(C2Ray):
             srcpos_mpc=srcpos_mpc,
             mstar_msun=dotN_pyc2ray,
             boxsize=self.boxsize / self.cosmology.h,
-            meshsize=self.N + 1,
+            meshsize=self.N,
         )
 
         # normalize flux
