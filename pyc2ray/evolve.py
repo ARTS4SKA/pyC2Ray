@@ -141,7 +141,7 @@ def _evolve3D_asora(
 ) -> tuple[
     tuple[FloatArray, FloatArray, FloatArray],  # xfrac
     tuple[FloatArray, FloatArray, FloatArray],  # ion rate
-    tuple[FloatArray, FloatArray, FloatArray],  # heat rate
+    FloatArray,  # heat rate
     FloatArray,  # temp
 ]:
     """Evolves the ionization fraction over one timestep for the whole grid
@@ -200,7 +200,7 @@ def _evolve3D_asora(
     phion : tuple of float 3D-array
         Photo-ionization rate of each cell due to all sources for each species
         (HI, HeI, HeII).
-    pheat : tuple of float 3D-array
+    pheat : float 3D-array
         Photo-heating rate of each cell due to all sources for each species
         (HI, HeI, HeII).
     temp_int : float 3D-array
@@ -273,13 +273,11 @@ Convergence Criterion (Number of points): {conv_criterion: n}
     phion_HI = np.empty_like(ndens)
     phion_HeI = np.empty_like(ndens)
     phion_HeII = np.empty_like(ndens)
-
-    pheat_HI = np.empty_like(ndens)
-    pheat_HeI = np.empty_like(ndens)
-    pheat_HeII = np.empty_like(ndens)
+    pheat = np.empty_like(ndens)
 
     rt = RadiationTables()
     sigmas = rt.cross_sections
+    heat_factors = rt.factors
     nfreq = len(sigmas[0])
 
     # Prepare other inputs
@@ -309,6 +307,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
         libasora.do_all_sources(
             R_max,
             *sigmas,
+            heat_factors,
             nfreq,
             dr,
             xHII_av,
@@ -317,9 +316,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             phion_HI,
             phion_HeI,
             phion_HeII,
-            pheat_HI,
-            pheat_HeI,
-            pheat_HeII,
+            pheat,
             num_src,
             N,
             *logtau,
@@ -337,9 +334,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             comm.Allreduce(MPI.IN_PLACE, [phion_HI, MPI.DOUBLE], op=MPI.SUM)
             comm.Allreduce(MPI.IN_PLACE, [phion_HeI, MPI.DOUBLE], op=MPI.SUM)
             comm.Allreduce(MPI.IN_PLACE, [phion_HeII, MPI.DOUBLE], op=MPI.SUM)
-            comm.Allreduce(MPI.IN_PLACE, [pheat_HI, MPI.DOUBLE], op=MPI.SUM)
-            comm.Allreduce(MPI.IN_PLACE, [pheat_HeI, MPI.DOUBLE], op=MPI.SUM)
-            comm.Allreduce(MPI.IN_PLACE, [pheat_HeII, MPI.DOUBLE], op=MPI.SUM)
+            comm.Allreduce(MPI.IN_PLACE, [pheat, MPI.DOUBLE], op=MPI.SUM)
 
         if rank == 0:
             # ---------------------
@@ -368,9 +363,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
                 phion_HI,
                 phion_HeI,
                 phion_HeII,
-                pheat_HI,
-                pheat_HeI,
-                pheat_HeII,
+                pheat,
                 clump,
                 False,
                 *logtemp,
@@ -429,11 +422,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             phion_HeI.reshape(mesh_shape),
             phion_HeII.reshape(mesh_shape),
         ),
-        (
-            pheat_HI.reshape(mesh_shape),
-            pheat_HeI.reshape(mesh_shape),
-            pheat_HeII.reshape(mesh_shape),
-        ),
+        pheat.reshape(mesh_shape),
         temp_int.reshape(mesh_shape),
     )
 
@@ -467,7 +456,7 @@ def _evolve3D_c2ray(
 ) -> tuple[
     tuple[FloatArray, FloatArray, FloatArray],  # xfrac
     tuple[FloatArray, FloatArray, FloatArray],  # ion rate
-    tuple[FloatArray, FloatArray, FloatArray],  # heat rate
+    FloatArray,  # heat rate
     FloatArray,  # temp
 ]:
     """Evolves the ionization fraction over one timestep for the whole grid
@@ -533,8 +522,12 @@ def _evolve3D_c2ray(
     xh_int : 3D-array of dtype float
         The updated ionization fraction of each cell at the end of the
         timestep.
-    phi_ion : 3D-array of dtype float
+    phion : 3D-array of dtype float
         Photoionization rate of each cell due to all sources.
+    pheat: 3D-array of dtype float
+        Photoheating rate of each cell due to all sources.
+    temp_int : 3D-array of dtype float
+        Updated temperature of each cell at the end of the timestep.
     """
     rank_prefix = f"Rank={rank}: " if use_mpi else ""
 
@@ -647,6 +640,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
         if use_mpi:
             # Collect results from the different MPI processors
             comm.Allreduce(MPI.IN_PLACE, [phion_HI, MPI.DOUBLE], op=MPI.SUM)
+            comm.Allreduce(MPI.IN_PLACE, [pheat_HI, MPI.DOUBLE], op=MPI.SUM)
 
         if rank == 0:
             # ---------------------
@@ -725,7 +719,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
     return (
         (xHII_int, xHeII_int, xHeIII_int),
         (phion_HI, phion_HeI, phion_HeII),
-        (pheat_HI, pheat_HeI, pheat_HeII),
+        pheat_HI,
         temp,
     )
 
@@ -735,7 +729,7 @@ def evolve3D(
 ) -> tuple[
     tuple[FloatArray, FloatArray, FloatArray],  # xfrac
     tuple[FloatArray, FloatArray, FloatArray],  # ion rate
-    tuple[FloatArray, FloatArray, FloatArray],  # heat rate
+    FloatArray,  # heat rate
     FloatArray,  # temp
 ]:
     """Evolves the ionization fraction over one timestep for the whole grid

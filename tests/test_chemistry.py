@@ -283,11 +283,7 @@ def setup_chemistry(
         np.full_like(ndens, s * p)
         for s, p in zip(ionize_species, (1e-14, 1e-15, 1e-16))
     )
-    pheat = (
-        np.full_like(ndens, heat),
-        np.zeros_like(ndens),
-        np.zeros_like(ndens),
-    )
+    pheat = np.full_like(ndens, heat)
 
     # Clumping factor
     clump = np.ones_like(ndens)
@@ -317,7 +313,7 @@ def setup_chemistry(
         *xHeIIs,
         *xHeIIIs,
         *phion,
-        *pheat,
+        pheat,
         clump,
         cosmo_only,
         *logtemp,
@@ -341,7 +337,11 @@ def test_chemistry_c2ray_no_heat_hydrogen_only_cosmo_only(data_dir):
     with setup_chemistry(
         heat=0.0, ionize_species=(True, False, False), cosmo_only=True
     ) as args:
-        conv = libc2ray.chemistry_he.global_pass(*args)
+        pheat_HeI = np.zeros_like(args[17])
+        pheat_HeII = np.zeros_like(args[17])
+        c2ray_args = *args[:18], pheat_HeI, pheat_HeII, *args[18:]
+
+        conv = libc2ray.chemistry_he.global_pass(*c2ray_args)
         assert conv == 0
         compare_ionized_fractions(
             data_dir / "ionized_fraction_no_heat_hydrogen_only_cosmo_only.npz", args
@@ -350,7 +350,11 @@ def test_chemistry_c2ray_no_heat_hydrogen_only_cosmo_only(data_dir):
 
 def test_chemistry_c2ray_no_heat_cosmo_only(data_dir):
     with setup_chemistry(heat=0.0, cosmo_only=True) as args:
-        conv = libc2ray.chemistry_he.global_pass(*args)
+        pheat_HeI = np.zeros_like(args[17])
+        pheat_HeII = np.zeros_like(args[17])
+        c2ray_args = *args[:18], pheat_HeI, pheat_HeII, *args[18:]
+
+        conv = libc2ray.chemistry_he.global_pass(*c2ray_args)
         assert conv == 0
         compare_ionized_fractions(
             data_dir / "ionized_fraction_no_heat_all_species_cosmo_only.npz", args
