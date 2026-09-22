@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cuda_runtime.h>
+
 #include <memory>
 #include <source_location>
 #include <span>
@@ -271,7 +273,7 @@ namespace asora {
         static bool contains(buffer_tag tag);
 
         /// Get the CUDA device ID, or -1 if not initialized
-        static int get_device_id() noexcept { return instance()._gpu_id; }
+        static int get_id() noexcept { return instance()._gpu_id; }
 
        private:
         /// Private constructor to enforce singleton pattern
@@ -304,5 +306,36 @@ namespace asora {
         /// Memory pool for device buffers
         std::unordered_map<buffer_tag, device_buffer> _memory_pool;
     };
+
+    /* @brief Set the persistent L2 window with given data.
+     *
+     * This function sets the persistent L2 window with the provided device memory.
+     *
+     * @param[in] ptr Pointer to the data to be copied to the persistent L2 window
+     * @param[in] nbytes Size of the data to be copied (in bytes)
+     * @param[in] stream CUDA stream for asynchronous operations (default: 0)
+     * @param[in] hit_ratio Expected hit ratio for the persistent L2 window
+     *            (default: 1.0f)
+     */
+    void enable_persistent_L2_memory(
+        void *ptr, size_t nbytes, cudaStream_t stream = 0, float hit_ratio = 1.0f
+    );
+
+    /// Template overload for std::span input.
+    template <typename T>
+    void enable_persistent_L2_memory(
+        const std::span<T> &data, cudaStream_t stream = 0, float hit_ratio = 1.0f
+    ) {
+        enable_persistent_L2_memory(data.data(), data.size_bytes(), stream, hit_ratio);
+    }
+
+    /* @brief Disable the persistent L2 window.
+     *
+     * This function disables the persistent L2 window, releasing any associated
+     * resources. It can be called when the persistent L2 window is no longer needed.
+     *
+     * @param[in] stream CUDA stream for asynchronous operations (default: 0)
+     */
+    void disable_persistent_L2_memory(cudaStream_t stream = 0);
 
 }  // namespace asora

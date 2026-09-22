@@ -1,4 +1,3 @@
-
 #include "chemistry.h"
 #include "memory.h"
 #include "raytracing.cuh"
@@ -33,7 +32,7 @@ namespace {
     /// Perform type checking on numpy arrays.
     template <typename T>
     bool numpy_check(const PyArrayObject *array) {
-        if (!PyArray_Check(array) || PyArray_TYPE(array) != getNpyType<T>()) {
+        if (!array || !PyArray_Check(array) || PyArray_TYPE(array) != getNpyType<T>()) {
             using namespace std::string_literals;
             std::string msg =
                 "array must be a numpy NDArray of type "s + typeid(T).name();
@@ -123,12 +122,37 @@ PyObject *asora_device_init([[maybe_unused]] PyObject *self, PyObject *args) {
 PyObject *asora_device_close([[maybe_unused]] PyObject *self, PyObject *args) {
     if (!PyArg_ParseTuple(args, "")) return nullptr;
 
+    // Try to close the device even if disabling persistent memory failed.
+    std::string l2_msg, close_msg;
+
+    try {
+        asora::disable_persistent_L2_memory();
+    } catch (const std::exception &e) {
+        l2_msg = e.what();
+    }
+
     try {
         asora::device::close();
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_MemoryError, e.what());
+        close_msg = e.what();
+    }
+
+    if (!l2_msg.empty() && !close_msg.empty()) {
+        PyErr_Format(
+            PyExc_MemoryError,
+            "device::disable_persistent_L2_memory failed: %s; device::close also "
+            "failed: %s",
+            l2_msg.c_str(), close_msg.c_str()
+        );
+        return nullptr;
+    } else if (!l2_msg.empty()) {
+        PyErr_SetString(PyExc_MemoryError, l2_msg.c_str());
+        return nullptr;
+    } else if (!close_msg.empty()) {
+        PyErr_SetString(PyExc_MemoryError, close_msg.c_str());
         return nullptr;
     }
+
     return Py_None;
 }
 
@@ -166,15 +190,31 @@ PyObject *asora_density_to_device([[maybe_unused]] PyObject *self, PyObject *arg
 /// Allocate and copy radiation tables to the device.
 PyObject *asora_photo_table_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
     PyArrayObject *thin_table, *thick_table;
-    return PyArg_ParseTuple(args, "OO", &thin_table, &thick_table) &&
-                   load_array_to_device<double>(
-                       thin_table, asora::buffer_tag::photo_ion_thin_table
-                   ) &&
-                   load_array_to_device<double>(
-                       thick_table, asora::buffer_tag::photo_ion_thick_table
-                   )
-               ? Py_None
-               : nullptr;
+    int persistent = true;
+    if (!PyArg_ParseTuple(args, "OO|p", &thin_table, &thick_table, &persistent))
+        return nullptr;
+
+    bool loaded = load_array_to_device<double>(
+                      thin_table, asora::buffer_tag::photo_ion_thin_table
+                  ) &&
+                  load_array_to_device<double>(
+                      thick_table, asora::buffer_tag::photo_ion_thick_table
+                  );
+
+    if (!loaded) return nullptr;
+
+    try {
+        if (persistent) {
+            auto thick_buf =
+                asora::device::get(asora::buffer_tag::photo_ion_thick_table);
+            asora::enable_persistent_L2_memory(thick_buf.view<double>());
+        } else
+            asora::disable_persistent_L2_memory();
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return nullptr;
+    }
+    return Py_None;
 }
 
 /// Allocate and copy source properties to the device.
