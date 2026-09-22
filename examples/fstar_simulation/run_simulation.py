@@ -51,7 +51,7 @@ def run_simulation(paramfile: PathType, num_steps_between_slices: int = 2) -> No
 
     # Loop over redshifts
     for k in range(i_start, len(zred_array) - 1):
-        iz = idx_zred[k]  # Index redshift
+        iz = int(idx_zred[k])  # Index redshift
         zi = zred_array[k]  # Start redshift
         zf = zred_array[k + 1]  # End redshift
 
