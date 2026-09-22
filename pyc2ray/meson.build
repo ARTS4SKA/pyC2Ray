@@ -18,7 +18,6 @@ pyc2ray_sources = [
     'source_model.py',
     'radiation/__init__.py',
     'radiation/blackbody.py',
-    'radiation/common.py',
     'radiation/spectra.py',
     'radiation/radiation_tables.py',
     'solver/__init__.py',

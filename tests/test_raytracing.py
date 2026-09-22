@@ -6,8 +6,7 @@ import numpy as np
 import pytest
 
 from pyc2ray.load_extensions import libasora_He as libasora
-from pyc2ray.radiation.blackbody import BlackBodySource_Multifreq
-from pyc2ray.radiation.common import make_tau_table
+from pyc2ray.radiation.blackbody import BlackBodySource_Multifreq, make_tau_table
 from pyc2ray.radiation.radiation_tables import RadiationTables
 
 if libasora is None:

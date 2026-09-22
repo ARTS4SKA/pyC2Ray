@@ -28,6 +28,10 @@ namespace asora {
     };
 
     struct density_maps {
+        // TODO: need to expose this to parameters.yml
+        static constexpr double abu_he = 0.074;
+        static constexpr double abu_h = 1 - abu_he;
+
         const double *__restrict__ ndens;
         const double *__restrict__ xHII;
         const double *__restrict__ xHeII;

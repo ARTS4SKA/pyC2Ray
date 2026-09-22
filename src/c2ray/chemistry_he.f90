@@ -57,6 +57,31 @@ contains
 
    end function expm1x
 
+   function check_convergence(new, old)
+
+      implicit none
+      logical(kind=4) :: check_convergence
+      real(kind=real64), intent(in) :: new, old
+
+      check_convergence = (abs(new - old) < minimum_fractional_change*new) .or. &
+                          (new < minimum_fraction_of_atoms)
+
+   end function check_convergence
+
+   function check_divergence(new, old)
+
+      implicit none
+      logical(kind=4) :: check_divergence
+      real(kind=real64), intent(in) :: new, old
+      real(kind=real64) :: diff
+
+      diff = abs(new - old)
+      check_divergence = (diff > minimum_fractional_change) .and. &
+                         (diff > minimum_fractional_change*new) .and. &
+                         (new > minimum_fraction_of_atoms)
+
+   end function check_divergence
+
    subroutine thermal(dt, end_temper, avg_temper, ndens_el, ndens_atom, heat, Hz, cosmo_only)
       ! This is the wrapper that appears in chemistry_he
       real(real64), intent(in)    :: dt, ndens_el, ndens_atom, heat, Hz
@@ -215,21 +240,11 @@ contains
       xHeIII_av_p_old = xHeIII_av(pos(1), pos(2), pos(3))
 
       ! Hydrogen criterion
-      if ((abs(xHII_av_p - xHII_av_p_old) > minimum_fractional_change .and. &
-           abs((xHII_av_p - xHII_av_p_old)/(1.0 - xHII_av_p)) > minimum_fractional_change .and. &
-           (1.0 - xHII_av_p) > minimum_fraction_of_atoms)) then
-         ! Helium (first ionization) criterion
-         if ((abs(xHeII_av_p - xHeII_av_p_old) > minimum_fractional_change .and. &
-              abs((xHeII_av_p - xHeII_av_p_old)/(1.0 - xHeII_av_p)) > minimum_fractional_change .and. &
-              (1.0 - xHeII_av_p) > minimum_fraction_of_atoms)) then
-            ! Helium (second ionization) criterion
-            if ((abs(xHeIII_av_p - xHeIII_av_p_old) > minimum_fractional_change .and. &
-                 abs((xHeIII_av_p - xHeIII_av_p_old)/(1.0 - xHeIII_av_p)) > minimum_fractional_change .and. &
-                 (1.0 - xHeIII_av_p) > minimum_fraction_of_atoms)) then
-               ! TODO: Here temperature criterion will be added
-               conv_flag = conv_flag + 1
-            end if
-         end if
+      if (check_divergence(1.0_real64 - xHII_av_p, 1.0_real64 - xHII_av_p_old) .or. &
+          check_divergence(1.0_real64 - xHII_av_p - xHeII_av_p, 1.0_real64 - xHII_av_p_old - xHeII_av_p_old) .or. &
+          check_divergence(xHeIII_av_p, xHeIII_av_p_old)) then
+         ! TODO: missing temperature check
+         conv_flag = conv_flag + 1
       end if
 
       ! Put local result in global array
@@ -272,16 +287,21 @@ contains
       logical(kind=4), intent(in) :: cosmo_only    ! Whether to only include cosmological cooling
 
       ! Local quantities
+      real(kind=real64) :: xHII_av_p_2, xHeII_av_p_2, xHeIII_av_p_2
+      real(kind=real64) :: xHII_intermed_p_2, xHeII_intermed_p_2, xHeIII_intermed_p_2
       real(kind=real64) :: nHI_p, nHeI_p, nHeII_p            ! HI, HeI, and HeII number density
       real(kind=real64) :: heating                              ! total heating rate
       real(kind=real64) :: coldhi_p, coldhei_p, coldheii_p      ! column density of the cell for the three spicies
-      real(kind=real64) :: temperature_end, temperature_avg, temperature_previous_iteration ! TODO: will be useful when implementing non-isothermal mode
-      real(kind=real64) :: xHII_av_p_old, xHeII_av_p_old, xHeIII_av_p_old                      ! Time-average ionization fraction from previous iteration
+      real(kind=real64) :: temperature_avg, temperature_int
+      real(kind=real64) :: temperature_avg_new, temperature_int_new
+      real(kind=real64) :: xHII_av_p_new, xHeII_av_p_new, xHeIII_av_p_new   ! Time-average ionization fraction from previous iteration
       real(kind=real64) :: de                               ! local electron density
+      real(kind=real64) :: xHI_new, xHI
       integer :: nit                                        ! Iteration counter
 
       ! Temperature at the begin of the while loop
-      temperature_end = temperature_start
+      temperature_int = temperature_start
+      temperature_avg = temperature_start
 
       ! Total heating rate from the three components
       heating = heat_HI_ion_p + heat_HeI_ion_p + heat_HeII_ion_p
@@ -290,18 +310,11 @@ contains
       do
          nit = nit + 1
 
-         ! Save temperature solution from last iteration
-         temperature_previous_iteration = temperature_end
-
          ! At each iteration, the intial condition x(0) is reset. Change happens in the time-average and thus the electron density
-         xHII_av_p_old = xHII_av_p
-         xHeII_av_p_old = xHeII_av_p
-         xHeIII_av_p_old = xHeIII_av_p
-
          ! Calculate (mean) elements density
-         nHI_p = ndens_p*abu_h*(1.0_real64 - xHII_av_p)
-         nHeI_p = ndens_p*abu_he*(1.0_real64 - xHeII_av_p - xHeIII_av_p)
-         nHeII_p = ndens_p*abu_he*xHeII_av_p
+         nHI_p = ndens_p*abu_h*(1.0_real64 - xHII_intermed_p)
+         nHeI_p = ndens_p*abu_he*(1.0_real64 - xHeII_intermed_p - xHeIII_intermed_p)
+         nHeII_p = ndens_p*abu_he*xHeII_intermed_p
 
          ! Calculate (mean) electron density
          de = electrondens(ndens_p, xHII_av_p, xHeII_av_p, xHeIII_av_p, abu_h, abu_he, abu_c)
@@ -311,28 +324,62 @@ contains
 
          ! Calculate the new and mean ionization states
          ! TODO: the intermediate need in the python evolve.py for global convergence. Keep it and bring it back.
-         call friedrich(dt, temperature_previous_iteration, de, &
+         call friedrich(dt, temperature_avg, de, &
                         xHII_p, xHeII_p, xHeIII_p, &
                         phi_HI_ion_p, phi_HeI_ion_p, phi_HeII_ion_p, &
                         heat_HI_ion_p, heat_HeI_ion_p, heat_HeII_ion_p, &
                         nHI_p, nHeI_p, nHeII_p, clump_p, &
                         xHII_intermed_p, xHeII_intermed_p, xHeIII_intermed_p, &
-                        xHII_av_p, xHeII_av_p, xHeIII_av_p)
+                        xHII_av_p_new, xHeII_av_p_new, xHeIII_av_p_new)
 
          ! update (mean) electron density after updating averaged quantities
-         de = electrondens(ndens_p, xHII_av_p, xHeII_av_p, xHeIII_av_p, abu_h, abu_he, abu_c)
+         de = electrondens(ndens_p, xHII_av_p_new, xHeII_av_p_new, xHeIII_av_p_new, abu_h, abu_he, abu_c)
+
+         nHI_p = ndens_p*abu_h*(1.0_real64 - xHII_intermed_p)
+         nHeI_p = ndens_p*abu_he*(1.0_real64 - xHeII_intermed_p - xHeIII_intermed_p)
+         nHeII_p = ndens_p*abu_he*xHeII_intermed_p
+
+         call friedrich(dt, temperature_avg, de, &
+                        xHII_intermed_p, xHeII_intermed_p, xHeIII_intermed_p, &
+                        phi_HI_ion_p, phi_HeI_ion_p, phi_HeII_ion_p, &
+                        heat_HI_ion_p, heat_HeI_ion_p, heat_HeII_ion_p, &
+                        nHI_p, nHeI_p, nHeII_p, clump_p, &
+                        xHII_intermed_p_2, xHeII_intermed_p_2, xHeIII_intermed_p_2, &
+                        xHII_av_p_2, xHeII_av_p_2, xHeIII_av_p_2)
+
+         ! Average two solutions
+         xHII_intermed_p = 0.5_real64*(xHII_intermed_p + xHII_intermed_p_2)
+         xHeII_intermed_p = 0.5_real64*(xHeII_intermed_p + xHeII_intermed_p_2)
+         xHeIII_intermed_p = 0.5_real64*(xHeIII_intermed_p + xHeIII_intermed_p_2)
+         xHII_av_p_new = 0.5_real64*(xHII_av_p_new + xHII_av_p_2)
+         xHeII_av_p_new = 0.5_real64*(xHeII_av_p_new + xHeII_av_p_2)
+         xHeIII_av_p_new = 0.5_real64*(xHeIII_av_p_new + xHeIII_av_p_2)
+
+         ! update (mean) electron density after updating averaged quantities
+         de = electrondens(ndens_p, xHII_av_p_new, xHeII_av_p_new, xHeIII_av_p_new, abu_h, abu_he, abu_c)
 
          ! TODO: Call for thermal evolution. It takes the old values and outputs new values without overwriting the old values.
-         call thermal(dt, temperature_end, temperature_avg, de, ndens_p, heating, Hz, cosmo_only)
+         temperature_int_new = temperature_start
+         call thermal(dt, temperature_int_new, temperature_avg_new, de, ndens_p, heating, Hz, cosmo_only)
 
          ! TODO: multiphase is necessary to correctly calculate the differantial brightness. Hannah's works is on github with helium: https://github.com/garrelt/C2-Ray3Dm1D_Helium/blob/multiphase/code/files_for_3D/evolve_data.F90#L37-L39
 
+         xHI_new = 1.0_real64 - xHII_av_p_new
+         xHI = 1.0_real64 - xHII_av_p
          ! Test for convergence on time-averaged neutral fraction. For low values of this number assume convergence
-         if ((abs((xHII_av_p - xHII_av_p_old)/(1.0_real64 - xHII_av_p)) < minimum_fractional_change .or. &
-              (1.0_real64 - xHII_av_p < minimum_fraction_of_atoms)) .and. &
-             (abs((temperature_end - temperature_previous_iteration)/temperature_end) < minimum_fractional_change)) then
-            exit
+         if (check_convergence(xHI_new, xHI) .and. &
+             check_convergence(xHI_new - xHeII_av_p_new, xHI - xHeII_av_p) .and. &
+             check_convergence(xHeIII_av_p_new, xHeIII_av_p) .and. &
+             (abs((temperature_int - temperature_int_new)/temperature_int_new) < minimum_fractional_change)) then
+            nit = 500 ! Exit loop
          end if
+
+         xHII_av_p = xHII_av_p_new
+         xHeII_av_p = xHeII_av_p_new
+         xHeIII_av_p = xHeIII_av_p_new
+
+         temperature_int = temperature_int_new
+         temperature_avg = temperature_avg_new
 
          ! Warn about non-convergence and terminate iteration
          if (nit > 400) then
@@ -397,7 +444,7 @@ contains
       real(kind=real64), parameter :: colhe1 = 1.3d-8*1.30_real64/(54.416_real64**2)
       real(kind=real64), parameter :: epsilon = 1.0d-20
 
-      f_lya = max(min(10.0_real64*xHII_old, 1.0_real64), 0.01_real64)
+      f_lya = max(min(10.0_real64*(1.0_real64 - xHII), 1.0_real64), 0.01_real64)
 
       ! Recombination rate of HI (Eq. 2.12 and 2.13)
       lambda = 2.0_real64*(temph0/temp_p)
@@ -541,18 +588,18 @@ contains
 
       ! Fix numerical limits and renormalize
       xHeI = 1.0 - xHeII - xHeIII
-      xHII = max(epsilon, xHII)
-      xHeII = max(epsilon, xHeII)
-      xHeIII = max(epsilon, xHeIII)
+      xHII = min(max(epsilon, xHII), 1.0_real64)
+      xHeII = min(max(epsilon, xHeII), 1.0_real64)
+      xHeIII = min(max(epsilon, xHeIII), 1.0_real64)
       norm = xHeI + xHeII + xHeIII
       xHeII = xHeII/norm
       xHeIII = xHeIII/norm
 
       ! Fix numerical limits and renormalize
       xHeI_av = 1.0 - xHeII_av - xHeIII_av
-      xHII_av = max(epsilon, xHII_av)
-      xHeII_av = max(epsilon, xHeII_av)
-      xHeIII_av = max(epsilon, xHeIII_av)
+      xHII_av = min(max(epsilon, xHII_av), 1.0_real64)
+      xHeII_av = min(max(epsilon, xHeII_av), 1.0_real64)
+      xHeIII_av = min(max(epsilon, xHeIII_av), 1.0_real64)
       norm = xHeI_av + xHeII_av + xHeIII_av
       xHeII_av = xHeII_av/norm
       xHeIII_av = xHeIII_av/norm

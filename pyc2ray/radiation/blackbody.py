@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import Callable, TypeVar
+from collections.abc import Callable
+from typing import TypeVar
 
 import astropy.constants as cst
 import astropy.units as u
@@ -15,11 +16,40 @@ __all__ = [
     "BlackBodySource",
     "BlackBodySource_Multifreq",
     "YggdrasilModel",
+    "make_tau_table",
 ]
 
-BlackBodyType = TypeVar("BlackBodyType", bound="BlackBodyBase")
-
 FloatArray = npt.NDArray[np.float64]
+
+
+def make_tau_table(
+    minlogtau: float, maxlogtau: float, numtau: int
+) -> tuple[FloatArray, float]:
+    """Utility function to create optical depth array for C2Ray
+
+    Parameters
+    ----------
+    minlogtau : float
+        Base 10 log of the minimum value of the table in τ
+    minlogtau : float
+        Base 10 log of the maximum value of the table in τ
+    numtau : int
+        Number of points in the table
+
+    Returns
+    -------
+    tau : 1D-array of shape (NumTau + 1)
+        Array of optical depths log-distributed between minlogtau and maxlogtau.
+        The first item is 10^minlogtau and the last item is 10*maxlogtau.
+    dlogtau : float
+        Table step size in log10
+    """
+    logtau, dlogtau = np.linspace(minlogtau, maxlogtau, numtau + 1, retstep=True)
+    tau = np.power(10, logtau)
+    return tau, dlogtau
+
+
+BlackBodyType = TypeVar("BlackBodyType", bound="BlackBodyBase")
 
 
 class BlackBodyBase(ABC):
@@ -28,6 +58,14 @@ class BlackBodyBase(ABC):
 
     @abstractmethod
     def make_heat_tables(self, tau: FloatArray) -> tuple[FloatArray, FloatArray]: ...
+
+    @property
+    @abstractmethod
+    def freq_min(self) -> float: ...
+
+    @property
+    @abstractmethod
+    def freq_max(self) -> float: ...
 
 
 class BlackBodySource(BlackBodyBase):
@@ -52,6 +90,7 @@ class BlackBodySource(BlackBodyBase):
         self.ion_freq = ion_freq
         self.pl_index = pl_index
         self.S_star_ref = S_start_freq
+        self.freq_range = freq_range
 
         # Integration parameters.
         self.quad_kws = dict(
@@ -59,6 +98,14 @@ class BlackBodySource(BlackBodyBase):
         )
 
         self.R_star2 = self._normalize_SED()
+
+    @property
+    def freq_min(self) -> float:
+        return self.freq_range[0]
+
+    @property
+    def freq_max(self) -> float:
+        return self.freq_range[1]
 
     def SED(self, freq: float) -> float:
         """Spectral energy distribution."""
@@ -182,7 +229,7 @@ class BlackBodySource_Multifreq(BlackBodySource):
         self.S_star_ref = S_star_ref
 
         rt = RadiationTables()
-        self.freq_min, self.freq_max = rt.freqs
+        self.freqs = np.array(rt.freqs).T
         self.pl_index_HI, self.pl_index_HeI, self.pl_index_HeII = rt.powerlaw_indices
 
         self.ion_freq_HI = rt.ion_freq_HI
@@ -191,8 +238,16 @@ class BlackBodySource_Multifreq(BlackBodySource):
 
         self.quad_kws = dict(epsrel=self.INTEGRATION_TOLERANCE)
         self.R_star2 = self._normalize_SED(
-            a=self.freq_min[0], b=self.freq_max[-1], **self.quad_kws
+            a=self.freq_min, b=self.freq_max, **self.quad_kws
         )
+
+    @property
+    def freq_min(self) -> float:
+        return self.freqs[0, 0]
+
+    @property
+    def freq_max(self) -> float:
+        return self.freqs[-1, 1]
 
     def make_photo_integrand(
         self,
@@ -236,9 +291,9 @@ class BlackBodySource_Multifreq(BlackBodySource):
 
     def make_photo_tables(self, tau: FloatArray) -> tuple[FloatArray, FloatArray]:
         """Create tables for photoionization rates. The tables are 2D arrays with dimensions (tau, freq)"""
-        tables = np.empty((2, len(self.freq_min), len(tau)), dtype=np.float64)
+        tables = np.empty((2, len(self.freqs), len(tau)), dtype=np.float64)
 
-        for i, (fmin, fmax) in enumerate(zip(self.freq_min, self.freq_max)):
+        for i, (fmin, fmax) in enumerate(self.freqs):
             pl = self._select_powerlaw_index(fmin)[i]
 
             with np.errstate(over="ignore"):
@@ -252,9 +307,9 @@ class BlackBodySource_Multifreq(BlackBodySource):
 
     def make_heat_tables(self, tau: FloatArray) -> tuple[FloatArray, FloatArray]:
         """Create tables for heating rates. The tables are 3D arrays with dimensions (tau, freq, ion_species)"""
-        tables = np.empty((2, len(self.freq_min), 3, len(tau)), dtype=np.float64)
+        tables = np.empty((2, len(self.freqs), 3, len(tau)), dtype=np.float64)
 
-        for i, (fmin, fmax) in enumerate(zip(self.freq_min, self.freq_max)):
+        for i, (fmin, fmax) in enumerate(self.freqs):
             pl = self._select_powerlaw_index(fmin)[i]
 
             for j, ion_freq in enumerate(
@@ -296,6 +351,15 @@ class YggdrasilModel(BlackBodyBase):
         self.pl_index = pl_index
         self.f_min, self.f_max = freq_range
         self.S_star_ref = S_star_ref
+        self.freq_range = freq_range
+
+    @property
+    def freq_min(self) -> float:
+        return self.freq_range[0]
+
+    @property
+    def freq_max(self) -> float:
+        return self.freq_range[1]
 
     def SED(self, f1: float, f2: float) -> tuple[float, FloatArray, FloatArray]:
         """This was used for debugging. Can be usefull in the future(?)
