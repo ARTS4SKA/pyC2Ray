@@ -280,9 +280,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
 
     rt = RadiationTables()
     sigmas = rt.cross_sections
-
-    nbins = rt.NB1, rt.NB2, rt.NB3
-    nfreq = sum(nbins)
+    nfreq = len(sigmas[0])
 
     # Prepare other inputs
     temp = np.ravel(temp).astype(np.float64)
@@ -311,7 +309,6 @@ Convergence Criterion (Number of points): {conv_criterion: n}
         libasora.do_all_sources(
             R_max,
             *sigmas,
-            *nbins,
             nfreq,
             dr,
             xHII_av,

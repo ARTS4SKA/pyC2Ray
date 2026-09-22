@@ -2,9 +2,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from numpy.typing import NDArray
 
+import pyc2ray.constants as c
 from pyc2ray.load_extensions import libasora_He as libasora
+from pyc2ray.radiation.blackbody import BlackBodySource
 
 try:
     import pyc2ray.lib.libasoratest as libasoratest
@@ -15,7 +16,7 @@ except ImportError:
 @pytest.mark.skipif(libasora is None, reason="libasora.so missing, skipping tests")
 class TestLibasoraTest:
     def test_path_in_cell(self) -> None:
-        def create_path_in_cell_data(N: int) -> NDArray:
+        def create_path_in_cell_data(N: int) -> np.ndarray:
             """Return the length of the ray intersecting cell at pos emitted from pos0"""
             N2 = N // 2
             di, dj, dk = np.mgrid[-N2 : N2 + 1, -N2 : N2 + 1, -N2 : N2 + 1]
@@ -36,7 +37,7 @@ class TestLibasoraTest:
         assert np.allclose(path, expected)
 
     def test_geometric_factors(self) -> None:
-        def create_geometric_factors_data(N: int) -> NDArray:
+        def create_geometric_factors_data(N: int) -> np.ndarray:
             """Return the geometric interpolation factors (weights) for the 4 adjacent cells"""
             N2 = N // 2
             grid = np.mgrid[-N2 : N2 + 1, -N2 : N2 + 1, -N2 : N2 + 1]
@@ -100,6 +101,73 @@ class TestLibasoraTest:
 
             # Check inverse function
             assert (q, s) == libasoratest.cart2linthrd(*ijk)
+
+    @pytest.fixture(scope="class")
+    def taus(self) -> np.ndarray:
+        minltau, maxltau, ntau = -20.0, 4.0, 2000
+        return np.logspace(minltau, maxltau, ntau + 1)
+
+    @pytest.fixture(scope="class")
+    def tables(self, taus: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        ion_freq_HI = c.ev2hz * 13.598
+        rad = BlackBodySource(5e4, (ion_freq_HI, 10 * ion_freq_HI), ion_freq_HI, 2.8)
+
+        return rad.make_photo_tables(taus)
+
+    TAUS = [0.9e-20, 1e-20, 1.1e-20, 0.123, 1.0, 123, 0.999e4, 1e4, 1.1e4]
+
+    @pytest.mark.parametrize("tau", TAUS)
+    def test_log_table_index(self, taus: np.ndarray, tau: float) -> None:
+        ntau = len(taus) - 1
+        minltau, maxltau = np.log10(taus[[0, -1]])
+        dstep = (maxltau - minltau) / ntau
+
+        i0, i1, res = libasoratest.log_table_index(tau, (minltau, dstep, ntau))
+        exp_i0 = min(ntau, max(0, np.searchsorted(taus, tau, side="right") - 1))
+        assert i0 == exp_i0
+        assert i1 == min(ntau, max(0, exp_i0 + 1))
+
+        ltau = (i0 + res) * dstep + minltau
+        exp_ltau = min(maxltau, max(minltau, np.log10(tau)))
+        assert ltau == pytest.approx(exp_ltau)
+
+    @pytest.mark.parametrize("tau", TAUS)
+    def test_photo_table_lookup_thin(
+        self, taus: np.ndarray, tables: tuple[np.ndarray, np.ndarray], tau: float
+    ) -> None:
+        ntau = len(taus) - 1
+        minltau, maxltau = np.log10(taus[[0, -1]])
+        dstep = (maxltau - minltau) / ntau
+        logtau = minltau, dstep, ntau
+
+        tau_in = tau
+        tau_out = tau_in + 1e-8
+        res = libasoratest.photo_table_lookup(tau_in, tau_out, *tables, logtau)
+
+        # Interpolate thin table in log space with numpy
+        rate = np.interp(np.log10(tau_out), np.log10(taus), tables[0])
+        exp_res = (tau_out - tau_in) * rate
+
+        assert res == pytest.approx(exp_res)
+
+    @pytest.mark.parametrize("tau", TAUS)
+    def test_photo_table_lookup_thick(
+        self, taus: np.ndarray, tables: tuple[np.ndarray, np.ndarray], tau: float
+    ) -> None:
+        ntau = len(taus) - 1
+        minltau, maxltau = np.log10(taus[[0, -1]])
+        dstep = (maxltau - minltau) / ntau
+        logtau = minltau, dstep, ntau
+
+        tau_in = tau
+        tau_out = tau_in + 1.0
+        res = libasoratest.photo_table_lookup(tau_in, tau_out, *tables, logtau)
+
+        # Interpolate thick table in log space with numpy
+        rates = np.interp(np.log10([tau_in, tau_out]), np.log10(taus), tables[1])
+        exp_res = rates[0] - rates[1]
+
+        assert res == pytest.approx(exp_res)
 
 
 @pytest.mark.skipif(libasora is None, reason="libasora.so missing, skipping tests")

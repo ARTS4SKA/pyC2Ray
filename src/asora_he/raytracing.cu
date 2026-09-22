@@ -5,6 +5,7 @@
 
 #include <cuda_runtime.h>
 
+#include <cuda/std/cassert>
 #include <cuda/std/span>
 #include <exception>
 
@@ -20,7 +21,7 @@ namespace asora {
         };
     }
 
-    __device__ cuda::std::array<double, 3> density_maps::get(size_t index) const {
+    __device__ double3 density_maps::get(size_t index) const {
         // TODO: need to expose this to parameters.yml
         constexpr double abu_he_mass = 0.2486;
 
@@ -42,14 +43,13 @@ namespace {
 
     element_data make_element_data(
         asora::buffer_tag ion, asora::buffer_tag heat, asora::buffer_tag cdens,
-        asora::buffer_tag sigma, size_t first_nonzero_bin
+        asora::buffer_tag sigma
     ) {
         return {
             get_data_view<double>(ion),
             get_data_view<double>(heat),
             get_data_view<double>(cdens),
             get_data_view<double>(sigma),
-            first_nonzero_bin,
         };
     }
 
@@ -62,103 +62,130 @@ namespace {
         };
     }
 
+    struct optical_depth {
+        /// Optical depth at the start of a cell.
+        double in = 0.0;
+
+        /// Optical depth at the end of a cell.
+        double out = 0.0;
+
+        /// Optical depth of the cell itself (difference between out and in).
+        __device__ double cell() const { return out - in; }
+    };
+
+    struct photo_rate {
+        double ionization = 0.0;
+        double heating = 0.0;
+
+        /// Add the contribution from a cell to the total photoionization and heating
+        /// rates.
+        __device__ void add(
+            double ion, double heat, const optical_depth &tau,
+            const optical_depth &tau_tot
+        ) {
+            assert(tau_tot.cell() > 0.0);
+            // FIXME: potentially a problem if tau_tot.cell is close to zero.
+            auto scale = tau.cell() / tau_tot.cell();
+            ionization += ion * scale;
+            heating += heat * scale;
+        }
+    };
+
+    // Compute the photoionization and heating rates for a given cell based on the
+    // incoming and outgoing column densities, cross sections, and pre-computed
+    // photoionization tables.
+    __device__ cuda::std::array<photo_rate, 3> compute_photo_rates(
+        const double3 &cd_in, const double3 &cd_out,
+        const double *__restrict__ cross_section_HI,
+        const double *__restrict__ cross_section_HeI,
+        const double *__restrict__ cross_section_HeII,
+        const photo_tables<> &__restrict__ ion_tables,
+        const photo_tables<> &__restrict__ heat_tables, const linspace<> &logtau,
+        size_t num_freq
+    ) {
+        photo_rate rate_HI;
+        photo_rate rate_HeI;
+        photo_rate rate_HeII;
+
+        // Frequency loop.
+        for (size_t nf = 0; nf < num_freq; ++nf) {
+            // Compute optical depths.
+            auto &sigma_HI = cross_section_HI[nf];
+            auto &sigma_HeI = cross_section_HeI[nf];
+            auto &sigma_HeII = cross_section_HeII[nf];
+
+            optical_depth tau_HI{cd_in.x * sigma_HI, cd_out.x * sigma_HI};
+            optical_depth tau_HeI{cd_in.y * sigma_HeI, cd_out.y * sigma_HeI};
+            optical_depth tau_HeII{cd_in.z * sigma_HeII, cd_out.z * sigma_HeII};
+            optical_depth tau_tot{
+                tau_HI.in + tau_HeI.in + tau_HeII.in,
+                tau_HI.out + tau_HeI.out + tau_HeII.out
+            };
+
+            // Find the table indices for interpolation.
+            auto tpos_in = log_table_index(tau_tot.in, logtau);
+            auto tpos_out = log_table_index(tau_tot.out, logtau);
+
+            auto nf_offset = nf * (logtau.num + 1);
+            auto phi = photo_table_lookup(
+                tpos_in, tpos_out, tau_tot.cell(),
+                {ion_tables.thin + nf_offset, ion_tables.thick + nf_offset}
+            );
+            auto heat = photo_table_lookup(
+                tpos_in, tpos_out, tau_tot.cell(),
+                {heat_tables.thin + nf_offset, heat_tables.thick + nf_offset}
+            );
+
+            // Update the photoionization and heating rates for each species.
+            rate_HI.add(phi, heat, tau_HI, tau_tot);
+            rate_HeI.add(phi, heat, tau_HeI, tau_tot);
+            rate_HeII.add(phi, heat, tau_HeII, tau_tot);
+        }  // end loop freq
+
+        return {std::move(rate_HI), std::move(rate_HeI), std::move(rate_HeII)};
+    }
+
     // Compute the photoionization rate for a given cell based on the incoming column
     // density and the pre-computed photoionization tables.
     __device__ void update_photo_rates(
         element_data &__restrict__ data_HI, element_data &__restrict__ data_HeI,
         element_data &__restrict__ data_HeII, size_t cd_index, size_t ph_index,
-        const cuda::std::array<double, 3> &coldens_in,  // for HI, HeI, HeII
-        const cuda::std::array<double, 3> &ndens_in,    // for HI, HeI, HeII
-        double path, double strength, double vol,
-        const photo_tables &__restrict__ ion_tables,
-        const photo_tables &__restrict__ heat_tables, const linspace<double> &logtau,
+        const double3 &coldens_in, const double3 &ndens_in, double path, double scale,
+        const photo_tables<> &__restrict__ ion_tables,
+        const photo_tables<> &__restrict__ heat_tables, const linspace<> &logtau,
         size_t num_freq
     ) {
-        // Compute outgoing column density and add to array for subsequent
-        // interpolations
-        auto &&[cd_in_HI, cd_in_HeI, cd_in_HeII] = coldens_in;
         auto &&[nHI, nHeI, nHeII] = ndens_in;
+        double3 coldens_out = {
+            coldens_in.x + nHI * path, coldens_in.y + nHeI * path,
+            coldens_in.z + nHeII * path
+        };
+        data_HI.column_density[cd_index] = coldens_out.x;
+        data_HeI.column_density[cd_index] = coldens_out.y;
+        data_HeII.column_density[cd_index] = coldens_out.z;
 
-        auto &cd_out_HI = data_HI.column_density[cd_index];
-        auto &cd_out_HeI = data_HeI.column_density[cd_index];
-        auto &cd_out_HeII = data_HeII.column_density[cd_index];
+        auto &&[rate_HI, rate_HeI, rate_HeII] = compute_photo_rates(
+            coldens_in, coldens_out, data_HI.cross_section, data_HeI.cross_section,
+            data_HeII.cross_section, ion_tables, heat_tables, logtau, num_freq
+        );
 
-        cd_out_HI = cd_in_HI + nHI * path;
-        cd_out_HeI = cd_in_HeI + nHeI * path;
-        cd_out_HeII = cd_in_HeII + nHeII * path;
-
-        // Pair that represents {photo-ionization, photo-heating} rates.
-        // Default-initialized to {0, 0}
-        using photo_rate = cuda::std::pair<double, double>;
-        photo_rate rate_HI;
-        photo_rate rate_HeI;
-        photo_rate rate_HeII;
-
-        // Pair that represents optical depths for {in, out}-going column-density.
-        // Default-initialized to {0, 0}
-        using tau = cuda::std::pair<double, double>;
-        auto get_tau = [](size_t nf, const element_data &data, double cd_in,
-                          double cd_out) -> tau {
-            if (nf < data.first_nonzero_bin) return {0.0, 0.0};
-            auto sigma = data.cross_section[nf];
-            return {cd_in * sigma, cd_out * sigma};
+        // Rescale the photo rates by the flux strength normalized per volume (scale)
+        // and per neutral density (part of the photon-conserving rate prescription)
+        // and add it to the global array
+        // FIXME: potentially a problem if the fraction value is close to zero.
+        auto atomic_update = [=](double *data, double rate, double ndens) {
+            assert(ndens > 0.0);
+            atomicAdd(data + ph_index, rate * scale / ndens);
         };
 
-        // Frequency loop
-        for (size_t nf = 0; nf < num_freq; ++nf) {
-            // Compute optical depths
-            auto tau_HI = get_tau(nf, data_HI, cd_in_HI, cd_out_HI);
-            auto tau_HeI = get_tau(nf, data_HeI, cd_in_HeI, cd_out_HeI);
-            auto tau_HeII = get_tau(nf, data_HeII, cd_in_HeII, cd_out_HeII);
+        atomic_update(data_HI.photo_ionization, rate_HI.ionization, nHI);
+        atomic_update(data_HI.photo_heating, rate_HI.heating, nHI);
 
-            tau tau_tot{
-                tau_HI.first + tau_HeI.first + tau_HeII.first,
-                tau_HI.second + tau_HeI.second + tau_HeII.second
-            };
+        atomic_update(data_HeI.photo_ionization, rate_HeI.ionization, nHeI);
+        atomic_update(data_HeI.photo_heating, rate_HeI.heating, nHeI);
 
-            auto norm = strength / vol / (tau_tot.second - tau_tot.first);
-
-            auto nf_offset = nf * (logtau.num + 1);
-            auto phi = asora::photo_rates_gpu(
-                tau_tot.first, tau_tot.second,
-                {ion_tables.thin + nf_offset, ion_tables.thick + nf_offset}, logtau
-            );
-            phi *= norm;
-            // TODO: heating requires more tables than just one because of the
-            // frequency dependency. Probably solution is to move this inside
-            // the if else condition (look at the radiation_tables.f90 line 322)
-            auto heat = asora::photo_rates_gpu(
-                tau_tot.first, tau_tot.second,
-                {heat_tables.thin + 3 * nf_offset, heat_tables.thick + 3 * nf_offset},
-                logtau
-            );
-            heat *= norm;
-
-            // Assign the photo-ionization and heating rates to each element
-            // (part of the photon-conserving rate prescription)
-            // TODO: potentially a problem if the fraction value is close to
-            // zero.
-            auto tau_cell_HI = tau_HI.second - tau_HI.first;
-            auto tau_cell_HeI = tau_HeI.second - tau_HeI.first;
-            auto tau_cell_HeII = tau_HeII.second - tau_HeII.first;
-
-            rate_HI.first += phi * tau_cell_HI;
-            rate_HeI.first += phi * tau_cell_HeI;
-            rate_HeII.first += phi * tau_cell_HeII;
-            rate_HI.second += heat * tau_cell_HI;
-            rate_HeI.second += heat * tau_cell_HeI;
-            rate_HeII.second += heat * tau_cell_HeII;
-        }  // end loop freq
-
-        // Rescale the photo rates by the flux strength normalized per volume
-        // and per neutral density (part of the photon-conserving rate prescription) and
-        // add it to the global array
-        atomicAdd(data_HI.photo_ionization + ph_index, rate_HI.first / nHI);
-        atomicAdd(data_HeI.photo_ionization + ph_index, rate_HeI.first / nHeI);
-        atomicAdd(data_HeII.photo_ionization + ph_index, rate_HeII.first / nHeII);
-        atomicAdd(data_HI.photo_heating + ph_index, rate_HI.second / nHI);
-        atomicAdd(data_HeI.photo_heating + ph_index, rate_HeI.second / nHeI);
-        atomicAdd(data_HeII.photo_heating + ph_index, rate_HeII.second / nHeII);
+        atomic_update(data_HeII.photo_ionization, rate_HeII.ionization, nHeII);
+        atomic_update(data_HeII.photo_heating, rate_HeII.heating, nHeII);
     }
 
     // Raytracing operation on a given cell, identified by (q, s). This is performed by
@@ -168,8 +195,8 @@ namespace {
         int q, int s, int i0, int j0, int k0, double strength, double dr, double R_max,
         element_data &__restrict__ data_HI, element_data &__restrict__ data_HeI,
         element_data &__restrict__ data_HeII, const density_maps &densities,
-        const photo_tables &__restrict__ ion_tables,
-        const photo_tables &__restrict__ heat_tables, const linspace<double> &logtau,
+        const photo_tables<> &__restrict__ ion_tables,
+        const photo_tables<> &__restrict__ heat_tables, const linspace<double> &logtau,
         size_t m1, size_t num_freq
     ) {
         auto &&[di, dj, dk] = linthrd2cart(q, s);
@@ -224,7 +251,7 @@ namespace {
 
         update_photo_rates(
             data_HI, data_HeI, data_HeII, q_off + s, index,
-            {cd_in_HI, cd_in_HeI, cd_in_HeII}, ns, path, strength, vol, ion_tables,
+            {cd_in_HI, cd_in_HeI, cd_in_HeII}, ns, path, strength / vol, ion_tables,
             heat_tables, logtau, num_freq
         );
     }
@@ -239,8 +266,8 @@ namespace asora {
     __global__ void evolve0D_gpu(
         size_t m1, double dr, double R_max, int q_max, size_t ns_start, size_t num_src,
         int *src_pos, double *src_flux, element_data data_HI, element_data data_HeI,
-        element_data data_HeII, density_maps densities, photo_tables ion_tables,
-        photo_tables heat_tables, linspace<double> logtau, size_t num_freq
+        element_data data_HeII, density_maps densities, photo_tables<> ion_tables,
+        photo_tables<> heat_tables, linspace<double> logtau, size_t num_freq
     ) {
         /* The raytracing kernel proceeds as follows:
          * 1. Select the source based on the thread-block number
@@ -278,7 +305,7 @@ namespace asora {
             auto ns = densities.get(index);
             update_photo_rates(
                 data_HI, data_HeI, data_HeII, 0, index, {0.0, 0.0, 0.0}, ns, 0.5 * dr,
-                strength, dr * dr * dr, ion_tables, heat_tables, logtau, num_freq
+                strength / (dr * dr * dr), ion_tables, heat_tables, logtau, num_freq
             );
         }
         __syncthreads();
@@ -311,12 +338,11 @@ namespace asora {
     // ========================================================================
     void do_all_sources_gpu(
         double R, const double *sig_HI, const double *sig_HeI, const double *sig_HeII,
-        size_t num_bin_1, size_t num_bin_2, size_t num_freq, double dr,
-        const double *xHII_av, const double *xHeII_av, const double *xHeIII_av,
-        double *phion_HI, double *phion_HeI, double *phion_HeII, double *pheat_HI,
-        double *pheat_HeI, double *pheat_HeII, size_t num_src, size_t m1,
-        double minlogtau, double dlogtau, size_t num_tau, size_t grid_size,
-        size_t block_size
+        size_t num_freq, double dr, const double *xHII_av, const double *xHeII_av,
+        const double *xHeIII_av, double *phion_HI, double *phion_HeI,
+        double *phion_HeII, double *pheat_HI, double *pheat_HeI, double *pheat_HeII,
+        size_t num_src, size_t m1, double minlogtau, double dlogtau, size_t num_tau,
+        size_t grid_size, size_t block_size
     ) {
         device::check_initialized();
 
@@ -380,16 +406,15 @@ namespace asora {
 
         auto data_HI = make_element_data(
             buffer_tag::photo_ionization_HI, buffer_tag::photo_heating_HI,
-            buffer_tag::column_density_HI, buffer_tag::cross_section_HI, 0
+            buffer_tag::column_density_HI, buffer_tag::cross_section_HI
         );
         auto data_HeI = make_element_data(
             buffer_tag::photo_ionization_HeI, buffer_tag::photo_heating_HeI,
-            buffer_tag::column_density_HeI, buffer_tag::cross_section_HeI, num_bin_1
+            buffer_tag::column_density_HeI, buffer_tag::cross_section_HeI
         );
         auto data_HeII = make_element_data(
             buffer_tag::photo_ionization_HeII, buffer_tag::photo_heating_HeII,
-            buffer_tag::column_density_HeII, buffer_tag::cross_section_HeII,
-            num_bin_1 + num_bin_2
+            buffer_tag::column_density_HeII, buffer_tag::cross_section_HeII
         );
 
         photo_tables ion_tables{

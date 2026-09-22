@@ -71,9 +71,6 @@ static PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject 
     PyArrayObject *sig_HI;
     PyArrayObject *sig_HeI;
     PyArrayObject *sig_HeII;
-    size_t nbin1;
-    size_t nbin2;
-    size_t nbin3;
     size_t num_freq;
     double dr;
     PyArrayObject *xHII_av;
@@ -94,10 +91,10 @@ static PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject 
     size_t block_size = 256;
 
     if (!PyArg_ParseTuple(
-            args, "dOOOkkkkdOOOOOOOOOkkddkk|k", &R, &sig_HI, &sig_HeI, &sig_HeII,
-            &nbin1, &nbin2, &nbin3, &num_freq, &dr, &xHII_av, &xHeII_av, &xHeIII_av,
-            &phion_HI, &phion_HeI, &phion_HeII, &pheat_HI, &pheat_HeI, &pheat_HeII,
-            &num_src, &m1, &minlogtau, &dlogtau, &num_tau, &grid_size, &block_size
+            args, "dOOOkdOOOOOOOOOkkddkk|k", &R, &sig_HI, &sig_HeI, &sig_HeII,
+            &num_freq, &dr, &xHII_av, &xHeII_av, &xHeIII_av, &phion_HI, &phion_HeI,
+            &phion_HeII, &pheat_HI, &pheat_HeI, &pheat_HeII, &num_src, &m1, &minlogtau,
+            &dlogtau, &num_tau, &grid_size, &block_size
         ))
         return nullptr;
 
@@ -126,11 +123,10 @@ static PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject 
 
     try {
         asora::do_all_sources_gpu(
-            R, sig_HI_data, sig_HeI_data, sig_HeII_data, nbin1, nbin2, num_freq, dr,
-            xh_av_HI_data, xh_av_HeI_data, xh_av_HeII_data, phion_HI_data,
-            phion_HeI_data, phion_HeII_data, pheat_HI_data, pheat_HeI_data,
-            pheat_HeII_data, num_src, m1, minlogtau, dlogtau, num_tau, grid_size,
-            block_size
+            R, sig_HI_data, sig_HeI_data, sig_HeII_data, num_freq, dr, xh_av_HI_data,
+            xh_av_HeI_data, xh_av_HeII_data, phion_HI_data, phion_HeI_data,
+            phion_HeII_data, pheat_HI_data, pheat_HeI_data, pheat_HeII_data, num_src,
+            m1, minlogtau, dlogtau, num_tau, grid_size, block_size
         );
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());

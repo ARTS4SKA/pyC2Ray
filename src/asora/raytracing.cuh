@@ -93,7 +93,7 @@ namespace asora {
     __global__ void evolve0D_gpu(
         size_t m1, double dr, double R_max, int q_max, size_t ns_start, size_t num_src,
         int *src_pos, double *src_flux, element_data data_HI, density_maps densities,
-        photo_tables ion_tables, linspace<double> logtau
+        photo_tables<> ion_tables, linspace<> logtau
     );
 
 }  // namespace asora

@@ -46,16 +46,16 @@ def test_cooling_tables(data_dir) -> None:
     assert "tables" in Path(cool_tables.tables_directory).parts
     assert "cooling" in Path(cool_tables.tables_directory).parts
 
-    assert cool_tables.logtemp == (1.0, 0.01, 801)
-    assert len(cool_tables.HI) == 802
+    assert cool_tables.logtemp == (1.0, 0.01, 800)
+    assert len(cool_tables.HI) == 801
     assert max(cool_tables.HI) < 1.0
-    assert len(cool_tables.HII) == 802
+    assert len(cool_tables.HII) == 801
     assert max(cool_tables.HII) < 1.0
-    assert len(cool_tables.HeI) == 802
+    assert len(cool_tables.HeI) == 801
     assert max(cool_tables.HeI) < 1.0
-    assert len(cool_tables.HeII) == 802
+    assert len(cool_tables.HeII) == 801
     assert max(cool_tables.HeII) < 1.0
-    assert len(cool_tables.HeIII) == 802
+    assert len(cool_tables.HeIII) == 801
     assert max(cool_tables.HeIII) < 1.0
 
 
