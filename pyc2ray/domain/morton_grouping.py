@@ -184,9 +184,9 @@ class MortonSourceGrouping(SourceGrouping):
         The validity test is instead more conservative, since the cost is evaluated on an
         inflated sphere, so a group can be closed while an accurate fit would still have
         accepted the candidate. Which one prevails depends on the source distribution.
-        The constraints themselves are always enforced, and the geometry stored on a
-        closed group is never looser than an accurate fit of the same members, since the
-        tighter of the two spheres is kept.
+        The constraints themselves are always enforced: the accurate fit replaces the
+        incremental sphere only when it is tighter and does not cost more, so a closed
+        group never exceeds the memory cost its validity test accepted.
 
         Parameters
         ----------
@@ -225,13 +225,31 @@ class MortonSourceGrouping(SourceGrouping):
         scratch_center = np.empty(3, dtype=float)
 
         def close_group(
-            members: list[Source], cx: float, cy: float, cz: float, radius: float
+            members: list[Source],
+            cx: float,
+            cy: float,
+            cz: float,
+            radius: float,
+            mem_cost: float | None,
+            comp_cost: float | None,
         ) -> SourceGroup:
             """Finalize a group, re-fitting its enclosing sphere accurately.
 
             The incremental sphere is an upper bound and depends on the merge order, while
-            the fit is approximate, so the tighter of the two is kept: a loose radius here
-            would inflate the local grid built around the group for the whole simulation.
+            the fit is approximate, so the tighter of the two is preferred: a loose radius
+            here would inflate the local grid built around the group for the whole
+            simulation.
+
+            A smaller radius does not imply a smaller cost, though: the cell count is taken
+            on the box center ± radius discretized at cell boundaries, so a fitted sphere
+            with a slightly smaller radius but a shifted center can touch one more cell per
+            side than the incremental one. The fit is therefore kept only when its memory
+            cost does not exceed the one of the incremental sphere, which is the cost the
+            validity test accepted: otherwise the group could exceed the memory cap.
+
+            mem_cost and comp_cost are the costs of the incremental sphere, evaluated when
+            its last member was accepted, so they are reused rather than recomputed. They
+            are None for a single-source group, which never went through the validity test.
             """
             center = np.array((cx, cy, cz), dtype=float)
             if len(members) > 1:
@@ -240,11 +258,22 @@ class MortonSourceGrouping(SourceGrouping):
                     np.array([m.radius for m in members], dtype=float),
                 )
                 if fitted_radius < radius:
-                    center, radius = fitted_center, fitted_radius
+                    fitted_mem_cost, fitted_comp_cost = self._group_costs(
+                        fitted_center,
+                        fitted_radius,
+                        members[0].radius,
+                        len(members),
+                        grid,
+                        cost_model,
+                    )
+                    if mem_cost is None or fitted_mem_cost <= mem_cost:
+                        center, radius = fitted_center, fitted_radius
+                        mem_cost, comp_cost = fitted_mem_cost, fitted_comp_cost
 
-            mem_cost, comp_cost = self._group_costs(
-                center, radius, members[0].radius, len(members), grid, cost_model
-            )
+            if mem_cost is None or comp_cost is None:
+                mem_cost, comp_cost = self._group_costs(
+                    center, radius, members[0].radius, len(members), grid, cost_model
+                )
             return SourceGroup(
                 id=-1,  # ID will be assigned later
                 sources=list(members),
@@ -264,6 +293,10 @@ class MortonSourceGrouping(SourceGrouping):
             float(members[0].pos[2]),
         )
         group_radius = float(members[0].radius)
+        # Costs of the current incremental sphere, known once a candidate has been accepted
+        # and reused when the group is closed.
+        group_mem_cost: float | None = None
+        group_comp_cost: float | None = None
 
         for s in ordered_sources[1:]:
             # Check if the new source intersects with the current group. If not, we can start a new group.
@@ -294,7 +327,7 @@ class MortonSourceGrouping(SourceGrouping):
                     scratch_center[0] = trial_x
                     scratch_center[1] = trial_y
                     scratch_center[2] = trial_z
-                    trial_mem_cost, _ = self._group_costs(
+                    trial_mem_cost, trial_comp_cost = self._group_costs(
                         scratch_center,
                         trial_radius,
                         members[0].radius,
@@ -308,10 +341,19 @@ class MortonSourceGrouping(SourceGrouping):
                     members.append(s)
                     center_x, center_y, center_z = trial_x, trial_y, trial_z
                     group_radius = trial_radius
+                    group_mem_cost, group_comp_cost = trial_mem_cost, trial_comp_cost
                     continue
 
             source_groups.append(
-                close_group(members, center_x, center_y, center_z, group_radius)
+                close_group(
+                    members,
+                    center_x,
+                    center_y,
+                    center_z,
+                    group_radius,
+                    group_mem_cost,
+                    group_comp_cost,
+                )
             )
             members = [s]
             center_x, center_y, center_z = (
@@ -320,9 +362,18 @@ class MortonSourceGrouping(SourceGrouping):
                 float(s.pos[2]),
             )
             group_radius = float(s.radius)
+            group_mem_cost = group_comp_cost = None
 
         source_groups.append(
-            close_group(members, center_x, center_y, center_z, group_radius)
+            close_group(
+                members,
+                center_x,
+                center_y,
+                center_z,
+                group_radius,
+                group_mem_cost,
+                group_comp_cost,
+            )
         )
 
         # Update group IDs
