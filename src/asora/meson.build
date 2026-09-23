@@ -17,9 +17,17 @@ if compute_cap == ''
         warning('nvidia-smi not detected; defaulting to compute capability 6.0')
         compute_cap = '60'
     else
-        cc = r_compute_cap.stdout().strip()
+        # With several GPUs present, nvidia-smi reports one line each; use the first.
+        cc = r_compute_cap.stdout().strip().split('\n')[0].strip()
         message(f'Local compute capability is determined to be @cc@')
-        compute_cap = cc[0] + '0'
+        # Keep the minor version: 8.9 is sm_89, not sm_80.
+        cc_parts = cc.split('.')
+        if cc_parts.length() < 2
+            warning('Unexpected compute capability format; defaulting to 6.0')
+            compute_cap = '60'
+        else
+            compute_cap = cc_parts[0] + cc_parts[1]
+        endif
     endif
 endif
 
@@ -44,10 +52,11 @@ endif
 # CUDA sources for ASORA
 asora_sources = [
     'memory.cpp',
-    'rates.cu',
     'raytracing.cu',
+    'shortchar.cu',
     'utils.cu',
     'chemistry.cu',
+    'python_module.cu',
 ]
 cuda_dep = dependency('cuda', version: '>=12', static: false)
 
@@ -70,34 +79,13 @@ if cuda_dep.version().version_compare('>= 13.0')
 endif
 cccl_dep = declare_dependency(compile_args: cccl_args)
 
-asora_core = static_library(
-    'asora_core',
-    asora_sources,
-    dependencies: [cuda_dep, cccl_dep],
-    cuda_args: nvcc_flags,
-    link_args: nvlink_flags,
-)
-
 # Build ASORA module with nvcc
 py.extension_module(
     'libasora',
-    'python_module.cu',
+    asora_sources,
     dependencies: [py_dep, np_dep, cuda_dep, cccl_dep],
     install: true,
     subdir: 'pyc2ray/lib',
-    link_with: asora_core,
-    cuda_args: nvcc_flags,
-    link_args: nvlink_flags,
-)
-
-# Build ASORA test module with nvcc
-py.extension_module(
-    'libasoratest',
-    ['tests.cu', 'python_test_module.cu'],
-    dependencies: [py_dep, np_dep, cuda_dep, cccl_dep],
-    install: true,
-    subdir: 'pyc2ray/lib',
-    link_with: asora_core,
     cuda_args: nvcc_flags,
     link_args: nvlink_flags,
 )
