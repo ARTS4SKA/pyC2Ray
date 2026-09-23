@@ -78,7 +78,8 @@ namespace asora {
         float *__restrict__ paths = nullptr;
         index4 *__restrict__ indices = nullptr;
 
-        shortchar_lut();
+        shortchar_lut() = default;
+        shortchar_lut(std::in_place_t);
         shortchar_lut(const shortchar_lut &) = default;
         shortchar_lut &operator=(const shortchar_lut &) = default;
 
@@ -101,18 +102,20 @@ namespace asora {
      * @param q_max Maximum q-shell index, included.
      * @return The number of cells in the q-shells up to q_max.
      */
-    size_t create_shortchar_interp_lut(int q_max);
+    shortchar_lut create_shortchar_interp_lut(int q_max);
 
     // Array of structure for a short-characteristic interpolation LUT on host.
     using shortchar_entries = std::vector<shortchar_info>;
 
     /* @brief Copy the short-characteristic interpolation LUT from device to host.
      *
-     * @param q_max Maximum q-shell index, included.
+     * The user must call create_shortchar_interp_lut(q_max) first to allocate and fill
+     * the LUT on the device.
+     *
      * @return A vector of shortchar_interp_lut::entry structures containing the lookup
      * table data on the host.
      */
-    shortchar_entries copy_lut_to_host(int q_max);
+    shortchar_entries copy_shortchar_lut_to_host();
 
     /* @brief Perform short-characteristic interpolation for a given cell.
      *

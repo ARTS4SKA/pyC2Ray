@@ -43,7 +43,7 @@ namespace {
         if (!obj) return nullptr;
 
         PyObject *indices = Py_BuildValue(
-            "kkkk", info.indices[0], info.indices[1], info.indices[2], info.indices[3]
+            "IIII", info.indices[0], info.indices[1], info.indices[2], info.indices[3]
         );
         if (!indices) {
             Py_DECREF(obj);
@@ -169,26 +169,21 @@ PyObject *asora_create_shortchar_lut([[maybe_unused]] PyObject *self, PyObject *
     int q_max = 0;
     if (!PyArg_ParseTuple(args, "i", &q_max)) return nullptr;
 
-    size_t n_cells = 0;
     try {
         // Initialize the device
-        n_cells = asora::create_shortchar_interp_lut(q_max);
+        asora::create_shortchar_interp_lut(q_max);
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return nullptr;
     }
 
-    return Py_BuildValue("k", n_cells);
+    return Py_None;
 }
 
 PyObject *asora_get_shortchar_lut([[maybe_unused]] PyObject *self, PyObject *args) {
-    int q_max = 0;
-    if (!PyArg_ParseTuple(args, "i", &q_max)) return nullptr;
-
     asora::shortchar_entries lut;
     try {
-        asora::create_shortchar_interp_lut(q_max);
-        lut = asora::copy_lut_to_host(q_max);
+        lut = asora::copy_shortchar_lut_to_host();
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return nullptr;
