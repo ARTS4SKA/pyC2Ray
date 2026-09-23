@@ -81,12 +81,23 @@ class TestShortCharacteristicsInterpolation:
         unpacked = libasora.unpack_offset(packed)
         assert pos == unpacked
 
-    def test_shortchar_lut(self, init_device) -> None:
-        q_max = 50
+    def test_shortchar_lut_not_created(self, init_device) -> None:
         assert libasora is not None
-        lut = libasora.get_shortchar_lut(q_max)
+        with pytest.raises(RuntimeError):
+            libasora.get_shortchar_lut()
 
-        assert len(lut) == libasora.cells_to_shell(q_max)
+    def test_shortchar_lut_created(self, init_device) -> None:
+        assert libasora is not None
+
+        libasora.create_shortchar_lut(10)
+        lut = libasora.get_shortchar_lut()
+        assert len(lut) == libasora.cells_to_shell(10)
+
+    def test_shortchar_lut_check_items(self, init_device) -> None:
+        assert libasora is not None
+
+        libasora.create_shortchar_lut(50)
+        lut = libasora.get_shortchar_lut()
 
         for item in lut:
             # Check that the path and geometric factors match.
@@ -105,10 +116,16 @@ class TestShortCharacteristicsInterpolation:
                     assert abs(item.dj - other_item.dj) <= 1
                     assert abs(item.dk - other_item.dk) <= 1
 
+    def test_shortchar_lut_check_order(self, init_device) -> None:
+        assert libasora is not None
+
+        libasora.create_shortchar_lut(50)
+        lut = libasora.get_shortchar_lut()
+
         # Entries are sorted in lexicographic order of (di, dj, dk)
         # in each q-shell.
         start = 0
-        for q in range(q_max + 1):
+        for q in range(51):
             ncells = libasora.cells_in_shell(q)
             s = slice(start, start + ncells)
             ijk = np.array(

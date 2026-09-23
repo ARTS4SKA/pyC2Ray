@@ -170,14 +170,14 @@ namespace asora {
         linspace<double> logtau{minlogtau, dlogtau, static_cast<size_t>(num_tau)};
 
         // Collect the LUT for raytracing kernel.
+        shortchar_lut lut_d{};
         try {
-            create_shortchar_interp_lut(q_max);
+            lut_d = create_shortchar_interp_lut(q_max);
         } catch (const std::exception &e) {
             // If the LUT cannot be created, lut_d below will be empty.
             std::cerr << "Error creating raytracing lookup table: " << e.what()
                       << "; calculating cinterp on the fly\n";
         }
-        shortchar_lut lut_d{};
 
         // Loop over batches of sources
         for (size_t ns = 0; ns < num_src; ns += grid_size) {
