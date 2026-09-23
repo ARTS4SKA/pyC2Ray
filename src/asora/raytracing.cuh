@@ -73,7 +73,7 @@ namespace asora {
         shortchar_lut lut, size_t m1, double dr, double R_max, int q_max,
         size_t ns_start, size_t num_src, const int *__restrict__ src_pos,
         const double *__restrict__ src_flux, element_data data_HI,
-        density_maps densities, photo_tables ion_tables, linspace<double> logtau
+        density_maps densities, photo_tables<> ion_tables, linspace<double> logtau
     );
 
 }  // namespace asora

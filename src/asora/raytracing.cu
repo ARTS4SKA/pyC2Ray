@@ -32,7 +32,7 @@ namespace {
     // density and the pre-computed photoionization tables.
     __device__ void update_photo_rates(
         element_data &data_HI, size_t cd_index, size_t ph_index, double coldens_in,
-        double nHI, double path, double scale, const photo_tables &ion_tables,
+        double nHI, double path, double scale, const photo_tables<> &ion_tables,
         const linspace<double> &logtau
     ) {
         // Compute outgoing column density and add to array for subsequent
@@ -43,11 +43,7 @@ namespace {
         auto tau_in = coldens_in * data_HI.cross_section;
         auto tau_out = coldens_out * data_HI.cross_section;
 
-#if defined(GREY_NOTABLES)
-        auto phion = asora::photo_rates_test_gpu(tau_in, tau_out);
-#else
-        auto phion = asora::photo_rates_gpu(tau_in, tau_out, ion_tables, logtau);
-#endif
+        auto phion = asora::photo_table_lookup(tau_in, tau_out, ion_tables, logtau);
         // Rescale the photo-ionization rate by the flux strength normalized per volume
         // and per neutral density (part of the photon-conserving rate prescription) and
         // add it to the global array. Dividing by the product uses one FP64 division
@@ -61,7 +57,7 @@ namespace {
     __device__ void raytrace(
         const shortchar_info &info, size_t cd_index, const int3 &pos, double scale,
         element_data &data_HI, double dr, double R_max, const density_maps &densities,
-        size_t m1, const photo_tables &ion_tables, const linspace<double> &logtau,
+        size_t m1, const photo_tables<> &ion_tables, const linspace<double> &logtau,
         const int2 &limit
     ) {
         const auto &[di, dj, dk] = info.pos;
@@ -207,7 +203,7 @@ namespace asora {
         shortchar_lut lut, size_t m1, double dr, double R_max, int q_max,
         size_t ns_start, size_t num_src, const int *__restrict__ src_pos,
         const double *__restrict__ src_flux, element_data data_HI,
-        density_maps densities, photo_tables ion_tables, linspace<double> logtau
+        density_maps densities, photo_tables<> ion_tables, linspace<double> logtau
     ) {
         /* The raytracing kernel proceeds as follows:
          * 1. Select the source based on the thread-block number
