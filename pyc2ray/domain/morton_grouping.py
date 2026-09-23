@@ -176,14 +176,11 @@ class MortonSourceGrouping(SourceGrouping):
         so it is used for the split and validity decisions only: each group is re-fitted
         accurately once it is closed, which costs one fit per group instead of one per source.
 
-        Because the decisions are taken on an upper bound rather than on an accurate
-        sphere, the split points differ from the ones an accurate fit would produce,
-        through two opposing effects. The intersection test is more permissive, since a
-        larger sphere intersects the next source more often, so geometric splits can be
-        missed and sources merged into a group an accurate sphere would have left out.
-        The validity test is instead more conservative, since the cost is evaluated on an
-        inflated sphere, so a group can be closed while an accurate fit would still have
-        accepted the candidate. Which one prevails depends on the source distribution.
+        Because the incremental and accurately fitted spheres can differ in both radius
+        and center, neither necessarily contains the other. Cell-boundary discretization
+        can also make the larger-radius sphere cheaper. Consequently, both intersection
+        and validity decisions may be either more or less permissive than accurate fitting,
+        depending on the source distribution and grid alignment.
         The constraints themselves are always enforced: the accurate fit replaces the
         incremental sphere only when it is tighter and does not cost more, so a closed
         group never exceeds the memory cost its validity test accepted.
