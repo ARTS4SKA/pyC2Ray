@@ -10,13 +10,10 @@
 #include <format>
 
 #ifdef __CUDA_ARCH__
-#define assert_or_throw(condition, pos) assert(condition)
+#define assert_or_throw(condition, msg) assert(condition)
 #else
-#define assert_or_throw(condition, pos)                              \
-    if (!(condition))                                                \
-        throw std::runtime_error(                                    \
-            std::format("({}, {}, {}) is out of bounds", di, dj, dk) \
-        );
+#define assert_or_throw(condition, msg) \
+    if (!(condition)) throw std::runtime_error(msg);
 #endif
 
 namespace {
@@ -51,24 +48,30 @@ namespace asora {
 
         auto&& [di, dj, dk] = pos;
 
+#ifdef __CUDA_ARCH__
+        constexpr char* msg = "";
+#else
+        std::string msg = std::format("({}, {}, {}) is out of bounds", di, dj, dk);
+#endif
+
         if (di == Q_MAX) {
-            assert_or_throw(dj == 0 && dk == 0, pos);
+            assert_or_throw(dj == 0 && dk == 0, msg);
             return uint32_t(3) << (3 * OFFSET_BITS);
         }
 
         if (dj == Q_MAX) {
-            assert_or_throw(di == 0 && dk == 0, pos);
+            assert_or_throw(di == 0 && dk == 0, msg);
             return uint32_t(2) << (3 * OFFSET_BITS);
         }
 
         if (dk == Q_MAX) {
-            assert_or_throw(di == 0 && dj == 0, pos);
+            assert_or_throw(di == 0 && dj == 0, msg);
             return uint32_t(1) << (3 * OFFSET_BITS);
         }
 
-        assert_or_throw(-Q_MAX <= di && di < Q_MAX, pos);
-        assert_or_throw(-Q_MAX <= dj && dj < Q_MAX, pos);
-        assert_or_throw(-Q_MAX <= dk && dk < Q_MAX, pos);
+        assert_or_throw(-Q_MAX <= di && di < Q_MAX, msg);
+        assert_or_throw(-Q_MAX <= dj && dj < Q_MAX, msg);
+        assert_or_throw(-Q_MAX <= dk && dk < Q_MAX, msg);
 
         // 3 x 10 bits = 30 bits used, 2 bits spare in the uint32.
         auto pi = static_cast<uint32_t>(di + Q_MAX) & OFFSET_MASK;
@@ -96,7 +99,11 @@ namespace asora {
 
     // Return dx, dy, path
     __host__ __device__ float3 compute_shortchar_factors(int di, int dj, int dk) {
-        assert(std::abs(dk) >= std::abs(di) && std::abs(dk) >= std::abs(dj) && dk != 0);
+        assert_or_throw(
+            std::abs(dk) >= std::abs(di) && std::abs(dk) >= std::abs(dj) && dk != 0,
+            "Invalid short-characteristic offsets: |dk| must be the largest and "
+            "non-zero"
+        );
         auto inv_dk = 1.f / std::abs(dk);
         auto xi = di * inv_dk;
         auto xj = dj * inv_dk;
@@ -109,13 +116,13 @@ namespace asora {
         if (pos.x == 0 && pos.y == 0 && pos.z == 0)
             return {pos, 1.f, 0.f, 0.f, 0.5f, {0, 0, 0, 0}};
 
-        assert(std::abs(pos.x) + std::abs(pos.y) + std::abs(pos.z) > 0);
-
         auto&& [di, dj, dk] = pos;
 
         auto ai = std::abs(di);
         auto aj = std::abs(dj);
         auto ak = std::abs(dk);
+
+        assert(ai + aj + ak > 0);
 
         float multiplier = 1.f;
         if (ai <= 1 && aj <= 1 && ak <= 1)
@@ -171,7 +178,7 @@ namespace asora {
         return {pos, multiplier, dd.x, dd.y, dd.z, std::move(indices)};
     }
 
-    shortchar_lut::shortchar_lut() {
+    shortchar_lut::shortchar_lut(std::in_place_t) {
         // LUT not setup.
         if (!device::contains(buffer_tag::raylut_offsets)) return;
 
@@ -203,7 +210,7 @@ namespace asora {
         }
     }
 
-    size_t create_shortchar_interp_lut(int q_max) {
+    shortchar_lut create_shortchar_interp_lut(int q_max) {
         if (q_max < 0 || q_max > Q_MAX) {
             throw std::invalid_argument("q_max must be in the range [0, Q_MAX]");
         }
@@ -214,7 +221,7 @@ namespace asora {
         if (device::contains(buffer_tag::raylut_offsets)) {
             auto existing_size =
                 device::get(buffer_tag::raylut_offsets).size<uint32_t>();
-            if (existing_size >= n_cells) return n_cells;
+            if (existing_size >= n_cells) return shortchar_lut{std::in_place};
         }
 
         // Allocate lut memory on device
@@ -226,15 +233,21 @@ namespace asora {
         device::ensure<index4>(buffer_tag::raylut_indices, n_cells);
 
         // Launch kernel to fill lut
-        shortchar_lut lut_d{};
+        shortchar_lut lut_d{std::in_place};
 
         fill_lut_kernel<<<1, 1024>>>(lut_d, q_max);
         safe_cuda(cudaDeviceSynchronize());
 
-        return n_cells;
+        return lut_d;
     }
 
-    shortchar_entries copy_lut_to_host(int q_max) {
+    shortchar_entries copy_shortchar_lut_to_host() {
+        if (!device::contains(buffer_tag::raylut_offsets)) {
+            throw std::runtime_error(
+                "LUT not found on device. Call create_shortchar_interp_lut(q_max) first"
+            );
+        }
+
         auto offsets = device::get(buffer_tag::raylut_offsets);
         auto multipliers = device::get(buffer_tag::raylut_multipliers);
         auto dxs = device::get(buffer_tag::raylut_dx);
@@ -242,12 +255,7 @@ namespace asora {
         auto paths = device::get(buffer_tag::raylut_path);
         auto indices = device::get(buffer_tag::raylut_indices);
 
-        auto n_cells = asora::cells_to_shell(q_max);
-        if (n_cells > offsets.size<uint32_t>())
-            throw std::runtime_error(
-                "Requested a larger LUT than what available. Call "
-                "create_shortchar_interp_lut(q_max) with the correct q_max value first"
-            );
+        auto n_cells = offsets.size<uint32_t>();
 
         std::vector<uint32_t> offsets_h(n_cells);
         std::vector<float> multipliers_h(n_cells);
