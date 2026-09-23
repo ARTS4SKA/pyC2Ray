@@ -370,7 +370,7 @@ class C2Ray:
             self.ndens *= dilution_factor
 
             # Set cell size to current proper size
-            self.dr = self.dr_c * self.cosmology.scale_factor(z_half)
+            self.dr = self.dr_c * float(self.cosmology.scale_factor(z_half))
 
         # Set new clumping factor if is not redshift constant
         if self.sinks.clumping_model != "constant":
@@ -650,7 +650,10 @@ This corresponds to %.3f grid cells.""",
 Cosmological parameters used:
 h   = {h:.4f}, Tcmb0 = {Tcmb0:.3e}
 Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}""")
-            self.dr = self.cosmology.scale_factor(self.zred_0) * self.dr_c
+            # float(): astropy returns a dimensionless Quantity, which would make dr
+            # (declared float) a Quantity and propagate into the source positions used
+            # by the domain decomposition, where integer bit operations reject it.
+            self.dr = float(self.cosmology.scale_factor(self.zred_0)) * self.dr_c
         else:
             logger.info("Cosmology is off.")
 

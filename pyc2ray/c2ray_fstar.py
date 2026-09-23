@@ -151,7 +151,7 @@ class C2Ray_fstar(C2Ray):
                     srcpos_mpc=srcpos_mpc,
                     mstar_msun=sfr_spice * fesc,
                     boxsize=self.boxsize / self.cosmology.h,
-                    meshsize=self.N + 1,
+                    meshsize=self.N,
                 )
 
                 # normalize flux
@@ -168,7 +168,7 @@ class C2Ray_fstar(C2Ray):
                     srcpos_mpc=srcpos_mpc,
                     mstar_msun=mstar_msun,
                     boxsize=self.boxsize / self.cosmology.h,
-                    meshsize=self.N + 1,
+                    meshsize=self.N,
                 )
 
                 # normalize flux
