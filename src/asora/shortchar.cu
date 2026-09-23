@@ -27,6 +27,11 @@ namespace {
     /// Maximum allowed q-shell index, included.
     constexpr int Q_MAX = 512;
 
+    __device__ cuda::std::array<float, 4> make_weights(float dx, float dy) {
+        auto dxdy = dx * dy;
+        return {1.f - dx - dy + dxdy, dx - dxdy, dy - dxdy, dxdy};
+    }
+
 }  // namespace
 
 namespace asora {
@@ -149,11 +154,7 @@ namespace asora {
             dd = compute_shortchar_factors(dj, dk, di);
         }
 
-        const cuda::std::array<float, 4> weights = {
-            (1.f - dd.x) * (1.f - dd.y), (1.f - dd.y) * dd.x, (1.f - dd.x) * dd.y,
-            dd.x * dd.y
-        };
-
+        auto weights = make_weights(dd.x, dd.y);
         size_t index = 0;
         index4 indices;
         auto sx = shifts.data();
@@ -282,18 +283,14 @@ namespace asora {
         // Reference optical depth from C2-Ray interpolation function.
         constexpr float tau_0 = 0.6f;
 
-        cuda::std::array<float, 4> factors = {
-            (1.f - info.dx) * (1.f - info.dy), (1.f - info.dy) * info.dx,
-            (1.f - info.dx) * info.dy, info.dx * info.dy
-        };
-
         // Column density at the crossing point is a weighted average.
+        auto weights = make_weights(info.dx, info.dy);
         double cdens = 0.0;
         double wtot = 0.0;
 #pragma unroll 4
         for (size_t i = 0; i < 4; ++i) {
             auto c = column_dens[info.indices[i]];
-            auto w = factors[i] / max(tau_0, static_cast<float>(c * cross_section));
+            auto w = weights[i] / max(tau_0, static_cast<float>(c * cross_section));
 
             cdens += w * c;
             wtot += w;
