@@ -52,7 +52,6 @@ endif
 # CUDA sources for ASORA
 asora_sources = [
     'memory.cpp',
-    'rates.cu',
     'raytracing.cu',
     'shortchar.cu',
     'utils.cu',
