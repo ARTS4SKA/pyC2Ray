@@ -4,6 +4,7 @@ which provide an implementation of the Morton ordering-based grouping algorithm.
 """
 
 from dataclasses import dataclass
+from functools import cache
 
 import numpy as np
 
@@ -25,62 +26,124 @@ class MortonGroupingParams(GroupingParams):
     morton_bits: int = 10
 
 
+# A Morton key interleaves the bits of three morton_bits-wide coordinates, so it occupies
+# 3 * morton_bits bits. The keys are held in a signed int64 array, which leaves 63 bits for
+# the value, hence the bound below: larger values are refused rather than silently
+# overflowing into wrong keys.
+MAX_MORTON_BITS = 21
+
+
+@cache
+def _split_by_3_table(bits: int) -> np.ndarray:
+    """Lookup table spreading every bits-wide value over every third bit.
+
+    Entry v of the table is v with its bits moved to positions 0, 3, 6, ..., which is what
+    interleaving three coordinates into a Morton key requires. Because the normalized
+    coordinates are clipped before scaling, the inputs are always in [0, 2**bits), so the
+    whole domain of the transform fits in a table of 2**bits entries and the per-source bit
+    loop becomes a lookup.
+
+    Parameters
+    ----------
+    bits : Number of bits per dimension.
+
+    Returns
+    -------
+    Table of shape (2**bits,) mapping a value to its bit-spread form.
+    """
+    if bits <= 0:
+        raise ValueError(f"bits must be a positive integer. Provided value is {bits}.")
+    if bits > MAX_MORTON_BITS:
+        raise ValueError(
+            f"morton_bits must be at most {MAX_MORTON_BITS} so that a Morton key fits in "
+            f"the int64 the keys are stored in. Provided value is {bits}."
+        )
+
+    values = np.arange(1 << bits, dtype=np.int64)
+    spread = np.zeros_like(values)
+    for i in range(bits):
+        spread |= ((values >> i) & 1) << (3 * i)
+
+    spread.flags.writeable = False
+    return spread
+
+
 # TODO: split geometric ordeding (Morton-like key) from the actual grouping logic,
 # which is more related to the cost model and to the constraints on the groups.
 class MortonSourceGrouping(SourceGrouping):
     """Morton ordering-based grouping algorithm."""
 
-    def _morton_like_key(
-        self, p: np.ndarray, domain_min: np.ndarray, domain_max: np.ndarray, bits: int
-    ) -> int:
+    def _morton_like_keys(
+        self,
+        positions: np.ndarray,
+        domain_min: np.ndarray,
+        domain_max: np.ndarray,
+        bits: int,
+    ) -> np.ndarray:
         """
         Lightweight Morton-like ordering.
         Maps point to integer grid then interleaves bits.
 
         Parameters
         ----------
-        p : Point coordinates (shape `(3,)`).
+        positions : Point coordinates (shape `(num_points, 3)`).
         domain_min : Minimum corner of the domain (shape `(3,)`).
         domain_max : Maximum corner of the domain (shape `(3,)`).
-        bits : Number of bits per dimension for the grid. Total key bits will be 3x this.
+        bits : Number of bits per dimension for the grid, at most MAX_MORTON_BITS.
 
         Returns
         -------
-        Morton-like key for the point.
+        Morton-like keys (shape `(num_points,)`).
         """
-        # Normalize input coordinates to [0, 1]
-        normalized_position = np.clip(
-            (p - domain_min) / np.maximum(domain_max - domain_min, 1e-12),
+        table = _split_by_3_table(bits)
+
+        # Normalize input coordinates to [0, 1)
+        normalized_positions = np.clip(
+            (positions - domain_min) / np.maximum(domain_max - domain_min, 1e-12),
             0.0,
             1.0 - 1e-12,
         )
-
-        # Scale to integer by shifting by bits: the normalized_position input position is a 3 element array
-        # of floating point numbers in [0, 1], so multiplying them by 2^bits gives an integer in [0, 2^bits)
-        # when truncated. THe larger the bits, the finer the spatial resolution of the Morton ordering, but
+        # Scale to integer by shifting by bits: the normalized_positions input position is a 3*num_points element
+        # array of floating point numbers in [0, 1), so multiplying them by 2^bits gives an integer in [0, 2^bits)
+        # when truncated. The larger the bits, the finer the spatial resolution of the Morton ordering, but
         # also the larger the resulting keys (which can affect performance and memory usage).
-        int_position = (normalized_position * (1 << bits)).astype(int)
-
-        # Interleave bits to get the Morton key. The interleaving is done by taking the bits of each coordinate
-        # and placing them in the final key in an interleaved manner.
-        # TODO: the loop over bits for each coordinate for each source can become a hotspot when ordering large
-        # source lists. Consider using a faster bit-interleaving approach (e.g., precomputed lookup tables per byte/word,
-        # vectorized numpy where practical, or a specialized Morton encoding routine) to reduce per-source overhead during sorting.
-        def split_by_3(v: int) -> int:
-            out = 0
-            for i in range(bits):
-                out |= ((v >> i) & 1) << (3 * i)
-            return out
+        int_positions = (normalized_positions * (1 << bits)).astype(np.int64)
 
         # The final Morton key is obtained by interleaving the bits of the x, y, and z coordinates.
         # For example, if bits=10, we take the 10 bits of the x coordinate and place them in positions 0, 3, 6, ...,
         # the 10 bits of the y coordinate and place them in positions 1, 4, 7, ..., and the 10 bits of the z coordinate
-        # and place them in positions 2, 5, 8, ... of the final key.
+        # and place them in positions 2, 5, 8, ... of the final key. The table lookup spreads the bits of each
+        # coordinate, the shifts by 1 and 2 interleave them.
         return (
-            split_by_3(int_position[0])
-            | (split_by_3(int_position[1]) << 1)
-            | (split_by_3(int_position[2]) << 2)
+            table[int_positions[:, 0]]
+            | (table[int_positions[:, 1]] << 1)
+            | (table[int_positions[:, 2]] << 2)
         )
+
+    def _morton_order(
+        self, sources: list[Source], grid: Grid, bits: int
+    ) -> list[Source]:
+        """Order sources along the Morton-like space filling curve.
+
+        Parameters
+        ----------
+        sources : Sources to order.
+        grid : Grid providing the domain bounds the keys are computed in.
+        bits : Number of bits per dimension for the grid.
+
+        Returns
+        -------
+        The sources, ordered by increasing Morton-like key.
+        """
+        positions = np.stack([s.pos for s in sources])
+        keys = self._morton_like_keys(
+            positions, grid.get_domain_min(), grid.get_domain_max(), bits
+        )
+        # The np.sort is stable, so sources sharing a key keep their relative input order.
+        # Since the grouping that consumes this ordering is a sequential greedy walk, its output
+        # depends on the order of equal-key sources: an unstable sort would silently change
+        # the resulting groups.
+        return [sources[i] for i in np.argsort(keys, kind="stable")]
 
     def _group_costs(
         self,
@@ -204,15 +267,7 @@ class MortonSourceGrouping(SourceGrouping):
             return []
 
         # Compute spatial ordering
-        ordered_sources = sorted(
-            sources,
-            key=lambda s: self._morton_like_key(
-                s.pos,
-                grid.get_domain_min(),
-                grid.get_domain_max(),
-                grouping_params.morton_bits,
-            ),
-        )
+        ordered_sources = self._morton_order(sources, grid, grouping_params.morton_bits)
 
         max_num_sources = grouping_params.max_num_sources_per_group
         max_mem_cost = cost_model.max_memory_cost_per_group
@@ -409,15 +464,7 @@ class MortonSourceGrouping(SourceGrouping):
             return []
 
         # Compute spatial ordering
-        ordered_sources = sorted(
-            sources,
-            key=lambda s: self._morton_like_key(
-                s.pos,
-                grid.get_domain_min(),
-                grid.get_domain_max(),
-                grouping_params.morton_bits,
-            ),
-        )
+        ordered_sources = self._morton_order(sources, grid, grouping_params.morton_bits)
 
         def valid(g: SourceGroup) -> bool:
             return (

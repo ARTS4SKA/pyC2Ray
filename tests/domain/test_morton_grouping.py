@@ -49,18 +49,18 @@ def test_key_increases_along_axes() -> None:
     grouping = MortonSourceGrouping()
     domain_min = np.array([0.0, 0.0, 0.0], dtype=float)
     domain_max = np.array([1.0, 1.0, 1.0], dtype=float)
+    positions = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [0.8, 0.0, 0.0],
+            [0.0, 0.8, 0.0],
+            [0.0, 0.0, 0.8],
+        ],
+        dtype=float,
+    )
 
-    key_origin = grouping._morton_like_key(
-        np.array([0.0, 0.0, 0.0]), domain_min, domain_max, bits=8
-    )
-    key_x = grouping._morton_like_key(
-        np.array([0.8, 0.0, 0.0]), domain_min, domain_max, bits=8
-    )
-    key_y = grouping._morton_like_key(
-        np.array([0.0, 0.8, 0.0]), domain_min, domain_max, bits=8
-    )
-    key_z = grouping._morton_like_key(
-        np.array([0.0, 0.0, 0.8]), domain_min, domain_max, bits=8
+    key_origin, key_x, key_y, key_z = grouping._morton_like_keys(
+        positions, domain_min, domain_max, bits=8
     )
 
     assert key_origin < key_x
@@ -75,15 +75,52 @@ def test_points_have_nearer_keys_than_far_points() -> None:
     domain_max = np.array([1.0, 1.0, 1.0], dtype=float)
 
     # Two points in the same neighborhood and one far-away point.
-    p_ref = np.array([0.20, 0.20, 0.20], dtype=float)
-    p_near = np.array([0.21, 0.20, 0.20], dtype=float)
-    p_far = np.array([0.85, 0.85, 0.85], dtype=float)
+    positions = np.array(
+        [
+            [0.20, 0.20, 0.20],  # reference
+            [0.21, 0.20, 0.20],  # near
+            [0.85, 0.85, 0.85],  # far
+        ],
+        dtype=float,
+    )
 
-    key_ref = grouping._morton_like_key(p_ref, domain_min, domain_max, bits=12)
-    key_near = grouping._morton_like_key(p_near, domain_min, domain_max, bits=12)
-    key_far = grouping._morton_like_key(p_far, domain_min, domain_max, bits=12)
+    key_ref, key_near, key_far = grouping._morton_like_keys(
+        positions, domain_min, domain_max, bits=12
+    )
 
     assert abs(key_ref - key_near) < abs(key_ref - key_far)
+
+
+def test_keys_interleave_coordinate_bits() -> None:
+    """Test the Morton keys against hand-computed values.
+
+    Coordinate bit i of x, y and z must land at key bit 3*i, 3*i + 1 and 3*i + 2
+    respectively. With bits=2 on a domain of side 4, each position maps to the
+    integer cell (floor(x), floor(y), floor(z)).
+    """
+    grouping = MortonSourceGrouping()
+    domain_min = np.array([0.0, 0.0, 0.0], dtype=float)
+    domain_max = np.array([4.0, 4.0, 4.0], dtype=float)
+    positions = np.array(
+        [
+            [0.5, 0.5, 0.5],  # cell (0, 0, 0)
+            [1.5, 0.5, 0.5],  # cell (1, 0, 0): x bit 0 -> key bit 0
+            [0.5, 1.5, 0.5],  # cell (0, 1, 0): y bit 0 -> key bit 1
+            [0.5, 0.5, 1.5],  # cell (0, 0, 1): z bit 0 -> key bit 2
+            [1.5, 1.5, 1.5],  # cell (1, 1, 1): key bits 0-2
+            [2.5, 0.5, 0.5],  # cell (2, 0, 0): x bit 1 -> key bit 3
+            [0.5, 2.5, 0.5],  # cell (0, 2, 0): y bit 1 -> key bit 4
+            [0.5, 0.5, 2.5],  # cell (0, 0, 2): z bit 1 -> key bit 5
+            [3.5, 3.5, 3.5],  # cell (3, 3, 3): all 6 key bits
+            [3.5, 0.5, 2.5],  # cell (3, 0, 2): key bits 0, 3 and 5
+        ],
+        dtype=float,
+    )
+    expected = [0, 1, 2, 4, 7, 8, 16, 32, 63, 41]
+
+    keys = grouping._morton_like_keys(positions, domain_min, domain_max, bits=2)
+
+    assert keys.tolist() == expected
 
 
 def test_build_groups_rejects_wrong_grouping_params_type() -> None:

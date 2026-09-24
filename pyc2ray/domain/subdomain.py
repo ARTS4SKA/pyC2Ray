@@ -27,6 +27,19 @@ class Subdomain:
     def __init__(self, source_group: SourceGroup, local_grid: Grid) -> None:
         self.source_group = source_group
         self.local_grid = local_grid
+        # Lazily built views of the source group, reused for the lifetime of this
+        # subdomain: the raytracing loop asks for them once per convergence iteration,
+        # while they only change when the decomposition is rebuilt.
+        #
+        # WARNING: this is correct only because source_group and local_grid are treated
+        # as immutable once the subdomain exists -- a rebuild constructs new Subdomain
+        # objects rather than updating them in place (see
+        # DomainDecompositionHandler._run_decomposition). Nothing enforces that, and
+        # mutating a group's source list, or the returned arrays, would make these stale
+        # silently: the sources would then be raytraced at the wrong cells with no error.
+        # TODO: make this safe for example by returning read-only views.
+        self._local_positions: np.ndarray | None = None
+        self._local_strengths: np.ndarray | None = None
 
     def global_to_local_map(
         self, global_field: np.ndarray, local_field: np.ndarray
@@ -73,15 +86,17 @@ class Subdomain:
         The positions (indexes) of the sources, referred to the local grid,
         with shape (num_sources, 3).
         """
-        if len(self.source_group.sources) == 0:
-            return np.empty((0, 3), dtype=int)
+        if self._local_positions is None:
+            sources = self.source_group.sources
+            if len(sources) == 0:
+                self._local_positions = np.empty((0, 3), dtype=int)
+            else:
+                positions = np.stack([s.pos for s in sources])
+                self._local_positions = self.local_grid.global_to_local_position_map(
+                    positions
+                )
 
-        return np.array(
-            [
-                self.local_grid.global_to_local_position_map(s.pos)
-                for s in self.source_group.sources
-            ]
-        )
+        return self._local_positions
 
     def get_local_sources_strengths(self) -> np.ndarray:
         """Get the strengths of this subvolume's sources.
@@ -90,7 +105,14 @@ class Subdomain:
         -------
         The strengths of the sources of this subvolume.
         """
-        return np.array([s.strength for s in self.source_group.sources])
+        if self._local_strengths is None:
+            self._local_strengths = np.fromiter(
+                (s.strength for s in self.source_group.sources),
+                dtype=np.float64,
+                count=len(self.source_group.sources),
+            )
+
+        return self._local_strengths
 
     def resize_local_field(self, local_field: np.ndarray) -> None:
         """Resize a field defined on the global grid to the corresponding field on the local grid.
