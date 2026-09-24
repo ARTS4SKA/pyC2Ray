@@ -1,168 +1,280 @@
 #pragma once
 
+#include "utils.cuh"
+
+#include <cuda_runtime.h>
+
+#include <format>
 #include <memory>
 #include <source_location>
 #include <span>
 #include <stdexcept>
-#include <unordered_map>
+#include <type_traits>
+#include <utility>
 
 /* @file memory.h
  * @brief CUDA device and device memory management for ASORA raytracing library
  *
  * Provides:
- * - RAII wrapper for memory buffers with type-erased storage and typed views.
- * - Enum for identifying different types of buffers in the memory pool.
- * - Singleton class managing device initialization and a memory pool of buffers.
+ * - RAII wrapper for typed device arrays, backed either by a plain device
+ *   allocation or by the stream-ordered memory pool.
+ * - Aggregate holding the arrays whose contents must outlive a single library
+ *   call.
+ * - Singleton class managing device initialization, the memory pool and the
+ *   stream that orders pool operations.
  *
  */
 
 namespace asora {
 
-    /* @brief Type-erased shared memory buffer on the GPU device.
+    /* @brief Backing allocator of a device array.
      *
-     * Provides RAII-style management of device memory with automatic cleanup.
-     * Memory is shared across copies using reference counting (shared_ptr).
+     * - 'device' uses cudaMalloc/cudaFree and is meant for long-lived data: such
+     * allocations would otherwise pin memory in the middle of the pool for the whole
+     * run and defeat its trimming.
+     * - 'pooled' uses cudaMallocAsync/cudaFreeAsync and is meant for the per-call
+     * working set, which is allocated and released on every entry point and is
+     * therefore served from cached pool memory.
+     */
+    enum class allocation {
+        device,  ///< cudaMalloc / cudaFree
+        pooled,  ///< cudaMallocAsync / cudaFreeAsync, stream-ordered
+    };
+
+    /* @brief RAII-managed typed array in device memory.
      *
+     * The array is the unique owner of its allocation, which is released when
+     * it goes out of scope. It is movable but not copyable: observers take a
+     * raw pointer through data(), and arrays that several subsystems need to
+     * read live in resident_data. A pooled array records the stream its
+     * allocation is ordered on; it must only be accessed by work ordered on
+     * that same stream.
+     *
+     * @tparam T Element type
      * @warning Do not access the underlying memory from host code!
      */
-    class device_buffer {
+    template <typename T>
+    class device_array {
+        static_assert(
+            std::is_trivially_copyable_v<T>,
+            "device_array elements must be trivially copyable"
+        );
+
+        /* @brief Releases an allocation through the allocator that made it.
+         *
+         * The allocator and stream are held here rather than in the enclosing
+         * array so that the deleter never depends on the lifetime of that
+         * object or of the device singleton. A deleter is installed even when
+         * nothing is allocated, so that an empty array still remembers how it
+         * is meant to grow.
+         */
+        struct deleter {
+            allocation alloc = allocation::device;
+            cudaStream_t stream = nullptr;
+
+            /// Deleters must not throw, so the release status is discarded.
+            void operator()(T *ptr) const noexcept {
+                if (alloc == allocation::pooled)
+                    cudaFreeAsync(ptr, stream);
+                else
+                    cudaFree(ptr);
+            }
+        };
+
        public:
-        /// Default constructor creates an empty buffer
-        device_buffer() = default;
+        using value_type = T;
 
-        /// Allocates the given number of bytes and create a device buffer.
-        explicit device_buffer(size_t nbytes);
+        /// Default constructor creates an empty array
+        device_array() = default;
 
-        device_buffer(const device_buffer &other) = default;
-        device_buffer(device_buffer &&other) = default;
-        device_buffer &operator=(const device_buffer &other) = default;
-        device_buffer &operator=(device_buffer &&other) = default;
+        /* @brief Allocate `items` elements with cudaMalloc.
+         * @param[in] items Number of elements
+         */
+        explicit device_array(size_t items)
+            : _ptr(nullptr, deleter{allocation::device, nullptr}), _items(items) {
+            if (_items == 0) return;
+            allocate();
+        }
 
-        /// Swap two device buffers
-        friend void swap(device_buffer &lhs, device_buffer &rhs) noexcept;
+        /* @brief Allocate `items` elements from the stream-ordered memory pool.
+         * @param[in] items Number of elements
+         * @param[in] stream Stream the allocation and its release are ordered on
+         */
+        device_array(size_t items, cudaStream_t stream)
+            : _ptr(nullptr, deleter{allocation::pooled, stream}), _items(items) {
+            if (_items == 0) return;
+            allocate();
+        }
+
+        /// Device arrays own their allocation uniquely and cannot be copied.
+        device_array(const device_array &other) = delete;
+        device_array &operator=(const device_array &other) = delete;
+
+        /* Moving transfers the allocation and leaves the source empty. The
+         * element count is reset explicitly so that a moved-from array does not
+         * report a size it no longer backs.
+         */
+        device_array(device_array &&other) noexcept
+            : _ptr(std::move(other._ptr)), _items(std::exchange(other._items, 0)) {}
+
+        device_array &operator=(device_array &&other) noexcept {
+            if (this != &other) {
+                _ptr = std::move(other._ptr);
+                _items = std::exchange(other._items, 0);
+            }
+            return *this;
+        }
+
+        /// True if the array owns an allocation
+        explicit operator bool() const noexcept { return bool(_ptr); }
 
         /* @brief Get raw pointer to device memory.
          *
          * @return Pointer to device memory
          * @warning Do not dereference this from host code!
          */
-        std::byte *data() { return _ptr.get(); }
+        T *data() noexcept { return _ptr.get(); }
 
         /// Const version of data()
-        const std::byte *data() const { return _ptr.get(); }
+        const T *data() const noexcept { return _ptr.get(); }
 
-        /* @brief Get a typed view of the device array.
+        /* @brief Get a view of the device array.
          *
-         * @tparam T Element type (default: std::byte)
          * @return Span view over the device memory
          * @warning Do not dereference this from host code!
          */
-        template <typename T = std::byte>
-        std::span<T> view() noexcept {
-            return {reinterpret_cast<T *>(data()), _nbytes / sizeof(T)};
-        }
+        std::span<T> view() noexcept { return {data(), _items}; }
 
         /// Const version of view()
-        template <typename T = std::byte>
-        std::span<const T> view() const noexcept {
-            return {reinterpret_cast<const T *>(data()), _nbytes / sizeof(T)};
-        }
+        std::span<const T> view() const noexcept { return {data(), _items}; }
 
-        /* @brief Get a typed pointer to the device array.
+        /// Get the number of elements in the array
+        size_t size() const noexcept { return _items; }
+
+        /// Get the size of the array in bytes
+        size_t bytes() const noexcept { return _items * sizeof(T); }
+
+        /// Get the stream this array is ordered on, or 0 for a plain allocation
+        cudaStream_t stream() const noexcept { return _ptr.get_deleter().stream; }
+
+        /// Get the backing allocator of this array
+        allocation allocator() const noexcept { return _ptr.get_deleter().alloc; }
+
+        /* @brief Ensure the array can hold `items` elements.
          *
-         * @tparam T Element type
-         * @return Data pointer to the typed view
-         * @warning Do not dereference this from host code!
-         */
-        template <typename T>
-        T *data() {
-            return view<T>().data();
-        }
-
-        /// Const version of data<T>()
-        template <typename T>
-        const T *data() const {
-            return view<T>().data();
-        }
-
-        /// Get the size of the buffer in bytes
-        size_t size() const { return _nbytes; }
-
-        /* @brief Get the size of the typed view of the device array.
+         * Reallocation keeps the backing allocator and stream of the current
+         * array. A default-constructed array therefore grows into a plain
+         * device allocation.
          *
-         * @tparam T Element type
-         * @return Size of the view
+         * @param[in] items Required number of elements
+         * @param[in] exact If true the size must match exactly, otherwise a
+         * larger existing array is left untouched.
+         * @warning Reallocation does not preserve the existing contents.
          */
-        template <typename T>
-        size_t size() const {
-            return view<T>().size();
+        void ensure(size_t items, bool exact = false) {
+            if (exact ? (_items == items) : (_items >= items)) return;
+            // Read the allocator out before assigning: the replacement is built
+            // from the deleter of the array it is about to replace.
+            auto [alloc, stream] = _ptr.get_deleter();
+            *this = (alloc == allocation::pooled) ? device_array(items, stream)
+                                                  : device_array(items);
         }
 
         /* @brief Copy data from host to device.
          * @param[in] src Host memory source pointer
-         * @param[in] nbytes Number of bytes to copy
+         * @param[in] items Number of elements to copy
+         * @throw std::invalid_argument if the array is too small
          */
-        void copyFromHost(const void *src, size_t nbytes);
+        void copy_from_host(const T *src, size_t items) {
+            check_fits(items, "copy_from_host");
+            safe_cuda(
+                cudaMemcpy(data(), src, items * sizeof(T), cudaMemcpyHostToDevice)
+            );
+        }
 
-        /// Like copyFromHost but all bytes of the buffer are copied
-        void copyFromHost(const void *src);
+        /// Like copy_from_host but all elements of the array are copied
+        void copy_from_host(const T *src) { copy_from_host(src, _items); }
 
-        /*
-         * @brief Copy data from device to host.
+        /* @brief Copy data from device to host.
          * @param[out] dst Host memory destination pointer
-         * @param[in] nbytes Number of bytes to copy
+         * @param[in] items Number of elements to copy
+         * @throw std::invalid_argument if the array is too small
          */
-        void copyToHost(void *dst, size_t nbytes) const;
+        void copy_to_host(T *dst, size_t items) const {
+            check_fits(items, "copy_to_host");
+            safe_cuda(
+                cudaMemcpy(dst, data(), items * sizeof(T), cudaMemcpyDeviceToHost)
+            );
+        }
 
-        /// Like copyToHost but all bytes of the buffer are copied
-        void copyToHost(void *dst) const;
+        /// Like copy_to_host but all elements of the array are copied
+        void copy_to_host(T *dst) const { copy_to_host(dst, _items); }
+
+        /* @brief Resize if needed, then copy data from host to device.
+         * @param[in] src Host memory source pointer
+         * @param[in] items Number of elements to copy
+         * @param[in] exact Forwarded to ensure()
+         */
+        void assign(const T *src, size_t items, bool exact = false) {
+            ensure(items, exact);
+            copy_from_host(src, items);
+        }
 
        private:
-        /// Shared pointer to device memory
-        std::shared_ptr<std::byte> _ptr = nullptr;
+        /// Allocate _items elements through the allocator recorded in the deleter
+        void allocate() {
+            auto [alloc, stream] = _ptr.get_deleter();
+            auto nbytes = _items * sizeof(T);
 
-        /// Size of the buffer in bytes
-        size_t _nbytes = 0;
+            T *ptr = nullptr;
+            if (alloc == allocation::pooled)
+                safe_cuda(cudaMallocAsync(&ptr, nbytes, stream));
+            else
+                safe_cuda(cudaMalloc(&ptr, nbytes));
+
+            // reset() keeps the deleter installed by the constructor.
+            _ptr.reset(ptr);
+        }
+
+        /// Throw if the array cannot hold `items` elements
+        void check_fits(size_t items, const char *what) const {
+            if (_items >= items) return;
+            throw std::invalid_argument(
+                std::format(
+                    "{} size mismatch: device array holds {} elements, requested {}",
+                    what, _items, items
+                )
+            );
+        }
+
+        /// Owning pointer to device memory; its deleter carries the allocator
+        std::unique_ptr<T, deleter> _ptr = nullptr;
+
+        /// Number of elements
+        size_t _items = 0;
     };
 
-    /* @brief Identifiers for different types of device buffers.
+    /* @brief Device arrays whose contents outlive a single library call.
      *
-     * Tags are used to manage named buffers in the device memory pool,
-     * allowing type-safe access to simulation data structures.
+     * These are pushed from Python and read back by the raytracing and
+     * chemistry entry points without being re-uploaded, so they are kept in
+     * plain device allocations rather than in the memory pool. Everything else
+     * is per-call scratch and should be a local device_array obtained from
+     * device::scratch.
      */
-    enum class buffer_tag {
-        number_density,          ///< Matter number density (0)
-        fraction_HII,            ///< Hydrogen II fraction (1)
-        fraction_HeII,           ///< Helium II fraction (2)
-        fraction_HeIII,          ///< Helium III fraction (3)
-        cross_section_HI,        ///< Ionization cross-section for HI (4)
-        cross_section_HeI,       ///< Ionization cross-section for HeI (5)
-        cross_section_HeII,      ///< Ionization cross-section for HeII (6)
-        photo_ionization_HI,     ///< Photoionization rates for HI (7)
-        photo_ionization_HeI,    ///< Photoionization rates for HeI (8)
-        photo_ionization_HeII,   ///< Photoionization rates for HeII (9)
-        photo_heating_HI,        ///< Photoheating rates for HI (10)
-        photo_heating_HeI,       ///< Photoheating rates for HeI (11)
-        photo_heating_HeII,      ///< Photoheating rates for HeII (12)
-        column_density_HI,       ///< Column density along rays for HI (13)
-        column_density_HeI,      ///< Column density along rays for HeI (14)
-        column_density_HeII,     ///< Column density along rays for HeII (15)
-        photo_ion_thin_table,    ///< Lookup table for optically thin photoion. (16)
-        photo_ion_thick_table,   ///< Lookup table for optically thick photoion. (17)
-        photo_heat_thin_table,   ///< Lookup table for optically thin photoheating (18)
-        photo_heat_thick_table,  ///< Lookup table for optically thick photoheating (19)
-        source_flux,             ///< Source flux array (20)
-        source_position,         ///< Source position array (21)
-        temperature,             ///< Gas temperature array (22)
-        clumping_factor,         ///< Clumping factor array (23)
+    struct resident_data {
+        device_array<double> number_density;   ///< Matter number density
+        device_array<double> photo_ion_thin;   ///< Optically thin photoion. table
+        device_array<double> photo_ion_thick;  ///< Optically thick photoion. table
+        device_array<double> source_flux;      ///< Source flux array
+        device_array<int> source_position;     ///< Source position array
     };
 
-    /* @brief Singleton managing only one GPU device and its memory pool.
+    /* @brief Singleton managing only one GPU device, its memory pool and stream.
      *
-     * Provides static interface for device initialization and buffer de/allocation.
-     * The singleton pattern ensures thread-safe initialization of the class and safe
-     * read-only access of its memory pool, but modifications to the pool and its
-     * buffers is not.
+     * The singleton pattern ensures thread-safe initialization of the class and
+     * safe read-only access to its resident data, but modifications to that
+     * data are not thread safe.
      */
     // TODO: make device thread safe!
     class device {
@@ -171,107 +283,77 @@ namespace asora {
         static bool is_initialized() noexcept { return instance()._gpu_id >= 0; }
 
         /* @brief Throw exception if device is not initialized.
+         *
          * @param[in] loc Source location for error reporting
+         *
          * @throw std::runtime_error if device not initialized
          */
         static void check_initialized(
             const std::source_location &loc = std::source_location::current()
         );
 
-        /* @brief Initialize the GPU device.
+        /* @brief Initialize the GPU device and its memory pool.
+         *
          * @param[in] rank Device rank/ID to initialize
-         * @return Reference to the device instance
-         * @throw std::runtime_error if cudaGetDeviceCount and cudaSetDevice fail
+         *
+         * @throw std::runtime_error if no device is available or if any CUDA call fails
          */
-        static device &initialize(unsigned int rank);
+        static void initialize(unsigned int rank);
 
-        /// Close device and release all resources.
+        /* @brief Release resident data, trim the memory pool and close the device.
+         *
+         * The device can be initialized again afterwards. This is also run when
+         * the singleton is destroyed, so a process that forgets to close still
+         * gives its device memory back before exiting.
+         */
         static void close();
 
-        /* @brief Allocate buffer and copy data from host to device.
+        /* @brief Access the arrays that outlive a single library call.
          *
-         * If buffer identifier is not in use, a new buffer device is allocated and
-         * added to the pool. Additionally if a source host pointer is provided, its
-         * data is copied to the buffer.
+         * @return Reference to the resident data
          *
-         * @tparam T Element type
-         * @param[in] tag Buffer identifier
-         * @param[in] src Host memory source pointer
-         * @param[in] items Number of elements to copy
-         */
-        template <typename T>
-        static void transfer(buffer_tag tag, const T *src, size_t items) {
-            instance().allocate_or_copy(tag, items * sizeof(T), src);
-        }
-
-        /* @brief Allocate buffer and copy data from host to device.
-         *
-         * It behaves like 'transfer', except that a new buffer device of the right size
-         * is allocated if the existing one is smaller than the required size.
-         * If force_matching_size is true, the existing buffer must have exactly the
-         * required size, otherwise reallocation is triggered.
-         *
-         * @tparam T Element type
-         * @param[in] tag Buffer identifier
-         * @param[in] src Host memory source pointer
-         * @param[in] items Number of elements to copy
-         * @param[in] force_matching_size If true, enforce exact size match; when false,
-         * reuse existing buffers that are large enough and only reallocate when they
-         * are too small.
-         */
-        template <typename T>
-        static void ensure_transfer(
-            buffer_tag tag, const T *src, size_t items, bool force_matching_size = false
-        ) {
-            instance().allocate_or_copy(
-                tag, items * sizeof(T), src, true, force_matching_size
-            );
-        }
-
-        /* @brief Allocate an empty buffer on device and add it to the pool.
-         *
-         * @tparam T Element type
-         * @param[in] tag Buffer identifier
-         * @param[in] items Number of elements to allocate
-         * @throw std::runtime_error if buffer identifier already in use
-         */
-        template <typename T>
-        static void add(buffer_tag tag, size_t items) {
-            instance().allocate_or_copy(tag, items * sizeof(T));
-        }
-
-        /* @brief Ensure there is a buffer with the given tag and the required size.
-         * If force_matching_size is true, the existing buffer must have exactly the
-         * required size.
-         *
-         * @tparam T Element type
-         * @param[in] tag Buffer identifier
-         * @param[in] items Number of elements to allocate
-         * @param[in] force_matching_size If true, the existing buffer must have exactly
-         * the required size
-         */
-        template <typename T>
-        static void ensure(
-            buffer_tag tag, size_t items, bool force_matching_size = false
-        ) {
-            instance().allocate_or_copy(
-                tag, items * sizeof(T), nullptr, true, force_matching_size
-            );
-        }
-
-        /* @brief Retrieve a buffer from the device.
-         * @param[in] tag Buffer identifier
-         * @return Reference to the device buffer
          * @throw std::runtime_error if device not initialized
-         * @throw std::out_of_range if buffer doesn't exist
          */
-        static device_buffer &get(buffer_tag tag);
+        static resident_data &resident();
 
-        /// Check if the buffer identifier is in use (= a buffer exists in the pool).
-        static bool contains(buffer_tag tag);
+        /* @brief Allocate a per-call array from the stream-ordered memory pool.
+         *
+         * Falls back to a plain device allocation on platforms without memory
+         * pool support, where initialize() leaves the pool null.
+         *
+         * @tparam T Element type
+         * @param[in] items Number of elements
+         *
+         * @return Device array ordered on the device stream, or an unpooled
+         * array if the platform has no memory pool
+         * @throw std::runtime_error if device not initialized
+         */
+        template <typename T>
+        static device_array<T> scratch(size_t items) {
+            check_initialized();
+            auto &self = instance();
+            return self._pool ? device_array<T>(items, self._stream)
+                              : device_array<T>(items);
+        }
 
         /// Get the CUDA device ID, or -1 if not initialized
-        static int get_device_id() noexcept { return instance()._gpu_id; }
+        static int device_id() noexcept { return instance()._gpu_id; }
+
+        /* @brief Get the stream that orders all memory pool operations.
+         *
+         * This is currently the legacy default stream: kernel launches and
+         * copies are still synchronous, and allocating from the pool on the
+         * legacy stream keeps them correctly ordered without any explicit
+         * synchronization. Switching to a dedicated stream is a change to
+         * initialize() alone, provided the copies become asynchronous too.
+         */
+        static cudaStream_t stream() noexcept { return instance()._stream; }
+
+        /* @brief Get the memory pool backing scratch allocations.
+         * @return The pool, or null if the device is not initialized or the
+         * platform does not support memory pools
+         */
+        static cudaMemPool_t pool() noexcept { return instance()._pool; }
 
        private:
         /// Private constructor to enforce singleton pattern
@@ -279,30 +361,26 @@ namespace asora {
         device(const device &) = delete;
         device &operator=(const device &) = delete;
 
+        /// Releases whatever close() would, as a backstop at process exit
+        ~device() { release(); }
+
+        /// Idempotent, non-throwing release of the device resources
+        void release() noexcept;
+
         /// Get or create the singleton instance
         static device &instance() noexcept;
-
-        /* @brief Allocate buffer or copy data to existing buffer.
-         * @param[in] tag Buffer identifier
-         * @param[in] nbytes Size in bytes
-         * @param[in] src Optional host source pointer for copying
-         * @param[in] ensure Ensure a buffer exists according to sizing policy.
-         * @param[in] force_matching_size If ensure is true, enforce
-         * exact size match; when false, reuse existing buffers that are large
-         * enough and only reallocate when they are too small. Default is false.
-         * @throw std::runtime_error if tag exists but no copy requested and
-         * ensure is false
-         */
-        void allocate_or_copy(
-            buffer_tag tag, size_t nbytes, const void *src = nullptr,
-            bool ensure = false, bool force_matching_size = false
-        );
 
         /// Device ID (-1 means uninitialized)
         int _gpu_id = -1;
 
-        /// Memory pool for device buffers
-        std::unordered_map<buffer_tag, device_buffer> _memory_pool;
+        /// Stream ordering pool allocations; 0 is the legacy default stream
+        cudaStream_t _stream = 0;
+
+        /// Stream-ordered pool for scratch allocations; null if unsupported
+        cudaMemPool_t _pool = nullptr;
+
+        /// Arrays that outlive a single library call
+        resident_data _resident;
     };
 
 }  // namespace asora
