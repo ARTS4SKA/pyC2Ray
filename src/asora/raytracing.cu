@@ -29,11 +29,6 @@ namespace {
 
     using namespace asora;
 
-    template <typename T>
-    T *get_data_view(asora::buffer_tag tag) {
-        return asora::device::get(tag).data<T>();
-    }
-
     // Compute the photoionization rate for a given cell based on the incoming column
     // density and the pre-computed photoionization tables.
     __device__ void update_photo_rates(
@@ -123,59 +118,56 @@ namespace asora {
     ) {
         device::check_initialized();
 
+        const auto &resident = device::resident();
+        if (!resident.number_density)
+            throw std::runtime_error(
+                "number density array must be allocated on the device before calling "
+                "do_all_sources_gpu"
+            );
+        if (!resident.photo_ion_thin || !resident.photo_ion_thick)
+            throw std::runtime_error(
+                "photo ionization tables (thin, thick) must be allocated on the device "
+                "before calling do_all_sources_gpu"
+            );
+        if (!resident.source_flux || !resident.source_position)
+            throw std::runtime_error(
+                "source data (flux, position) must be allocated on the device before "
+                "calling do_all_sources_gpu"
+            );
+
         // Size of grid data
         auto n_cells = m1 * m1 * m1;
 
         // Allocate (if necessary) and copy the ionized fraction array to the device
-        device::ensure_transfer<double>(buffer_tag::fraction_HII, xh_av, n_cells);
+        auto fraction_HII = device::scratch<double>(n_cells);
+        fraction_HII.copy_from_host(xh_av);
 
         // Number density array is not modified, it is assumed that it is already on the
         // device
-        if (!device::contains(buffer_tag::number_density))
-            throw std::runtime_error(
-                "Number density array must be allocated on the device before calling "
-                "do_all_sources_gpu"
-            );
-        density_maps densities{
-            get_data_view<double>(buffer_tag::number_density),
-            get_data_view<double>(buffer_tag::fraction_HII)
-        };
+        density_maps densities{resident.number_density.data(), fraction_HII.data()};
 
         // Allocate (if necessary) and zero the output array for the photoionization
         // rate
-        device::ensure<double>(buffer_tag::photo_ionization_HI, n_cells);
-        auto phi_buf = device::get(buffer_tag::photo_ionization_HI);
-        auto phi_d = phi_buf.data<double>();
-        safe_cuda(cudaMemset(phi_d, 0, phi_buf.size()));
+        auto phion_HI = device::scratch<double>(n_cells);
+        safe_cuda(cudaMemset(phion_HI.data(), 0, phion_HI.bytes()));
 
         // Determine how large the octahedron should be, based on the raytracing
         // radius. The radius equals the distance from the source to the middle of the
         // faces of the octahedron. To raytrace the whole volume, the octahedron must
         // be 1.5*N in size. Allocate (if necessary) the column density array.
         int q_max = std::ceil(c::sqrt3<> * std::min(R, c::sqrt3<> * m1 / 2.0));
-        device::ensure<double>(
-            buffer_tag::column_density_HI, grid_size * cells_to_shell(q_max)
-        );
+        auto column_density_HI =
+            device::scratch<double>(cells_to_shell(q_max) * grid_size);
 
-        // Get source properties, assuming the arrays are already on the device.
-        if (!device::contains(buffer_tag::source_flux) ||
-            !device::contains(buffer_tag::source_position))
-            throw std::runtime_error(
-                "Source properties must be allocated on the device before calling "
-                "do_all_sources_gpu"
-            );
-        auto src_flux_d = get_data_view<double>(buffer_tag::source_flux);
-        auto src_pos_d = get_data_view<int>(buffer_tag::source_position);
+        auto src_flux_d = resident.source_flux.data();
+        auto src_pos_d = resident.source_position.data();
 
         // Create helper data structures: data_HI, ion_tables, logtau
 
-        element_data data_HI{
-            phi_d, get_data_view<double>(buffer_tag::column_density_HI), sigma
-        };
+        element_data data_HI{phion_HI.data(), column_density_HI.data(), sigma};
 
         photo_tables ion_tables{
-            get_data_view<double>(buffer_tag::photo_ion_thin_table),
-            get_data_view<double>(buffer_tag::photo_ion_thick_table)
+            resident.photo_ion_thin.data(), resident.photo_ion_thick.data()
         };
 
         linspace<double> logtau{minlogtau, dlogtau, static_cast<size_t>(num_tau)};
@@ -194,7 +186,7 @@ namespace asora {
 
         // Copy the accumulated ionization fraction back to the host.
         // Memcpy blocks until last kernel has finished.
-        phi_buf.copyToHost(phi_ion);
+        phion_HI.copy_to_host(phi_ion);
     }
 
     // ========================================================================
@@ -203,8 +195,9 @@ namespace asora {
     // ========================================================================
     __global__ void evolve0D_gpu(
         size_t m1, double dr, double R_max, int q_max, size_t ns_start, size_t num_src,
-        int *src_pos, double *__restrict__ src_flux, element_data data_HI,
-        density_maps densities, photo_tables ion_tables, linspace<double> logtau
+        const int *__restrict__ src_pos, const double *__restrict__ src_flux,
+        element_data data_HI, density_maps densities, photo_tables ion_tables,
+        linspace<double> logtau
     ) {
         /* The raytracing kernel proceeds as follows:
          * 1. Select the source based on the thread-block number
