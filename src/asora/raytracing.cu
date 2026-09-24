@@ -112,9 +112,9 @@ namespace {
 namespace asora {
 
     void do_all_sources_gpu(
-        double R, double sigma, double dr, const double *xh_av, double *phi_ion,
-        size_t num_src, size_t m1, double minlogtau, double dlogtau, size_t num_tau,
-        size_t grid_size, size_t block_size
+        double R, double sigma, double dr, double *phi_ion, size_t num_src, size_t m1,
+        double minlogtau, double dlogtau, size_t num_tau, size_t grid_size,
+        size_t block_size
     ) {
         device::check_initialized();
 
@@ -134,27 +134,33 @@ namespace asora {
                 "source data (flux, position) must be allocated on the device before "
                 "calling do_all_sources_gpu"
             );
+        if (!resident.fraction_HII_avg)
+            throw std::runtime_error(
+                "average ionized fraction must be allocated on the device before "
+                "calling do_all_sources_gpu"
+            );
 
         // Size of grid data
         auto n_cells = m1 * m1 * m1;
 
-        // Allocate (if necessary) and copy the ionized fraction array to the device
-        auto fraction_HII = device::scratch<double>(n_cells);
-        fraction_HII.copy_from_host(xh_av);
-
-        // Number density array is not modified, it is assumed that it is already on the
-        // device
-        density_maps densities{resident.number_density.data(), fraction_HII.data()};
+        // The average ionized fraction is read but never written here. It is seeded
+        // once per timestep by timestep_data_to_device and thereafter updated in
+        // place by the chemistry pass, so no transfer is needed. Ranks that do not
+        // run chemistry refresh it with average_fraction_to_device after the
+        // broadcast.
+        density_maps densities{
+            resident.number_density.data(), resident.fraction_HII_avg.data()
+        };
 
         // Allocate (if necessary) and zero the output array for the photoionization
         // rate
         auto phion_HI = device::scratch<double>(n_cells);
-        safe_cuda(cudaMemset(phion_HI.data(), 0, phion_HI.bytes()));
+        phion_HI.zero();
 
         // Determine how large the octahedron should be, based on the raytracing
-        // radius. The radius equals the distance from the source to the middle of the
-        // faces of the octahedron. To raytrace the whole volume, the octahedron must
-        // be 1.5*N in size. Allocate (if necessary) the column density array.
+        // radius. The radius equals the distance from the source to the middle of
+        // the faces of the octahedron. To raytrace the whole volume, the octahedron
+        // must be 1.5*N in size. Allocate (if necessary) the column density array.
         int q_max = std::ceil(c::sqrt3<> * std::min(R, c::sqrt3<> * m1 / 2.0));
         auto column_density_HI =
             device::scratch<double>(cells_to_shell(q_max) * grid_size);
@@ -175,7 +181,8 @@ namespace asora {
         // Loop over batches of sources
         for (size_t ns = 0; ns < num_src; ns += grid_size) {
             // Raytrace the current batch of sources in parallel
-            // Consecutive kernel launches are in the same stream and so are serialized
+            // Consecutive kernel launches are in the same stream and so are
+            // serialized
             evolve0D_gpu<<<grid_size, block_size>>>(
                 m1, dr, R, q_max, ns, num_src, src_pos_d, src_flux_d, data_HI,
                 densities, ion_tables, logtau
@@ -238,11 +245,12 @@ namespace asora {
         __syncthreads();
 
         // Loop over q-shells and each thread peforms raytracing on one or more
-        // cells. "s" is the index in the range [0, ..., 4q^2 + 2) that gets mapped to
-        // the cells in the shell. (q, s) indices are mapped to (i, j, k) indices via
-        // asora::linthrd2cart.
+        // cells. "s" is the index in the range [0, ..., 4q^2 + 2) that gets mapped
+        // to the cells in the shell. (q, s) indices are mapped to (i, j, k) indices
+        // via asora::linthrd2cart.
         for (int q = 1; q <= q_max; ++q) {
-            // Prepare shared memory for column density interpolation for this shell.
+            // Prepare shared memory for column density interpolation for this
+            // shell.
             data_HI.partition_column_density(q);
 
             // Each thread can process multiple cells.
