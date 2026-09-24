@@ -8,12 +8,12 @@ namespace asora {
 
     /* @brief Perform a global pass of the chemistry solver.
      *
-     * @param xh Initial HI fraction (input)
-     * @param xh_av Average HI fraction (output)
+     * The initial fraction, temperature and clumping fields are resident and are
+     * uploaded once per timestep. The average fraction is resident too and is
+     * updated in place; use average_fraction_to_host to read it back.
+     *
      * @param xh_int Intermediate HI fraction (output)
-     * @param temp Temperature field (input)
      * @param phi_ion Photo-ionization rate (input)
-     * @param clump Clumping factor field (input)
      * @param dt Time step size
      * @param bh00 Hydrogen recombination parameter (value at 10^4K)
      * @param albpow Hydrogen recombination parmaeter (power-law index)
@@ -26,10 +26,8 @@ namespace asora {
      * @return Number of converged cells
      */
     size_t global_pass(
-        double* xh, double* xh_avg, double* xh_int, const double* temp,
-        const double* phi_ion, const double* clump, double dt, double bh00,
-        double albpow, double colh0, double temph0, double abu_c, size_t n_cells,
-        size_t block_size
+        double* xh_int, const double* phi_ion, double dt, double bh00, double albpow,
+        double colh0, double temph0, double abu_c, size_t n_cells, size_t block_size
     );
 
 }  // namespace asora
