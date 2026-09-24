@@ -110,7 +110,7 @@ def test_update_decomposition_rebuilds_if_inputs_change() -> None:
             src_pos=src_pos,
             src_flux=src_flux,
             N=16,
-            R_max_LLS=r_max,
+            R_max=r_max,
             src_batch_size=8,
             num_tau=100,
             is_domain_periodic=True,
@@ -153,7 +153,7 @@ def test_every_source_survives_the_decomposition() -> None:
     cell_size = 1.0
     # Radius 0.6 cells: neighbouring cells along x intersect (centres 1.0 apart, radii sum
     # to 1.2) while the clusters, 4 cells apart in y and z, do not.
-    r_max_lls = 0.6
+    r_max = 0.6
     src_pos = np.array(
         [[x, plane, plane] for plane in (1, 5, 9, 13) for x in (1, 2, 3, 4, 5)],
         dtype=np.int32,
@@ -165,7 +165,7 @@ def test_every_source_survives_the_decomposition() -> None:
         src_pos=src_pos,
         src_flux=src_flux,
         N=16,
-        R_max_LLS=r_max_lls,
+        R_max=r_max,
         src_batch_size=8,
         num_tau=100,
         is_domain_periodic=True,

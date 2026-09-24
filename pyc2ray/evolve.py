@@ -28,10 +28,16 @@ import numpy as np
 from mpi4py import MPI
 
 from pyc2ray.asora_core import (
-    is_device_init,
-    prepare_grid_buffers,
+    average_fraction_to_device,
+    average_fraction_to_host,
+    check_device_init,
+    density_to_device,
+    flat_contiguous,
+    source_data_to_device,
+    timestep_data_to_device,
 )
 from pyc2ray.domain.domain_decomposition_handler import DomainDecompositionHandler
+from pyc2ray.domain.subdomain import Subdomain
 from pyc2ray.load_extensions import libasora, libc2ray
 from pyc2ray.utils.logutils import allow_rank_logging
 from pyc2ray.utils.other_utils import display_seconds, distribute_jobs
@@ -40,6 +46,7 @@ from pyc2ray.utils.sourceutils import FloatArray, IntArray
 __all__ = ["evolve3D"]
 
 logger = logging.getLogger(__name__)
+comm = MPI.COMM_WORLD
 
 
 @dataclass
@@ -72,6 +79,7 @@ def relative_change(old: float, new: float) -> float:
     return abs((new - old) / new) if new > 0.0 else 1.0
 
 
+@check_device_init
 def _evolve3D_asora(
     dt: float,
     dr: float,
@@ -92,7 +100,7 @@ def _evolve3D_asora(
     photo_thick_table: FloatArray,
     minlogtau: float,
     dlogtau: float,
-    R_max_LLS: float,
+    R_max: float,
     convergence_fraction: float,
     sigma: float,
     chems: ChemistryParams,
@@ -131,7 +139,7 @@ def _evolve3D_asora(
         Base 10 log of the minimum value of the table in τ (excluding τ = 0).
     dlogtau
         Step size of the logτ-table.
-    R_max_LLS
+    R_max
         Value of maximum comoving distance for photons from source (type 3 LLS in original C2Ray). This value is
         given in cell units, but doesn't need to be an integer.
     convergence_fraction
@@ -148,11 +156,6 @@ def _evolve3D_asora(
     phi_ion : 3D-array of dtype float
         Photoionization rate of each cell due to all sources.
     """
-    if not is_device_init():
-        raise RuntimeError(
-            "GPU not initialized. Please initialize it by calling device_init(N)"
-        )
-
     rank_prefix = f"[Rank={rank}] " if use_mpi else ""
 
     # Problem dimensions.
@@ -195,24 +198,23 @@ Convergence Criterion (Number of points): {conv_criterion: n}
 
     # Copy positions & fluxes of sources to the GPU
     assert libasora is not None
-    libasora.source_data_to_device(src_pos.ravel(), src_flux.ravel())
+    source_data_to_device(src_pos, src_flux)
 
     # Copy density field to GPU once at the beginning of timestep (!! do_all_sources assumes this !!)
     assert libasora is not None
-    ndens_flat = np.ravel(ndens).astype(np.float64)
-    libasora.density_to_device(ndens_flat)
+    density_to_device(ndens)
 
-    # Initialize average and intermediate results
-    xh_flat = np.ravel(xh).astype(np.float64)
-    xh_av = xh_flat.copy()
-    xh_int = xh_flat.copy()
+    # These fields do not change over the timestep. This also seeds the average ionized fraction
+    # on the device, which then stays there for the whole timestep.
+    xh = flat_contiguous(xh)
+    timestep_data_to_device(xh, temp, clump)
+
+    # Intermediate storage on host to allow communication between ranks.
+    xh_av = flat_contiguous(xh).copy()
+    xh_int = flat_contiguous(xh).copy()
 
     # Initialize ionization rate array.
-    phi_ion = np.zeros_like(ndens_flat)
-
-    # Prepare other inputs
-    temp_flat = np.ravel(temp).astype(np.float64)
-    clump_flat = np.ravel(clump).astype(np.float64)
+    phi_ion = np.zeros_like(xh)
 
     with allow_rank_logging(rank):
         logger.info(f"{rank_prefix}Copied source data to device.")
@@ -234,10 +236,9 @@ Convergence Criterion (Number of points): {conv_criterion: n}
         # This function updates phi_ion.
         assert libasora is not None
         libasora.do_all_sources(
-            R_max_LLS,
+            R_max,
             sigma,
             dr,
-            xh_av,
             phi_ion,
             num_src,
             N,
@@ -255,13 +256,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
 
         if use_mpi:
             # Collect results from the different MPI processors
-            if rank == 0:
-                MPI.COMM_WORLD.Reduce(
-                    MPI.IN_PLACE, [phi_ion, MPI.DOUBLE], op=MPI.SUM, root=0
-                )
-            else:
-                MPI.COMM_WORLD.Reduce([phi_ion, MPI.DOUBLE], None, op=MPI.SUM, root=0)
-            MPI.COMM_WORLD.Bcast([phi_ion, MPI.DOUBLE], root=0)
+            comm.Allreduce(MPI.IN_PLACE, [phi_ion, MPI.DOUBLE], op=MPI.SUM)
 
         if rank == 0:
             # ---------------------
@@ -271,22 +266,23 @@ Convergence Criterion (Number of points): {conv_criterion: n}
 
             time_start = time.perf_counter()
 
-            # Apply the global rates to compute the updated ionization fraction
-            # This function updates xh_av and xh_int.
+            # Apply the global rates to compute the updated ionization fraction.
+            # This function updates the resident average fraction and xh_int.
             conv_flag = libasora.chemistry_global_pass(
                 dt,
-                temp_flat,
-                xh_flat,
-                xh_av,
                 xh_int,
                 phi_ion,
-                clump_flat,
                 chems.bh00,
                 chems.albpow,
                 chems.colh0,
                 chems.temph0,
                 chems.abu_c,
             )
+
+            # The average fraction stays on the device for the next raytracing pass;
+            # it only needs to come back when the other ranks have to receive it.
+            if use_mpi:
+                average_fraction_to_host(xh_av)
 
             time_end = time.perf_counter()
             logger.info(f"  took {display_seconds(time_end - time_start)}")
@@ -310,19 +306,31 @@ Convergence Criterion (Number of points): {conv_criterion: n}
                 (rel_change_xh1 < convergence_fraction)
                 and (rel_change_xh0 < convergence_fraction)
             )
-            n_count += 1
 
             # Set previous metrics to current ones and repeat if not converged
             prev_sum_xh1 = sum_xh1
             prev_sum_xh0 = sum_xh0
 
+            # Increase the convergence iteration counter
+            n_count += 1
+
         if use_mpi:
             # broadcast ionised fraction field
-            MPI.COMM_WORLD.Bcast([xh_av, MPI.DOUBLE], root=0)
-            MPI.COMM_WORLD.Bcast([xh_int, MPI.DOUBLE], root=0)
+            comm.Bcast([xh_av, MPI.DOUBLE], root=0)
+
+            # Ranks that do not run chemistry hold no up-to-date copy on the device,
+            # so they push the field they just received. Rank 0 already has it there.
+            if rank != 0:
+                average_fraction_to_device(xh_av)
 
             # broadcast convergence
-            converged = MPI.COMM_WORLD.bcast(converged, root=0)
+            converged = comm.bcast(converged, root=0)
+
+    # Only rank 0 computes xh_int, but every rank returns it, and the caller feeds it
+    # back as the initial fraction of the next timestep. One broadcast here is enough:
+    # nothing off-rank reads it inside the loop.
+    if use_mpi:
+        comm.Bcast([xh_int, MPI.DOUBLE], root=0)
 
     if rank == 0:
         logger.info(
@@ -332,6 +340,71 @@ Convergence Criterion (Number of points): {conv_criterion: n}
     return xh_int.reshape(mesh_shape), phi_ion.reshape(mesh_shape)
 
 
+def _subdomain_raytracing(
+    subdomain: Subdomain,
+    ndens: FloatArray,
+    xh_av_grid: FloatArray,
+    R_max: float,
+    sigma: float,
+    dr: float,
+    logtauspace: tuple[float, float, int],
+    src_batch_size: int,
+    rank: int,
+    rank_prefix: str,
+) -> FloatArray:
+    # Retrieve the local source positions and strengths from the
+    # current subdomain.
+    local_src_pos = subdomain.get_local_sources_positions().astype(np.int32, copy=False)
+    local_src_flux = subdomain.get_local_sources_strengths().astype(
+        np.float64, copy=False
+    )
+
+    source_data_to_device(local_src_pos, local_src_flux)
+    num_local_sources = len(local_src_pos)
+    with allow_rank_logging(rank):
+        logger.info(f"{rank_prefix}Copied source data to device.")
+
+    # Retrieve local density field and flatten it for the GPU
+    local_ndens = np.array([], dtype=np.float64)
+    subdomain.global_to_local_map(ndens, local_ndens)
+    local_mesh_size = len(local_ndens)  # assuming cubic subdomains
+    local_ndens = flat_contiguous(local_ndens)
+
+    # Copy density field to GPU
+    density_to_device(local_ndens)
+    with allow_rank_logging(rank):
+        logger.info(f"{rank_prefix}Copied density data to device.")
+
+    # Map the global density and ionized fraction fields to the local grid of the current subdomain.
+    # Format input data for the CUDA extension module (flat arrays, C-types,etc).
+    local_xh_av = np.array([], dtype=np.float64)
+    subdomain.global_to_local_map(xh_av_grid, local_xh_av)
+    average_fraction_to_device(local_xh_av)
+
+    # Initialize local photoionization rate array for the current subdomain.
+    # Start from explicit zeros to avoid stale values when one rank handles multiple groups.
+    local_phi_ion = np.array([], dtype=np.float64)
+    subdomain.resize_local_field(local_phi_ion)
+    local_shape = local_phi_ion.shape
+    local_phi_ion = flat_contiguous(local_phi_ion)
+
+    # Do the raytracing part for each source. This computes the cumulative ionization rate for each cell.
+    # This function updates phi_ion.
+    assert libasora is not None
+    libasora.do_all_sources(
+        R_max,
+        sigma,
+        dr,
+        local_phi_ion,
+        num_local_sources,
+        local_mesh_size,
+        *logtauspace,
+        src_batch_size,
+    )
+    return local_phi_ion.reshape(local_shape)
+
+
+@check_device_init
 def _evolve3D_asora_domain_decomposition(
     dt: float,
     dr: float,
@@ -352,7 +425,7 @@ def _evolve3D_asora_domain_decomposition(
     photo_thick_table: FloatArray,
     minlogtau: float,
     dlogtau: float,
-    R_max_LLS: float,
+    R_max: float,
     convergence_fraction: float,
     sigma: float,
     chems: ChemistryParams,
@@ -393,7 +466,7 @@ def _evolve3D_asora_domain_decomposition(
         Base 10 log of the minimum value of the table in τ (excluding τ = 0).
     dlogtau
         Step size of the logτ-table.
-    R_max_LLS
+    R_max
         Value of maximum comoving distance for photons from source (type 3 LLS in original C2Ray). This value is
         given in cell units, but doesn't need to be an integer.
     convergence_fraction
@@ -413,15 +486,10 @@ def _evolve3D_asora_domain_decomposition(
     phi_ion : 3D-array of dtype float
         Photoionization rate of each cell due to all sources.
     """
-    if not is_device_init():
-        raise RuntimeError(
-            "GPU not initialized. Please initialize it by calling device_init(N)"
-        )
-
     rank_prefix = f"[Rank={rank}] " if use_mpi else ""
 
     # Problem dimensions.
-    N, _, _ = mesh_shape = ndens.shape
+    mesh_shape = ndens.shape
     num_cells = np.prod(mesh_shape)
     num_src, *_ = src_flux.shape
     num_tau, *_ = photo_thin_table.shape
@@ -443,122 +511,78 @@ Domain decomposition is active
 
     assert libasora is not None
 
-    # Initialize average and intermediate results
-    xh_flat = np.ravel(xh).astype(np.float64)
-    xh_av = xh_flat.copy()
-    xh_int = xh_flat.copy()
+    logtauspace = minlogtau, dlogtau, num_tau
 
-    # Initialize ionization rate array.
-    phi_ion = np.zeros((N, N, N), dtype=np.float64)
+    # Initialize ionization rate array. C-contiguous, so that flattening it for the
+    # chemistry pass is a view rather than a copy of the whole grid per iteration.
+    phi_ion = np.zeros(mesh_shape, dtype=np.float64)
 
-    # Prepare other inputs
-    ndens_flat = np.ravel(ndens).astype(np.float64)
-    temp_flat = np.ravel(temp).astype(np.float64)
-    clump_flat = np.ravel(clump).astype(np.float64)
+    # These global fields do not change over the timestep, so they go to the device
+    # once. Chemistry runs on the global grid and reads them from there. Raytracing,
+    # by contrast, works on subdomain slices and pushes its own average fraction per
+    # group, overwriting the copy seeded here.
+    timestep_data_to_device(xh, temp, clump)
 
-    # Declare local xh and ndens storages
-    local_xh = np.array([], dtype=np.float64)
-    local_ndens = np.array([], dtype=np.float64)
+    # The average fraction is needed in two shapes: flat and C-contiguous for the
+    # device transfers and for MPI, 3D for the subdomain mapping. The second is a
+    # view on the first, so the two never have to be synchronized and no transfer
+    # ends up writing into a temporary.
+    xh_av = flat_contiguous(xh).copy()
+    xh_av_grid = xh_av.reshape(mesh_shape)
+
+    xh_int = flat_contiguous(xh).copy()
 
     # Iteration counter
     n_count = 0
+    subdomains = decomposition.get_subdomains()
 
     while not converged:
-        # Reset photoionization rate global storage
+        # Raytracing accumulates each group's contribution into the global array, so
+        # it has to start every iteration from zero.
         phi_ion.fill(0.0)
 
         # --------------------
         # (1): Raytracing Step
         # --------------------
-        time_start = time.perf_counter()
         with allow_rank_logging(rank):
             logger.info(f"{rank_prefix}Doing Raytracing...")
 
-        subdomains = decomposition.get_subdomains()
         num_local_groups = len(subdomains)
         if num_local_groups == 0:
             with allow_rank_logging(rank):
                 logger.info(f"{rank_prefix}No source groups assigned to this rank.")
 
         # Loop over the subdomains (source groups) assigned to the current rank
+        tot_time: float = 0.0
         for g, subdomain in enumerate(subdomains):
-            # Map the global density and ionized fraction fields to the local grid of the current subdomain.
-            # Format input data for the CUDA extension module (flat arrays, C-types,etc).
-            if n_count == 0:
-                subdomain.global_to_local_map(xh, local_xh)
-                local_xh_av_flat = np.ravel(local_xh).astype(np.float64, copy=True)
-            else:
-                # If this is not first iteration then we need to find subdomain xh_av_flat from the global one received.
-                # from rank 0 after the broadcast.
-                tmp_xh_av = np.reshape(xh_av, (N, N, N))
-                subdomain.global_to_local_map(tmp_xh_av, local_xh)
-                local_xh_av_flat = np.ravel(local_xh).astype(np.float64, copy=True)
-
-            # Initialize local photoionization rate array for the current subdomain.
-            # Start from explicit zeros to avoid stale values when one rank handles multiple groups.
-            local_phi_ion = np.array([], dtype=np.float64)
-            subdomain.resize_local_field(local_phi_ion)
-            local_mesh_size = local_phi_ion.shape[0]  # assuming cubic subdomains
-            if local_mesh_size == 0:
-                with allow_rank_logging(rank):
-                    logger.info(
-                        f"{rank_prefix}  rank={rank} skipping empty local grid for group {g} of {num_local_groups}."
-                    )
-                continue
-            local_phi_ion.fill(0.0)
-            local_phi_ion_flat = np.ravel(local_phi_ion).astype(np.float64, copy=False)
-
-            # Mesh-dependent buffers can change across groups, check and update them if needed
-            prepare_grid_buffers(local_mesh_size, True)
-
-            # Retrieve the local source positions and strengths from the
-            # current subdomain.
-            local_src_pos = subdomain.get_local_sources_positions().astype(np.int32)
-            num_local_sources = local_src_pos.shape[0]
-
-            # Copy positions & fluxes of sources to the GPU in advance
-            local_src_flux = subdomain.get_local_sources_strengths().astype(
-                np.float64, copy=False
-            )
-            libasora.source_data_to_device(
-                local_src_pos.ravel(), local_src_flux.ravel()
-            )
-            with allow_rank_logging(rank):
-                logger.info(f"{rank_prefix}Copied source data to device.")
-
-            # Retrieve local density field and flatten it for the GPU
-            subdomain.global_to_local_map(ndens, local_ndens)
-            local_ndens_flat = np.ravel(local_ndens).astype(np.float64, copy=True)
-
-            # Copy density field to GPU
-            libasora.density_to_device(local_ndens_flat)
-            with allow_rank_logging(rank):
-                logger.info(f"{rank_prefix}Copied density data to device.")
-
-            # Do the raytracing part for each source. This computes the cumulative ionization rate for each cell.
-            # This function updates phi_ion.
-            libasora.do_all_sources(
-                R_max_LLS,
+            time_start = time.perf_counter()
+            local_phi_ion = _subdomain_raytracing(
+                subdomain,
+                ndens,
+                xh_av_grid,
+                R_max,
                 sigma,
                 dr,
-                local_xh_av_flat,
-                local_phi_ion_flat,
-                num_local_sources,
-                local_mesh_size,
-                minlogtau,
-                dlogtau,
-                num_tau,
-                src_batch_size,  # Determines the CUDA kernel grid size
+                logtauspace,
+                src_batch_size,
+                rank,
+                rank_prefix,
             )
-
             time_end = time.perf_counter()
+            delta_time = time_end - time_start
+            tot_time += delta_time
+
             with allow_rank_logging(rank):
                 logger.info(
-                    f"{rank_prefix}  rank={rank} took {display_seconds(time_end - time_start)} for group {g} of {num_local_groups}."
+                    f"{rank_prefix}  rank={rank} took {display_seconds(delta_time)} for group {g} of {num_local_groups}."
                 )
 
             # Add up the contribution of the current group to the total photoionization rate.
             subdomain.local_to_global_map(local_phi_ion, phi_ion, True)
+
+        logger.info(
+            f"{rank_prefix}Raytracing completed for all groups. Total time: {display_seconds(tot_time)}"
+        )
 
         # End of loop over source groups assigned to the current rank.
 
@@ -566,13 +590,8 @@ Domain decomposition is active
         # TODO: flattening of phi_ion is not needed for the call to chemistry_global_pass which
         # follows because phi_ion already has a C-contiguous array but we could make that explicit
         # anyway just for code clarity.
-        MPI.COMM_WORLD.Allreduce(MPI.IN_PLACE, [phi_ion, MPI.DOUBLE], op=MPI.SUM)
-
-        time_end = time.perf_counter()
-        if rank == 0:
-            logger.info(
-                f"{rank_prefix}Raytracing completed for all groups. Total time: {display_seconds(time_end - time_start)}"
-            )
+        if use_mpi:
+            comm.Allreduce(MPI.IN_PLACE, [phi_ion, MPI.DOUBLE], op=MPI.SUM)
 
         if rank == 0:
             # ---------------------
@@ -582,27 +601,28 @@ Domain decomposition is active
 
             time_start = time.perf_counter()
 
-            # Raytracing resizes these shared ASORA buffers for each local grid.
-            # Restore the global buffers and density field needed by chemistry.
-            libasora.prepare_grid_buffers(N, True)
-            libasora.density_to_device(ndens_flat)
+            # Raytracing resizes these shared ASORA buffers for each local grid and
+            # leaves the average fraction holding the last subdomain slice. Restore
+            # the global buffers, density field and average fraction for chemistry.
+            density_to_device(ndens)
+            average_fraction_to_device(xh_av)
 
-            # Apply the global rates to compute the updated ionization fraction
-            # This function updates xh_av and xh_int.
+            # Apply the global rates to compute the updated ionization fraction.
+            # This function updates the resident average fraction and xh_int.
             conv_flag = libasora.chemistry_global_pass(
                 dt,
-                temp_flat,
-                xh_flat,
-                xh_av,
                 xh_int,
-                phi_ion,
-                clump_flat,
+                flat_contiguous(phi_ion),
                 chems.bh00,
                 chems.albpow,
                 chems.colh0,
                 chems.temph0,
                 chems.abu_c,
             )
+
+            # Raytracing overwrites the device copy with subdomain slices, so the
+            # updated global field has to come back to the host to be broadcast.
+            average_fraction_to_host(xh_av)
 
             time_end = time.perf_counter()
             logger.info(f"  took {display_seconds(time_end - time_start)}")
@@ -631,15 +651,21 @@ Domain decomposition is active
             prev_sum_xh1 = sum_xh1
             prev_sum_xh0 = sum_xh0
 
-        # Broadcast the updated ionization fraction field to all ranks for the next iteration of raytracing.
-        MPI.COMM_WORLD.Bcast([xh_av, MPI.DOUBLE], root=0)
-        MPI.COMM_WORLD.Bcast([xh_int, MPI.DOUBLE], root=0)
+            # Increase the convergence iteration counter
+            n_count += 1
 
-        # Broadcast convergence to the other ranks.
-        converged = MPI.COMM_WORLD.bcast(converged, root=0)
+        if use_mpi:
+            # Broadcast the updated ionization fraction field to all ranks for the next iteration of raytracing.
+            comm.Bcast([xh_av, MPI.DOUBLE], root=0)
 
-        # increase the convergence iteration counter
-        n_count += 1
+            # Broadcast convergence to the other ranks.
+            converged = comm.bcast(converged, root=0)
+
+    # Only rank 0 computes xh_int, but every rank returns it, and the caller feeds it
+    # back as the initial fraction of the next timestep. One broadcast here is enough:
+    # nothing off-rank reads it inside the loop.
+    if use_mpi:
+        comm.Bcast([xh_int, MPI.DOUBLE], root=0)
 
     if rank == 0:
         logger.info(
@@ -669,7 +695,7 @@ def _evolve3D_c2ray(
     photo_thick_table: FloatArray,
     minlogtau: float,
     dlogtau: float,
-    R_max_LLS: float,
+    R_max: float,
     convergence_fraction: float,
     sigma: float,
     chems: ChemistryParams,
@@ -705,7 +731,7 @@ def _evolve3D_c2ray(
         Base 10 log of the minimum value of the table in τ (excluding τ = 0).
     dlogtau
         Step size of the logτ-table.
-    R_max_LLS
+    R_max
         Value of maximum comoving distance for photons from source (type 3 LLS in original C2Ray). This value is
         given in cell units, but doesn't need to be an integer.
     convergence_fraction
@@ -803,7 +829,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             heat_thick_table,
             minlogtau,
             dlogtau,
-            R_max_LLS,
+            R_max,
         )
 
         time_end = time.perf_counter()
@@ -816,13 +842,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
 
         if use_mpi:
             # Collect results from the different MPI processors
-            if rank == 0:
-                MPI.COMM_WORLD.Reduce(
-                    MPI.IN_PLACE, [phi_ion, MPI.DOUBLE], op=MPI.SUM, root=0
-                )
-            else:
-                MPI.COMM_WORLD.Reduce([phi_ion, MPI.DOUBLE], None, op=MPI.SUM, root=0)
-            MPI.COMM_WORLD.Bcast([phi_ion, MPI.DOUBLE], root=0)
+            comm.Allreduce(MPI.IN_PLACE, [phi_ion, MPI.DOUBLE], op=MPI.SUM)
 
         if rank == 0:
             # ---------------------
@@ -879,8 +899,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
 
         if use_mpi:
             # broadcast ionised fraction field
-            MPI.COMM_WORLD.Bcast([xh_av, MPI.DOUBLE], root=0)
-            MPI.COMM_WORLD.Bcast([xh_int, MPI.DOUBLE], root=0)
+            comm.Bcast([xh_av, MPI.DOUBLE], root=0)
 
             # broadcast convergence
             converged = MPI.COMM_WORLD.bcast(converged, root=0)
