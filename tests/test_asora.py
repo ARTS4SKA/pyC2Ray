@@ -103,6 +103,11 @@ class TestLibasora:
     def test_device_init(self, init_device):
         libasora.is_device_init()
 
+    def test_density_to_device_no_init(self):
+        dens = np.full(1000, 0.1, dtype=np.float64)
+        with pytest.raises(RuntimeError):
+            libasora.density_to_device(dens)
+
     def test_density_to_device(self, init_device):
         # One argument required
         with pytest.raises(TypeError):

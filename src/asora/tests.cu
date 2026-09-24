@@ -102,12 +102,13 @@ namespace asoratest {
             }
         }
 
+        using namespace asora;
         // This is the input:
-        asora::device_buffer shared_cdens_dev(dens_size * sizeof(double));
-        shared_cdens_dev.copyFromHost(dens_data_vec.data());
+        auto shared_cdens_dev = device_array<double>(dens_size);
+        shared_cdens_dev.copy_from_host(dens_data_vec.data());
 
         // This is the output:
-        asora::device_buffer coldens_dev(size * sizeof(double));
+        auto coldens_dev = device_array<double>(size);
 
         uint3 gs = {static_cast<unsigned int>(shape[0]), 1, 1};
         uint3 ts = {
@@ -115,49 +116,45 @@ namespace asoratest {
         };
 
         cell_interpolator_kernel<<<gs, ts>>>(
-            coldens_dev.view<double>().data(),  //
-            shared_cdens_dev.view<double>().data()
+            coldens_dev.data(), shared_cdens_dev.data()
         );
 
         asora::safe_cuda(cudaPeekAtLastError());
-        coldens_dev.copyToHost(coldens_data, coldens_dev.size());
+        coldens_dev.copy_to_host(coldens_data);
     }
 
     // Arrays are host pointers:
     void geometric_factors(double *fact_data, const std::array<size_t, 3> &shape) {
         size_t size =
-            4 * std::accumulate(
-                    shape.begin(), shape.end(), sizeof(double), std::multiplies<>()
-                );
-        asora::device_buffer fact_dev(size);
+            4 * std::accumulate(shape.begin(), shape.end(), 1.0, std::multiplies<>());
+        auto fact_dev = asora::device_array<double>(size);
 
         uint3 gs = {static_cast<unsigned int>(shape[0]), 1, 1};
         uint3 ts = {
             static_cast<unsigned int>(shape[1]), static_cast<unsigned int>(shape[2]), 1
         };
 
-        geometric_factors_kernel<<<gs, ts>>>(fact_dev.view<double>().data());
+        geometric_factors_kernel<<<gs, ts>>>(fact_dev.data());
 
         asora::safe_cuda(cudaPeekAtLastError());
-        fact_dev.copyToHost(fact_data, fact_dev.size());
+        fact_dev.copy_to_host(fact_data);
     }
 
     // Arrays are host pointers:
     void path_in_cell(double *path_data, const std::array<size_t, 3> &shape) {
-        size_t size = std::accumulate(
-            shape.begin(), shape.end(), sizeof(double), std::multiplies<>()
-        );
-        asora::device_buffer path_dev(size);
+        size_t size =
+            std::accumulate(shape.begin(), shape.end(), 1.0, std::multiplies<>());
+        auto path_dev = asora::device_array<double>(size);
 
         uint3 gs = {static_cast<unsigned int>(shape[0]), 1, 1};
         uint3 ts = {
             static_cast<unsigned int>(shape[1]), static_cast<unsigned int>(shape[2]), 1
         };
 
-        path_in_cell_kernel<<<gs, ts>>>(path_dev.view<double>().data());
+        path_in_cell_kernel<<<gs, ts>>>(path_dev.data());
 
         asora::safe_cuda(cudaPeekAtLastError());
-        path_dev.copyToHost(path_data, path_dev.size());
+        path_dev.copy_to_host(path_data);
     }
 
     std::array<int, 3> linthrd2cart(int q, int s) {
