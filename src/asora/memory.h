@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 /* @file memory.h
  * @brief CUDA device and device memory management for ASORA raytracing library
@@ -20,8 +21,8 @@
  *   allocation or by the stream-ordered memory pool.
  * - Aggregate holding the arrays whose contents must outlive a single library
  *   call.
- * - Singleton class managing device initialization, the memory pool and the
- *   stream that orders pool operations.
+ * - Singleton class managing device initialization and the memory pool backing
+ *   per-call allocations.
  *
  */
 
@@ -46,8 +47,12 @@ namespace asora {
      * The array is the unique owner of its allocation, which is released when
      * it goes out of scope. It is movable but not copyable: observers take a
      * raw pointer through data(), and arrays that several subsystems need to
-     * read live in resident_data. A pooled array records the stream its
-     * allocation is ordered on; it must only be accessed by work ordered on
+     * read live in resident_data.
+     *
+     * A pooled array records the stream its allocation is ordered on, because
+     * the destructor has no other way to obtain one. It does not own that
+     * stream: which stream to schedule on is decided by the entry point that
+     * launches the work. The array must only be accessed by work ordered on
      * that same stream.
      *
      * @tparam T Element type
@@ -210,6 +215,22 @@ namespace asora {
         /// Like copy_to_host but all elements of the array are copied
         void copy_to_host(T *dst) const { copy_to_host(dst, _items); }
 
+        /* @brief Copy data from another device array.
+         *
+         * Device-to-device bandwidth is an order of magnitude above the host
+         * link, so seeding one resident array from another is much cheaper
+         * than uploading the same host data twice.
+         *
+         * @param[in] src Device array to copy from
+         * @throw std::invalid_argument if this array is smaller than src
+         */
+        void copy_from_device(const device_array &src) {
+            check_fits(src.size(), "copy_from_device");
+            safe_cuda(
+                cudaMemcpy(data(), src.data(), src.bytes(), cudaMemcpyDeviceToDevice)
+            );
+        }
+
         /* @brief Resize if needed, then copy data from host to device.
          * @param[in] src Host memory source pointer
          * @param[in] items Number of elements to copy
@@ -219,6 +240,18 @@ namespace asora {
             ensure(items, exact);
             copy_from_host(src, items);
         }
+
+        /* @brief Resize if needed, then copy data from another device array.
+         * @param[in] src Device array to copy from
+         * @param[in] exact Forwarded to ensure()
+         */
+        void assign(const device_array &src, bool exact = false) {
+            ensure(src.size(), exact);
+            copy_from_device(src);
+        }
+
+        /// @brief Set all elements of the array to zero.
+        void zero() { safe_cuda(cudaMemset(data(), 0, bytes())); }
 
        private:
         /// Allocate _items elements through the allocator recorded in the deleter
@@ -263,14 +296,19 @@ namespace asora {
      * device::scratch.
      */
     struct resident_data {
-        device_array<double> number_density;   ///< Matter number density
-        device_array<double> photo_ion_thin;   ///< Optically thin photoion. table
-        device_array<double> photo_ion_thick;  ///< Optically thick photoion. table
-        device_array<double> source_flux;      ///< Source flux array
-        device_array<int> source_position;     ///< Source position array
+        device_array<double> number_density;    ///< Matter number density
+        device_array<double> fraction_HII;      ///< HII fraction at timestep start
+        device_array<double> fraction_HII_avg;  ///< Average HII fraction, updated
+                                                ///< in place by every chemistry pass
+        device_array<double> temperature;       ///< Temperature map
+        device_array<double> clumping;          ///< Clumping factor map
+        device_array<double> photo_ion_thin;    ///< Optically thin photoion. table
+        device_array<double> photo_ion_thick;   ///< Optically thick photoion. table
+        device_array<double> source_flux;       ///< Source flux array
+        device_array<int> source_position;      ///< Source position array
     };
 
-    /* @brief Singleton managing only one GPU device, its memory pool and stream.
+    /* @brief Singleton managing only one GPU device and its memory pool.
      *
      * The singleton pattern ensures thread-safe initialization of the class and
      * safe read-only access to its resident data, but modifications to that
@@ -318,36 +356,38 @@ namespace asora {
 
         /* @brief Allocate a per-call array from the stream-ordered memory pool.
          *
+         * The stream is chosen by the caller, since it is a property of the
+         * work being scheduled rather than of the device: an entry point
+         * launches kernels that read many arrays at once, and all of them must
+         * be ordered on the stream that entry point schedules on. Passing 0
+         * means the default stream, the same one an unqualified kernel launch
+         * uses, and keeps allocations in step with the launches even if the
+         * translation unit is later compiled with per-thread default streams.
+         *
          * Falls back to a plain device allocation on platforms without memory
          * pool support, where initialize() leaves the pool null.
          *
          * @tparam T Element type
          * @param[in] items Number of elements
+         * @param[in] stream Stream to order the allocation and its release on
          *
-         * @return Device array ordered on the device stream, or an unpooled
+         * @return Device array ordered on the given stream, or an unpooled
          * array if the platform has no memory pool
          * @throw std::runtime_error if device not initialized
          */
         template <typename T>
-        static device_array<T> scratch(size_t items) {
+        static device_array<T> scratch(size_t items, cudaStream_t stream) {
             check_initialized();
-            auto &self = instance();
-            return self._pool ? device_array<T>(items, self._stream)
-                              : device_array<T>(items);
+            return instance()._pool ? device_array<T>(items, stream)
+                                    : device_array<T>(items);
+        }
+        template <typename T>
+        static device_array<T> scratch(size_t items) {
+            return scratch<T>(items, 0);
         }
 
         /// Get the CUDA device ID, or -1 if not initialized
         static int device_id() noexcept { return instance()._gpu_id; }
-
-        /* @brief Get the stream that orders all memory pool operations.
-         *
-         * This is currently the legacy default stream: kernel launches and
-         * copies are still synchronous, and allocating from the pool on the
-         * legacy stream keeps them correctly ordered without any explicit
-         * synchronization. Switching to a dedicated stream is a change to
-         * initialize() alone, provided the copies become asynchronous too.
-         */
-        static cudaStream_t stream() noexcept { return instance()._stream; }
 
         /* @brief Get the memory pool backing scratch allocations.
          * @return The pool, or null if the device is not initialized or the
@@ -372,9 +412,6 @@ namespace asora {
 
         /// Device ID (-1 means uninitialized)
         int _gpu_id = -1;
-
-        /// Stream ordering pool allocations; 0 is the legacy default stream
-        cudaStream_t _stream = 0;
 
         /// Stream-ordered pool for scratch allocations; null if unsupported
         cudaMemPool_t _pool = nullptr;
