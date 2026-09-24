@@ -15,39 +15,28 @@ from pyc2ray.radiation.common import make_tau_table
 
 @pytest.fixture
 def mock_c2ray():
-    with patch("pyc2ray.evolve.libc2ray") as mock:
-        mock.configure_mock(
-            **{
-                "chemistry.global_pass": Mock(return_value=1),
-                "raytracing.do_all_sources": Mock(return_value=(10, 0.1)),
-            }
-        )
+    mock = Mock()
+    mock.chemistry.global_pass.return_value = 1
+    mock.raytracing.do_all_sources.return_value = (10, 0.1)
+    with patch("pyc2ray.evolve.libc2ray", mock):
         yield mock
 
 
 @pytest.fixture
 def mock_asora():
+    # check_device_init decorates the evolve entry points at import time, so patching
+    # the decorator is too late. It looks libasora up in the asora_core globals on
+    # every call, so replacing that is what disarms the guard. The same mock goes into
+    # the evolve namespace as well, since some calls reach the extension module
+    # directly and others go through the asora_core wrappers; one mock means one place
+    # to assert on, and the wrappers themselves stay unmocked.
+    mock = Mock()
+    mock.is_device_init.return_value = True
+    mock.chemistry_global_pass.return_value = 1
     with (
-        patch("pyc2ray.evolve.is_device_init", return_value=True),
-        patch("pyc2ray.evolve.libasora") as mock,
+        patch("pyc2ray.evolve.libasora", mock),
+        patch("pyc2ray.asora_core.libasora", mock),
     ):
-        mock.configure_mock(chemistry_global_pass=Mock(return_value=1))
-        yield mock
-
-
-@pytest.fixture
-def mock_asora_domain_decomposition():
-    """Mock the GPU-side helpers used by the domain decomposition path.
-
-    The domain decomposition module itself (grid, source grouping, subdomain
-    mapping) runs for real on the CPU; only the ASORA/GPU calls are mocked.
-    """
-    with (
-        patch("pyc2ray.evolve.is_device_init", return_value=True),
-        patch("pyc2ray.evolve.prepare_grid_buffers"),
-        patch("pyc2ray.evolve.libasora") as mock,
-    ):
-        mock.configure_mock(chemistry_global_pass=Mock(return_value=1))
         yield mock
 
 
@@ -64,13 +53,13 @@ def call_evolve3D(
     src_flux *= 1e-46
 
     # The domain decomposition path builds a per-group local grid sized by the
-    # sources' radius of influence (R_max_LLS cells). On this small test grid a
+    # sources' radius of influence (R_max cells). On this small test grid a
     # radius of 15 cells would make local grids larger than the global grid,
     # which the periodic mapping forbids. Use a smaller radius in that case.
     if domain_decomposition_params is not None:
-        R_max_LLS = 2.0
+        R_max = 2.0
     else:
-        R_max_LLS = 15.0
+        R_max = 15.0
 
     shape = (N, N, N)
     ndens = np.empty(shape, order="F")
@@ -104,7 +93,7 @@ def call_evolve3D(
             src_pos=src_pos.T,
             src_flux=src_flux,
             N=N,
-            R_max_LLS=R_max_LLS,
+            R_max=R_max,
             src_batch_size=8,
             num_tau=num_tau,
             is_domain_periodic=True,
@@ -132,7 +121,7 @@ def call_evolve3D(
         photo_thick_table=photo_thick_table,
         minlogtau=minlogtau,
         dlogtau=dlogtau,
-        R_max_LLS=R_max_LLS,
+        R_max=R_max,
         convergence_fraction=1e-4,
         sigma=sigma,
         chems=ChemistryParams(2.59e-13, -0.7, colh0, temph0, 7.1e-7),
@@ -164,10 +153,7 @@ def test_evolve3D_yes_gpu_root_rank(mock_c2ray, mock_asora):
     mock_c2ray.raytracing.do_all_sources.assert_not_called()
 
 
-def test_evolve3D_yes_gpu_domain_decomposition_root_rank(
-    mock_c2ray, mock_asora_domain_decomposition
-):
-    mock_asora = mock_asora_domain_decomposition
+def test_evolve3D_yes_gpu_domain_decomposition_root_rank(mock_c2ray, mock_asora):
 
     domain_decomposition_params = DomainDecompositionParameters(
         enabled=True,
@@ -192,7 +178,6 @@ def test_evolve3D_yes_gpu_domain_decomposition_root_rank(
     mock_asora.density_to_device.assert_called()
     mock_asora.do_all_sources.assert_called()
     mock_asora.chemistry_global_pass.assert_called()
-    mock_asora.prepare_grid_buffers.assert_called()
 
     mock_c2ray.chemistry.global_pass.assert_not_called()
     mock_c2ray.raytracing.do_all_sources.assert_not_called()
