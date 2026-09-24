@@ -77,7 +77,6 @@ PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) 
     double R;
     double sig;
     double dr;
-    PyArrayObject *xh_av;
     PyArrayObject *phi_ion;
     size_t num_src;
     size_t m1;
@@ -88,22 +87,21 @@ PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) 
     size_t block_size = 256;
 
     if (!PyArg_ParseTuple(
-            args, "dddOOkkddkk|k", &R, &sig, &dr, &xh_av, &phi_ion, &num_src, &m1,
-            &minlogtau, &dlogtau, &num_tau, &grid_size, &block_size
+            args, "dddOkkddkk|k", &R, &sig, &dr, &phi_ion, &num_src, &m1, &minlogtau,
+            &dlogtau, &num_tau, &grid_size, &block_size
         ))
         return nullptr;
 
     // Error checking
-    if (!numpy_check<double>(xh_av) || !numpy_check<double>(phi_ion)) return nullptr;
+    if (!numpy_check<double>(phi_ion)) return nullptr;
 
     // Get Array data
-    auto xh_av_data = static_cast<double *>(PyArray_DATA(xh_av));
     auto phi_ion_data = static_cast<double *>(PyArray_DATA(phi_ion));
 
     try {
         asora::do_all_sources_gpu(
-            R, sig, dr, xh_av_data, phi_ion_data, num_src, m1, minlogtau, dlogtau,
-            num_tau, grid_size, block_size
+            R, sig, dr, phi_ion_data, num_src, m1, minlogtau, dlogtau, num_tau,
+            grid_size, block_size
         );
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
@@ -199,18 +197,72 @@ PyObject *asora_source_data_to_device([[maybe_unused]] PyObject *self, PyObject 
                : nullptr;
 }
 
-/// Ensure mesh-dependent buffers exist with the expected size.
-// FIXME: deprecated?
-PyObject *asora_prepare_grid_buffers([[maybe_unused]] PyObject *self, PyObject *args) {
-    size_t m1;
-    int force_matching_size = 0;
-    if (!PyArg_ParseTuple(args, "k|p", &m1, &force_matching_size)) return nullptr;
+/// Allocate and copy the fields that stay constant for one timestep.
+PyObject *asora_timestep_data_to_device(
+    [[maybe_unused]] PyObject *self, PyObject *args
+) {
+    SAFE_CHECK_INITIALIZED();
+    PyArrayObject *xh, *temp, *clump;
+    if (!PyArg_ParseTuple(args, "OOO", &xh, &temp, &clump)) return nullptr;
 
-    auto n_cells = m1 * m1 * m1;
+    auto &resident = asora::device::resident();
+    if (!load_array_to_device(xh, resident.fraction_HII) ||
+        !load_array_to_device(temp, resident.temperature) ||
+        !load_array_to_device(clump, resident.clumping))
+        return nullptr;
+
+    // The average fraction starts the timestep equal to the initial one, so it is
+    // seeded device-to-device rather than uploaded a second time. From here on it
+    // is updated in place by the chemistry pass and never leaves the device,
+    // except where a rank has to broadcast it.
     try {
-        asora::device::resident().number_density.ensure(n_cells, force_matching_size);
+        resident.fraction_HII_avg.assign(resident.fraction_HII);
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        PyErr_SetString(PyExc_ValueError, e.what());
+        return nullptr;
+    }
+    return Py_None;
+}
+
+/// Copy the average ionized fraction to the device, for ranks that receive it.
+PyObject *asora_average_fraction_to_device(
+    [[maybe_unused]] PyObject *self, PyObject *args
+) {
+    SAFE_CHECK_INITIALIZED();
+    PyArrayObject *xh_av;
+    return PyArg_ParseTuple(
+               args, "O", &xh_av
+           ) && load_array_to_device(xh_av, asora::device::resident().fraction_HII_avg)
+               ? Py_None
+               : nullptr;
+}
+
+/// Copy the average ionized fraction back to the host, for ranks that broadcast it.
+PyObject *asora_average_fraction_to_host(
+    [[maybe_unused]] PyObject *self, PyObject *args
+) {
+    SAFE_CHECK_INITIALIZED();
+    PyArrayObject *xh_av;
+    if (!PyArg_ParseTuple(args, "O", &xh_av)) return nullptr;
+    if (!numpy_check<double>(xh_av)) return nullptr;
+
+    const auto &frac_HII_avg = asora::device::resident().fraction_HII_avg;
+    if (!frac_HII_avg) {
+        PyErr_SetString(
+            PyExc_RuntimeError,
+            "average ionized fraction is not allocated on the device; call "
+            "timestep_data_to_device first"
+        );
+        return nullptr;
+    }
+
+    try {
+        frac_HII_avg.copy_to_host(
+            static_cast<double *>(PyArray_DATA(xh_av)),
+            static_cast<size_t>(PyArray_SIZE(xh_av))
+        );
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_ValueError, e.what());
         return nullptr;
     }
     return Py_None;
@@ -218,12 +270,8 @@ PyObject *asora_prepare_grid_buffers([[maybe_unused]] PyObject *self, PyObject *
 
 PyObject *asora_chemistry_global_pass([[maybe_unused]] PyObject *self, PyObject *args) {
     double dt;
-    PyArrayObject *temp;
-    PyArrayObject *xh;
-    PyArrayObject *xh_av;
     PyArrayObject *xh_int;
     PyArrayObject *phi_ion;
-    PyArrayObject *clump;
     double bh00;
     double albpow;
     double colh0;
@@ -232,24 +280,22 @@ PyObject *asora_chemistry_global_pass([[maybe_unused]] PyObject *self, PyObject 
     size_t block_size = 512;
 
     if (!PyArg_ParseTuple(
-            args, "dOOOOOOddddd|k", &dt, &temp, &xh, &xh_av, &xh_int, &phi_ion, &clump,
-            &bh00, &albpow, &colh0, &temph0, &abu_c, &block_size
+            args, "dOOddddd|k", &dt, &xh_int, &phi_ion, &bh00, &albpow, &colh0, &temph0,
+            &abu_c, &block_size
         ))
         return nullptr;
 
+    if (!numpy_check<double>(xh_int) || !numpy_check<double>(phi_ion)) return nullptr;
+
     // Get Array data
-    auto xh_data = static_cast<double *>(PyArray_DATA(xh));
-    auto xh_av_data = static_cast<double *>(PyArray_DATA(xh_av));
     auto xh_int_data = static_cast<double *>(PyArray_DATA(xh_int));
-    auto temp_data = static_cast<double *>(PyArray_DATA(temp));
     auto phi_ion_data = static_cast<double *>(PyArray_DATA(phi_ion));
-    auto clump_data = static_cast<double *>(PyArray_DATA(clump));
-    auto n_cells = static_cast<size_t>(PyArray_SIZE(xh));
+    auto n_cells = static_cast<size_t>(PyArray_SIZE(xh_int));
 
     try {
         auto conv_flag = asora::global_pass(
-            xh_data, xh_av_data, xh_int_data, temp_data, phi_ion_data, clump_data, dt,
-            bh00, albpow, colh0, temph0, abu_c, n_cells, block_size
+            xh_int_data, phi_ion_data, dt, bh00, albpow, colh0, temph0, abu_c, n_cells,
+            block_size
         );
         return Py_BuildValue("k", conv_flag);
     } catch (const std::exception &e) {
@@ -278,8 +324,12 @@ static PyMethodDef asoraMethods[] = {
      "Copy radiation tables to the device"},
     {"source_data_to_device", asora_source_data_to_device, METH_VARARGS,
      "Copy source data to the device"},
-    {"prepare_grid_buffers", asora_prepare_grid_buffers, METH_VARARGS,
-     "Ensure grid buffers are allocated with exact size for mesh m1"},
+    {"timestep_data_to_device", asora_timestep_data_to_device, METH_VARARGS,
+     "Copy the fields that stay constant over a timestep to the device"},
+    {"average_fraction_to_device", asora_average_fraction_to_device, METH_VARARGS,
+     "Copy the average ionized fraction to the device"},
+    {"average_fraction_to_host", asora_average_fraction_to_host, METH_VARARGS,
+     "Copy the average ionized fraction back to the host"},
     {"chemistry_global_pass", asora_chemistry_global_pass, METH_VARARGS,
      "Solve chemistry ODE"},
     {NULL, NULL, 0, NULL} /* Sentinel */
