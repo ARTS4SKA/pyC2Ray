@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import Any
+from unittest.mock import patch
 
 import numpy as np
+import pytest
 
+from pyc2ray.domain.cost_model import pyC2RayCostModel
 from pyc2ray.domain.domain_decomposition_handler import DomainDecompositionHandler
+from pyc2ray.domain.morton_grouping import MortonGroupingParams, MortonSourceGrouping
+from pyc2ray.domain.regular_grid import RegularGrid
 from pyc2ray.domain.sources import Source, SourceGroup
 from pyc2ray.parameters import DomainDecompositionParameters
 
@@ -91,6 +96,86 @@ def _dd_params(max_num_sources_per_group: int = 4) -> DomainDecompositionParamet
         max_num_sources_per_group=max_num_sources_per_group,
         morton_bits=10,
     )
+
+
+def _grouping_inputs() -> tuple[RegularGrid, list[Source], pyC2RayCostModel]:
+    grid = RegularGrid(cell_size=1.0, num_cells=64, is_periodic_mode_active=True)
+    sources = [
+        Source(id=i, pos=np.array(p, dtype=float), strength=1.0, radius=4.0)
+        for i, p in enumerate([(1, 1, 1), (2, 2, 2), (40, 40, 40), (41, 41, 41)])
+    ]
+    cost_model = pyC2RayCostModel(
+        max_memory_cost_per_group=50.0e9,
+        source_batch_size=1,
+        is_periodic_mode_active=True,
+        photo_ion_table_size=2000,
+    )
+    return grid, sources, cost_model
+
+
+@pytest.mark.parametrize(
+    ("algorithm", "uses_incremental"),
+    [("morton", False), ("morton_incremental", True)],
+)
+def test_build_groups_dispatches_on_the_grouping_algorithm(
+    algorithm: str, uses_incremental: bool
+) -> None:
+    """Each supported algorithm must reach its own MortonSourceGrouping entry point."""
+    grid, sources, cost_model = _grouping_inputs()
+    handler = DomainDecompositionHandler(comm=DummyComm(rank=0, size=1))
+
+    with (
+        patch.object(
+            MortonSourceGrouping,
+            "build_groups",
+            autospec=True,
+            wraps=MortonSourceGrouping.build_groups,
+        ) as mock_accurate,
+        patch.object(
+            MortonSourceGrouping,
+            "build_groups_incremental",
+            autospec=True,
+            wraps=MortonSourceGrouping.build_groups_incremental,
+        ) as mock_incremental,
+    ):
+        groups = handler._build_groups(
+            grid,
+            sources,
+            cost_model,
+            grouping_algorithm=algorithm,
+            grouping_params=MortonGroupingParams(
+                max_num_sources_per_group=2, morton_bits=10
+            ),
+        )
+
+        expected, unexpected = (
+            (mock_incremental, mock_accurate)
+            if uses_incremental
+            else (mock_accurate, mock_incremental)
+        )
+        expected.assert_called_once()
+        unexpected.assert_not_called()
+
+    assert sum(len(g.sources) for g in groups) == len(sources)
+
+
+def test_build_groups_rejects_an_unknown_algorithm() -> None:
+    grid, sources, cost_model = _grouping_inputs()
+    handler = DomainDecompositionHandler(comm=DummyComm(rank=0, size=1))
+
+    with pytest.raises(NotImplementedError, match="not implemented"):
+        handler._build_groups(grid, sources, cost_model, grouping_algorithm="nope")
+
+
+def test_domain_decomposition_parameters_accept_both_morton_variants() -> None:
+    for algorithm in ("morton", "morton_incremental"):
+        params = DomainDecompositionParameters(
+            enabled=True, grouping_algorithm=algorithm
+        )
+        assert params.grouping_algorithm == algorithm
+
+    with pytest.raises(ValueError, match="not implemented"):
+        DomainDecompositionParameters(enabled=True, grouping_algorithm="nope")
 
 
 def test_update_decomposition_rebuilds_if_inputs_change() -> None:

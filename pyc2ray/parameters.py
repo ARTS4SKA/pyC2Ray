@@ -132,8 +132,12 @@ class DomainDecompositionParameters(YmlParameters):
 
     # Enable domain decomposition/source grouping
     enabled: bool = False
-    # Source grouping/domain decomposition algorithm
-    grouping_algorithm: str = "morton"
+    # TODO: evaluate if keeping the non incremental mode: in case of real cosmological simulations,
+    # the non incremental mode can become extremely expensive.
+    # Source grouping/domain decomposition algorithm. "morton" fits the enclosing sphere of
+    # every trial group accurately; "morton_incremental" grows it incrementally instead, which
+    # is much faster to build but yields looser spheres and therefore larger local grids.
+    grouping_algorithm: str = "morton_incremental"
     # Maximum number of sources in one source group
     max_num_sources_per_group: int = 1000
     # Number of bits per dimension for Morton ordering
@@ -142,10 +146,10 @@ class DomainDecompositionParameters(YmlParameters):
     max_memory_cost_per_group: float = 50.0e9
 
     def __post_init__(self) -> None:
-        if self.grouping_algorithm not in ("morton",):
+        if self.grouping_algorithm not in ("morton", "morton_incremental"):
             raise ValueError(
                 f"Grouping algorithm {self.grouping_algorithm} not implemented. "
-                "The only supported algorithm is 'morton'."
+                "The supported algorithms are 'morton' and 'morton_incremental'."
             )
         if self.max_num_sources_per_group <= 0:
             raise ValueError(
