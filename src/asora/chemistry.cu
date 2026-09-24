@@ -123,59 +123,57 @@ namespace asora {
 
     // Host function to call global_pass
     size_t global_pass(
-        double* xh, double* xh_av, double* xh_int, const double* temp,
+        double* xh, double* xh_avg, double* xh_int, const double* temp,
         const double* phi_ion, const double* clump, double dt, double bh00,
         double albpow, double colh0, double temph0, double abu_c, size_t n_cells,
         size_t block_size
     ) {
+        const auto& ndens = device::resident().number_density;
+        if (!ndens)
+            throw std::runtime_error(
+                "number density array must be allocated on the device before calling "
+                "do_all_sources_gpu"
+            );
         // Allocate (if necessary) and copy the average ionized fraction array to the
         // device. This array is also used by raytracing.
-        device::transfer<double>(buffer_tag::fraction_HII, xh_av, n_cells);
-        auto xh_av_buf = asora::device::get(buffer_tag::fraction_HII);
+        // TODO: make phion_HI and fraction_HII_avg resident data
+        auto fraction_HII = device::scratch<double>(n_cells);
+        auto fraction_HII_avg = device::scratch<double>(n_cells);
+        auto fraction_HII_int = device::scratch<double>(n_cells);
 
-        // Initialize and copy non-const data.
-        auto xh_buf = device_buffer(n_cells * sizeof(double));
-        auto xh_int_buf = device_buffer(n_cells * sizeof(double));
-        xh_buf.copyFromHost(xh);
-        xh_int_buf.copyFromHost(xh_int);
+        fraction_HII.copy_from_host(xh);
+        fraction_HII_avg.copy_from_host(xh_avg);
+        fraction_HII_int.copy_from_host(xh_int);
 
-        // Initialize and copy const data.
-        for (auto&& [tag, data] : {
-                 std::pair{buffer_tag::photo_ionization_HI, phi_ion},
-                 std::pair{buffer_tag::temperature, temp},
-                 std::pair{buffer_tag::clumping_factor, clump},
-             }) {
-            device::ensure_transfer<double>(tag, data, n_cells);
-        }
+        auto phion_HI = device::scratch<double>(n_cells);
+        auto temp_d = device::scratch<double>(n_cells);
+        auto clump_d = device::scratch<double>(n_cells);
 
-        device_buffer conv_flag(n_cells);
-        auto conv_flag_d = conv_flag.view<bool>().data();
+        phion_HI.copy_from_host(phi_ion);
+        temp_d.copy_from_host(temp);
+        clump_d.copy_from_host(clump);
 
-        auto xh_d = xh_buf.data<double>();
-        auto xh_av_d = xh_av_buf.data<double>();
-        auto xh_int_d = xh_int_buf.data<double>();
-
-        auto temp_d = device::get(buffer_tag::temperature).data<double>();
-        auto ndens_d = device::get(buffer_tag::number_density).data<double>();
-        auto phi_ion_d = device::get(buffer_tag::photo_ionization_HI).data<double>();
-        auto clump_d = device::get(buffer_tag::clumping_factor).data<double>();
+        auto conv_flag = device::scratch<bool>(n_cells);
 
         // Launch kernel, divide by 2 so that threads do more work.
         size_t grid_size = std::ceil(static_cast<float>(n_cells) / block_size / 2);
         evolve0D_gpu<<<grid_size, block_size>>>(
-            xh_d, xh_av_d, xh_int_d, temp_d, ndens_d, phi_ion_d, clump_d, conv_flag_d,
-            dt, bh00, albpow, colh0, temph0, abu_c, n_cells
+            fraction_HII.data(), fraction_HII_avg.data(), fraction_HII_int.data(),
+            temp_d.data(), ndens.data(), phion_HI.data(), clump_d.data(),
+            conv_flag.data(), dt, bh00, albpow, colh0, temph0, abu_c, n_cells
         );
 
         // Check for errors.
         safe_cuda(cudaPeekAtLastError());
 
         // Reduction kernel to count non-zero elements.
-        auto convergence =
-            thrust::count(thrust::device, conv_flag_d, conv_flag_d + n_cells, true);
+        // TODO: set thrust to the correct stream
+        auto convergence = thrust::count(
+            thrust::device, conv_flag.data(), conv_flag.data() + n_cells, true
+        );
 
-        xh_av_buf.copyToHost(xh_av, xh_av_buf.size());
-        xh_int_buf.copyToHost(xh_int, xh_int_buf.size());
+        fraction_HII_avg.copy_to_host(xh_avg);
+        fraction_HII_int.copy_to_host(xh_int);
         return convergence;
     }
 
