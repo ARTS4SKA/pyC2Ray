@@ -1,91 +1,84 @@
 #include "memory.h"
 #include "utils.cuh"
 
-#include <format>
+#include <cstdint>
+#include <iostream>
+#include <limits>
 
 namespace asora {
 
-    device_buffer::device_buffer(size_t nbytes) : _nbytes(nbytes) {
-        std::byte *ptr;
-        safe_cuda(cudaMalloc(&ptr, _nbytes));
-
-        // Custom deleter ensures cudaFree is called on destruction
-        // The shared_ptr deleter can't throw, so we ignore any exceptions
-        _ptr.reset(ptr, [](std::byte *ptr) {
-            try {
-                safe_cuda(cudaFree(ptr));
-            } catch (const std::exception &) {
-            }
-        });
-    }
-
-    void swap(device_buffer &lhs, device_buffer &rhs) noexcept {
-        std::swap(lhs._ptr, rhs._ptr);
-        std::swap(lhs._nbytes, rhs._nbytes);
-    }
-
-    void device_buffer::copyFromHost(const void *src) {
-        safe_cuda(cudaMemcpy(data(), src, size(), cudaMemcpyHostToDevice));
-    }
-
-    void device_buffer::copyToHost(void *dst) const {
-        safe_cuda(cudaMemcpy(dst, data(), size(), cudaMemcpyDeviceToHost));
-    }
-
-    void device_buffer::copyFromHost(const void *src, size_t nbytes) {
-        if (size() < nbytes)
-            throw std::invalid_argument(
-                std::format(
-                    "copyFromHost size mismatch: device buffer has {} bytes, requested "
-                    "{} bytes",
-                    size(), nbytes
-                )
-            );
-        safe_cuda(cudaMemcpy(data(), src, nbytes, cudaMemcpyHostToDevice));
-    }
-
-    void device_buffer::copyToHost(void *dst, size_t nbytes) const {
-        if (size() < nbytes)
-            throw std::invalid_argument(
-                std::format(
-                    "copyToHost size mismatch: device buffer has {} bytes, requested "
-                    "{} bytes",
-                    size(), nbytes
-                )
-            );
-        safe_cuda(cudaMemcpy(dst, data(), nbytes, cudaMemcpyDeviceToHost));
-    }
-
-    device &device::initialize(unsigned int rank) {
-        // TODO: add log
-        auto &self = instance();
-        if (is_initialized()) return self;
+    void device::initialize(unsigned int rank) {
+        if (is_initialized()) return;
 
         // Map MPI rank to available GPUs using modulo and select the device
         int device_count;
         safe_cuda(cudaGetDeviceCount(&device_count));
-        self._gpu_id = rank % device_count;
-        safe_cuda(cudaSetDevice(self._gpu_id));
-        setup_luts();
-        return self;
-    }
+        if (device_count <= 0)
+            throw std::runtime_error("no CUDA capable device is available");
 
-    void device::close() {
+        int gpu_id = static_cast<int>(rank % static_cast<unsigned int>(device_count));
+        safe_cuda(cudaSetDevice(gpu_id));
+
+        // TODO: use a dedicated stream
+
         auto &self = instance();
-        self._gpu_id = -1;
-        self._memory_pool.clear();
+
+        // Per-call scratch buffers are served by the stream-ordered allocator where the
+        // platform supports it. Leaving _pool null there makes scratch() fall back to
+        // plain device allocations.
+        int pools_supported = 0;
+        safe_cuda(cudaDeviceGetAttribute(
+            &pools_supported, cudaDevAttrMemoryPoolsSupported, gpu_id
+        ));
+
+        if (pools_supported) {
+            safe_cuda(cudaDeviceGetDefaultMemPool(&self._pool, gpu_id));
+
+            // Set maximum threshold to retain everything. Without this the pool hands
+            // memory back to the OS at every synchronization point.
+            uint64_t threshold = std::numeric_limits<uint64_t>::max();
+            safe_cuda(cudaMemPoolSetAttribute(
+                self._pool, cudaMemPoolAttrReleaseThreshold, &threshold
+            ));
+        } else
+            std::cerr
+                << "Warning: CUDA memory pools not supported on device " << gpu_id
+                << "; falling back to plain device allocations for scratch buffers\n";
+
+        setup_luts();
+
+        // is_initialized() flips here, so a throw above leaves the
+        // singleton untouched rather than half-initialized.
+        self._gpu_id = gpu_id;
     }
 
-    device_buffer &device::get(buffer_tag tag) {
+    void device::close() { instance().release(); }
+
+    // Runs on the explicit close() path and again when the singleton is destroyed at
+    // exit, so it must be idempotent. It must not throw, release failures are not
+    // actionable, so their status is discarded rather than checked.
+    void device::release() noexcept {
+        // Release the resident arrays and wait for any pending stream-ordered
+        // frees, so that the pool has nothing in flight left to release.
+        _resident = {};
+        if (_pool) {
+            cudaDeviceSynchronize();
+            cudaMemPoolTrimTo(_pool, 0);
+            _pool = nullptr;
+        }
+
+        // TODO: nothing else to destroy while _stream is the legacy default stream.
+        _gpu_id = -1;
+    }
+
+    resident_data &device::resident() {
         check_initialized();
-        return instance()._memory_pool.at(tag);
+        return instance()._resident;
     }
 
-    bool device::contains(buffer_tag tag) {
-        return is_initialized() && instance()._memory_pool.contains(tag);
-    }
-
-    // Thread-safe singleton by C++11 standard
+    // Thread-safe singleton by C++11 standard. Construction is lazy, on the
+    // first call, so the instance registers for destruction after the CUDA
+    // runtime's own statics and is therefore torn down before them.
     device &device::instance() noexcept {
         static device self;
         return self;
@@ -100,33 +93,6 @@ namespace asora {
             );
             throw std::runtime_error(msg);
         }
-    }
-
-    void device::allocate_or_copy(
-        buffer_tag tag, size_t nbytes, const void *src, bool ensure,
-        bool force_matching_size
-    ) {
-        check_initialized();
-
-        auto &&[it, inserted] = _memory_pool.try_emplace(tag, nbytes);
-
-        if (!inserted) {
-            if (ensure) {
-                // Ensure-mode is idempotent: keep existing buffer if sizing
-                // policy is satisfied, otherwise replace it.
-                const bool needs_realloc = force_matching_size
-                                               ? (it->second.size() != nbytes)
-                                               : (it->second.size() < nbytes);
-                if (needs_realloc) {
-                    it->second = device_buffer(nbytes);
-                }
-            } else if (!src) {
-                throw std::runtime_error("tag already in use");
-            }
-        }
-
-        // Copy host data whenever a source pointer is provided.
-        if (src) it->second.copyFromHost(src, nbytes);
     }
 
 }  // namespace asora
