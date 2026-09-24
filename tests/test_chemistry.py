@@ -88,14 +88,19 @@ def test_chemistry_python(data_dir):
 
 def test_chemistry_asora(data_dir, init_device):
     with setup_chemistry() as args:
-        libasora.density_to_device(args[1])
-        args = args[0], *args[2:]
-
-        xh = args[2]
-        xh_int = args[4]
+        dt, ndens, temp, xh, xh_av, xh_int, phi_ion, clump, *consts = args
+        libasora.density_to_device(ndens)
 
         for _ in range(1000):
-            conv = libasora.chemistry_global_pass(*args)
+            # Each pass here acts as its own timestep, so the resident fields are
+            # refreshed. timestep_data_to_device reseeds the average fraction from
+            # xh; this loop carries it over instead, hence the explicit push.
+            libasora.timestep_data_to_device(xh, temp, clump)
+            libasora.average_fraction_to_device(xh_av)
+
+            conv = libasora.chemistry_global_pass(dt, xh_int, phi_ion, *consts)
+
+            libasora.average_fraction_to_host(xh_av)
             xh[:] = xh_int
 
         expected_xh = np.load(data_dir / "ionized_fraction_average.npy")
@@ -117,7 +122,10 @@ def test_benchmark_chemistry_python(benchmark, data_dir):
 @pytest.mark.parametrize("block_size", [512, 640, 768, 896])
 def test_benchmark_chemistry_asora(benchmark, data_dir, init_device, block_size):
     with setup_chemistry(200) as args:
-        libasora.density_to_device(args[1])
-        args = args[0], *args[2:]
+        dt, ndens, temp, xh, _, xh_int, phi_ion, clump, *consts = args
+        libasora.density_to_device(ndens)
+        libasora.timestep_data_to_device(xh, temp, clump)
 
-        benchmark(libasora.chemistry_global_pass, *args, block_size)
+        benchmark(
+            libasora.chemistry_global_pass, dt, xh_int, phi_ion, *consts, block_size
+        )

@@ -26,14 +26,14 @@ def setup_do_all_sources(
     tau, dlogtau = make_tau_table(minlog_tau, maxlog_tau, num_tau)
 
     # HI cross section at its ionzing frequency (weighted by freq_factor)
-    sigma_HI_at_ion_freq = np.float64(6.30e-18)
+    sigma = 6.30e-18
 
     # Min and max frequency of the integral
     freq_min, freq_max = (
         (13.598 * u.eV / cst.h).to("Hz").value,
         (54.416 * u.eV / cst.h).to("Hz").value,
     )
-    radsource = BlackBodySource(1e5, False, freq_min, sigma_HI_at_ion_freq)
+    radsource = BlackBodySource(1e5, False, freq_min, sigma)
     photo_thin_table, photo_thick_table = radsource.make_photo_table(
         tau, freq_min, freq_max, 1e48
     )
@@ -50,6 +50,10 @@ def setup_do_all_sources(
     # Copy density field to GPU device
     libasora.density_to_device(ndens)
 
+    # The average ionized fraction is resident: seed it along with the other
+    # per-timestep fields, which this test does not otherwise exercise.
+    libasora.timestep_data_to_device(xHII, np.full(size, 1e4), np.ones(size))
+
     # Define some random sources
     rng = np.random.default_rng(918)
     src_pos = rng.integers(0, mesh_size, size=(3 * num_sources), dtype=np.int32)
@@ -64,9 +68,8 @@ def setup_do_all_sources(
 
     yield (
         radius,
-        sigma_HI_at_ion_freq,
+        sigma,
         dr,
-        xHII,
         phi_ion,
         num_sources,
         mesh_size,
@@ -82,7 +85,7 @@ def test_do_all_sources(data_dir, init_device):
     with setup_do_all_sources() as args:
         libasora.do_all_sources(*args)
 
-        phi_ion = args[4]
+        phi_ion = args[3]
         expected_phi_ion = np.load(data_dir / "photo_ionization_rate.npy")
 
         assert np.allclose(phi_ion, expected_phi_ion)
