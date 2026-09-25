@@ -1,10 +1,11 @@
 #include "utils.cuh"
 
+#include <algorithm>
 #include <cassert>
-#include <exception>
 #include <format>
 #include <iostream>
 #include <ranges>
+#include <stdexcept>
 
 namespace {
 

@@ -1,9 +1,9 @@
+#include <Python.h>
 
 #include "chemistry.h"
 #include "memory.h"
 #include "raytracing.cuh"
 
-#include <Python.h>
 #include <numpy/arrayobject.h>
 
 /* @file python_module.cu
@@ -162,9 +162,12 @@ PyObject *asora_is_periodic_mode_active(
 /// Allocate and copy density grid to the device.
 PyObject *asora_density_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
     SAFE_CHECK_INITIALIZED();
+
+    using namespace asora;
+    namespace tag = resident_tag;
     PyArrayObject *ndens;
     return PyArg_ParseTuple(args, "O", &ndens) &&  //
-                   load_array_to_device(ndens, asora::device::resident().number_density)
+                   load_array_to_device(ndens, device::resident<tag::number_density>())
                ? Py_None
                : nullptr;
 }
@@ -172,13 +175,16 @@ PyObject *asora_density_to_device([[maybe_unused]] PyObject *self, PyObject *arg
 /// Allocate and copy radiation tables to the device.
 PyObject *asora_photo_table_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
     SAFE_CHECK_INITIALIZED();
+
+    using namespace asora;
+    namespace tag = resident_tag;
     PyArrayObject *thin_table, *thick_table;
     return PyArg_ParseTuple(args, "OO", &thin_table, &thick_table) &&
                    load_array_to_device(
-                       thin_table, asora::device::resident().photo_ion_thin
+                       thin_table, device::resident<tag::photo_ion_thin>()
                    ) &&
                    load_array_to_device(
-                       thick_table, asora::device::resident().photo_ion_thick
+                       thick_table, device::resident<tag::photo_ion_thick>()
                    )
                ? Py_None
                : nullptr;
@@ -187,12 +193,15 @@ PyObject *asora_photo_table_to_device([[maybe_unused]] PyObject *self, PyObject 
 /// Allocate and copy source properties to the device.
 PyObject *asora_source_data_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
     SAFE_CHECK_INITIALIZED();
+
+    using namespace asora;
+    namespace tag = resident_tag;
     PyArrayObject *src_pos, *src_flux;
     return PyArg_ParseTuple(args, "OO", &src_pos, &src_flux) &&
                    load_array_to_device(
-                       src_pos, asora::device::resident().source_position
+                       src_pos, device::resident<tag::source_position>()
                    ) &&
-                   load_array_to_device(src_flux, asora::device::resident().source_flux)
+                   load_array_to_device(src_flux, device::resident<tag::source_flux>())
                ? Py_None
                : nullptr;
 }
@@ -205,10 +214,11 @@ PyObject *asora_timestep_data_to_device(
     PyArrayObject *xh, *temp, *clump;
     if (!PyArg_ParseTuple(args, "OOO", &xh, &temp, &clump)) return nullptr;
 
-    auto &resident = asora::device::resident();
-    if (!load_array_to_device(xh, resident.fraction_HII) ||
-        !load_array_to_device(temp, resident.temperature) ||
-        !load_array_to_device(clump, resident.clumping))
+    using namespace asora;
+    namespace tag = resident_tag;
+    if (!load_array_to_device(xh, device::resident<tag::fraction_HII>()) ||
+        !load_array_to_device(temp, device::resident<tag::temperature>()) ||
+        !load_array_to_device(clump, device::resident<tag::clumping>()))
         return nullptr;
 
     // The average fraction starts the timestep equal to the initial one, so it is
@@ -216,7 +226,9 @@ PyObject *asora_timestep_data_to_device(
     // is updated in place by the chemistry pass and never leaves the device,
     // except where a rank has to broadcast it.
     try {
-        resident.fraction_HII_avg.assign(resident.fraction_HII);
+        device::resident<tag::fraction_HII_avg>().assign(
+            device::resident<tag::fraction_HII>()
+        );
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_ValueError, e.what());
         return nullptr;
@@ -229,10 +241,13 @@ PyObject *asora_average_fraction_to_device(
     [[maybe_unused]] PyObject *self, PyObject *args
 ) {
     SAFE_CHECK_INITIALIZED();
+
+    using namespace asora;
+    namespace tag = resident_tag;
     PyArrayObject *xh_av;
     return PyArg_ParseTuple(
                args, "O", &xh_av
-           ) && load_array_to_device(xh_av, asora::device::resident().fraction_HII_avg)
+           ) && load_array_to_device(xh_av, device::resident<tag::fraction_HII_avg>())
                ? Py_None
                : nullptr;
 }
@@ -242,11 +257,14 @@ PyObject *asora_average_fraction_to_host(
     [[maybe_unused]] PyObject *self, PyObject *args
 ) {
     SAFE_CHECK_INITIALIZED();
+
     PyArrayObject *xh_av;
     if (!PyArg_ParseTuple(args, "O", &xh_av)) return nullptr;
     if (!numpy_check<double>(xh_av)) return nullptr;
 
-    const auto &frac_HII_avg = asora::device::resident().fraction_HII_avg;
+    using namespace asora;
+    namespace tag = resident_tag;
+    const auto &frac_HII_avg = device::resident<tag::fraction_HII_avg>();
     if (!frac_HII_avg) {
         PyErr_SetString(
             PyExc_RuntimeError,
