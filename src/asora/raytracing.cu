@@ -6,9 +6,41 @@
 #include "shortchar.cuh"
 #include "utils.cuh"
 
+#include <algorithm>
+#include <cmath>
+#include <format>
+#include <iostream>
 #include <stdexcept>
 
 namespace asora {
+
+    // TODO: Generalize this function to take an arbitrary kernel as an argument.
+    size_t max_resident_blocks(size_t block_size) {
+        device::check_initialized();
+
+        // Determine how many blocks of this kernel can be resident on a SM.
+        int blocks_per_sm = 0;
+        safe_cuda(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+            &blocks_per_sm, asora::evolve0D_gpu, static_cast<int>(block_size), 0
+        ));
+
+        // This kernel can't be launched.
+        if (blocks_per_sm == 0)
+            throw std::runtime_error(
+                std::format(
+                    "no block of {} threads fits on a multiprocessor for this kernel",
+                    block_size
+                )
+            );
+
+        // Determine how many SMs are on the device.
+        int num_sms = 0;
+        safe_cuda(cudaDeviceGetAttribute(
+            &num_sms, cudaDevAttrMultiProcessorCount, device::device_id()
+        ));
+
+        return static_cast<size_t>(blocks_per_sm) * num_sms;
+    }
 
     __device__ double density_maps::get(size_t index) const {
         return ndens[index] * (1.0 - xHII[index]);
@@ -18,7 +50,51 @@ namespace asora {
 
 namespace {
 
+    // Resolve how many blocks to launch. This is called once everything else is
+    // already allocated.
+    size_t resolve_grid_size(
+        size_t scratch_per_block, size_t num_src, size_t block_size
+    ) {
+        /* Three things bound the grid:
+         * 1. how many blocks of this kernel fit in the device
+         * 2. how many column density buffers the memory budget can accomodate
+         * 3. how many sources there are
+         */
+
+        using namespace asora;
+
+        // Maximum occupancy on this device.
+        auto by_occupancy = max_resident_blocks(block_size);
+
+        // Memory required for each block.
+        auto bytes_per_block = scratch_per_block * sizeof(double);
+        auto free_bytes = device::available_memory();
+
+        if (free_bytes <= bytes_per_block)
+            throw std::runtime_error(
+                std::format(
+                    "column density scratch for a single block is {} MiB, but only "
+                    "{} "
+                    "MiB are available on the device",
+                    bytes_per_block >> 20, free_bytes >> 20
+                )
+            );
+
+        // Number of blocks that can fit in free memory.
+        auto by_memory = free_bytes / bytes_per_block;
+
+        return std::min({by_occupancy, by_memory, num_src});
+    }
+
+}  // namespace
+
+namespace {
+
     using namespace asora;
+
+    // Index of the next source to be raytraced, shared by all the blocks of
+    // evolve0D_gpu. It is set by the host before every launch.
+    __device__ unsigned long long next_source;
 
     // Compute the photoionization rate for a given cell based on the incoming column
     // density and the pre-computed photoionization tables.
@@ -102,9 +178,14 @@ namespace asora {
 
     void do_all_sources_gpu(
         double R, double sigma, double dr, double *phi_ion, size_t num_src, size_t m1,
-        double minlogtau, double dlogtau, size_t num_tau, size_t grid_size,
-        size_t block_size
+        double minlogtau, double dlogtau, size_t num_tau, size_t block_size
     ) {
+        // With no sources, there is nothing to do; just zero the output
+        if (num_src == 0) {
+            std::fill_n(phi_ion, m1 * m1 * m1, 0.0);
+            return;
+        }
+
         device::check_initialized();
 
         // Size of grid data
@@ -133,101 +214,123 @@ namespace asora {
         // broadcast.
         density_maps densities{number_density.data(), fraction_HII_avg.data()};
 
-        // Allocate and zero the output array for the photoionization rate
-        auto phion_HI = device::scratch<double>(n_cells);
-        phion_HI.zero();
-
         // Collect the LUT for the raytracing kernel. If it cannot be built, it is
         // unset and the interpolation parameters are computed on the fly.
         auto lut_d = create_shortchar_interp_lut(R, m1);
 
-        // The LUT only keeps the cells within reach, so its banks can be smaller than
-        // the largest shell. Allocate (if necessary) the column density array.
-        auto column_density_HI =
-            device::scratch<double>(grid_size * lut_d.bank_size() * num_banks);
+        // Allocate and zero the output array for the photoionization rate.
+        auto phion_HI = device::scratch<double>(n_cells);
+        phion_HI.zero();
 
+        // The LUT only keeps the cells within reach, so its banks can be smaller than
+        // the largest shell. Determine how concurrent blocks can run on this device and
+        // allocate scratch memory for each block.
+        auto scratch_per_block = lut_d.bank_size() * num_banks;
+        auto grid_size = resolve_grid_size(scratch_per_block, num_src, block_size);
+        auto column_density_HI = device::scratch<double>(grid_size * scratch_per_block);
+
+        // Each block starts from its own index, so the shared counter starts from
+        // the first source no block has taken. Blocks then take sources as they
+        // become free, so the work is balanced dynamically.
+        {
+            const unsigned long long zero = 0;
+            safe_cuda(cudaMemcpyToSymbol(next_source, &zero, sizeof(zero)));
+        }
+
+        // Create helper data structures.
         element_data data_HI{phion_HI.data(), column_density_HI.data(), sigma};
         photo_tables ion_tables{photo_ion_thin.data(), photo_ion_thick.data()};
         linspace<double> logtau{minlogtau, dlogtau, static_cast<size_t>(num_tau)};
 
-        // Loop over batches of sources
-        for (size_t ns = 0; ns < num_src; ns += grid_size) {
-            // Raytrace the current batch of sources in parallel
-            // Consecutive kernel launches are in the same stream and so are
-            // serialized
-            evolve0D_gpu<<<grid_size, block_size>>>(
-                lut_d, m1, dr, R, ns, num_src, source_position.data(),
-                source_flux.data(), data_HI, densities, ion_tables, logtau
-            );
+        std::cout << "ASORA: launching " << grid_size << " blocks of " << block_size
+                  << " threads to raytrace " << num_src << " sources.\n";
+        // Do a single kernel launch; the sources are iterated inside the kernel.
+        evolve0D_gpu<<<grid_size, block_size>>>(
+            lut_d, m1, dr, R, num_src, source_position.data(), source_flux.data(),
+            data_HI, densities, ion_tables, logtau
+        );
 
-            safe_cuda(cudaPeekAtLastError());
-        }
+        safe_cuda(cudaPeekAtLastError());
 
         // Copy the accumulated ionization fraction back to the host.
-        // Memcpy blocks until last kernel has finished.
         phion_HI.copy_to_host(phi_ion);
     }
 
-    // ========================================================================
-    // Raytracing kernel, adapted from C2Ray. Calculates in/out column density
-    // to the current cell and finds the photoionization rate
-    // ========================================================================
+    /* =================================================================
+     * Raytracing kernel. Calculates column density from the source
+     * and computes the photoionization rate for each cell within R_max.
+     * =================================================================
+     * The raytracing kernel proceeds as follows:
+     * 1. Start from the source with the same index as the block
+     * 2. Loop over the asora q-shells around the source, up to q_max
+     * 3. For each shell, threads independently raytrace on all cells
+     * 4. Before moving to the next q-shell, threads are synchronized to ensure
+     * causality
+     * 5. Take the next unprocessed source from the shared counter and go back to 2
+     * until all the sources have been taken
+     */
+    /* The raytracing kernel proceeds as follows:
+     * 1. Select the source based on the thread-block number
+     * 2. Loop over the asora q-shells around the source, up to q_max
+     * 3. For each shell, threads independently raytrace on all cells
+     * 4. Before moving to the next q-shell, threads are synchronized to ensure
+     * causality
+     */
     __global__ void evolve0D_gpu(
-        shortchar_lut lut, size_t m1, double dr, double R_max, size_t ns_start,
-        size_t num_src, const int *__restrict__ src_pos,
-        const double *__restrict__ src_flux, element_data data_HI,
-        density_maps densities, photo_tables<> ion_tables, linspace<double> logtau
+        shortchar_lut lut, size_t m1, double dr, double R_max, size_t num_src,
+        const int *__restrict__ src_pos, const double *__restrict__ src_flux,
+        element_data data_HI, density_maps densities, photo_tables<double> ion_tables,
+        linspace<double> logtau
     ) {
-        /* The raytracing kernel proceeds as follows:
-         * 1. Select the source based on the thread-block number
-         * 2. Loop over the asora q-shells around the source, up to q_max
-         * 3. For each shell, threads independently raytrace on all cells
-         * 4. Before moving to the next q-shell, threads are synchronized to ensure
-         * causality
-         */
-
-        // Source identifier: one source per thread-block.
-        const size_t ns = ns_start + blockIdx.x;
-
-        // Ensure the source index is valid.
-        if (ns >= num_src) return;
-
-        // Get source properties.
-        src_pos += 3 * ns;
-        const int3 pos0{src_pos[0], src_pos[1], src_pos[2]};
-        auto scale = src_flux[ns] / (dr * dr * dr);
-
         // Offset pointer to the outgoing column density array used for
         // interpolation (each block works on its own array).
         const size_t cd_offset = blockIdx.x * lut.bank_size() * num_banks;
         data_HI.column_density += cd_offset;
 
-        // Calculate column density and photoionization rate for the source cell.
-        // This is done separately from the main loop because to take advantage of
-        // some simplifications.
-        if (threadIdx.x == 0) {
-            const auto index = ravel_index(pos0, m1);
-            auto nHI = densities.get(index);
-            update_photo_rates(
-                data_HI, 0, index, 0.0, nHI, 0.5 * dr, scale, ion_tables, logtau
-            );
-        }
+        // Each block starts processing the sources from blockIdx.x and then
+        // takes the next source (it starts from 0) from the shared counter
+        // as soon as it is done with the current one.
+        __shared__ size_t shared_ns;
+        if (threadIdx.x == 0) shared_ns = atomicAdd(&next_source, 1ULL);
         __syncthreads();
 
-        // Cell-independent part of the photon volume 4*pi * dist2 * path * dr^2.
-        scale /= 4 * c::pi<>;
+        while (shared_ns < num_src) {
+            // Get source properties.
+            const auto *this_pos = src_pos + 3 * shared_ns;
+            const int3 pos0{this_pos[0], this_pos[1], this_pos[2]};
+            auto scale = src_flux[shared_ns] / (dr * dr * dr);
 
-        for (int q = 1; q <= lut.q_max(); ++q) {
-            // Each thread can process multiple cells. Only the cells kept in the LUT
-            // are visited; s is their position within the compacted shell.
-            const auto begin = lut.shell_begin(q);
-            const auto count = lut.shell_size(q);
-            for (size_t s = threadIdx.x; s < count; s += blockDim.x) {
-                raytrace(
-                    lut, begin + s, q, s, pos0, scale, data_HI, dr, R_max, densities,
-                    m1, ion_tables, logtau
+            // Calculate column density and photoionization rate for the source
+            // cell. This is done separately from the main loop because to take
+            // advantage of some simplifications.
+            if (threadIdx.x == 0) {
+                const auto index = ravel_index(pos0, m1);
+                auto nHI = densities.get(index);
+                update_photo_rates(
+                    data_HI, 0, index, 0.0, nHI, 0.5 * dr, scale, ion_tables, logtau
                 );
             }
+            __syncthreads();
+
+            // Adjust for non-source volumes
+            scale /= 4 * c::pi<>;
+
+            for (int q = 1; q <= lut.q_max(); ++q) {
+                // Each thread can process multiple cells. Only the cells kept in the
+                // LUT are visited; s is their position within the compacted shell.
+                const auto begin = lut.shell_begin(q);
+                const auto count = lut.shell_size(q);
+                for (size_t s = threadIdx.x; s < count; s += blockDim.x) {
+                    raytrace(
+                        lut, begin + s, q, s, pos0, scale, data_HI, dr, R_max,
+                        densities, m1, ion_tables, logtau
+                    );
+                }
+                __syncthreads();
+            }
+
+            // Source is processed, take the next one.
+            if (threadIdx.x == 0) shared_ns = atomicAdd(&next_source, 1ULL);
             __syncthreads();
         }
     }

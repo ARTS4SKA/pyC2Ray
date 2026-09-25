@@ -33,15 +33,17 @@ namespace asora {
         return (1 + 2 * q) * (3 + 2 * q * (1 + q)) / 3;
     }
 
-    /* @brief Outermost shell needed to raytrace a sphere of radius R in a box of N^3
-     * cells.
+    /* @brief Compute maximum number of q-shells required for a given radius.
      *
-     * The radius equals the distance from the source to the middle of the faces of
-     * the octahedron, so the octahedron must be sqrt(3) R in size. To raytrace the
-     * whole volume, the octahedron must be 1.5 N in size.
+     * Determines how many octahedral shells are needed to cover a sphere of radius
+     * R_max, limited by the grid size N.
+     *
+     * @param[in] R_max Maximum radius to cover
+     * @param[in] N Grid size
+     * @return Maximum q-shell index
      */
-    inline int get_q_max(double R, size_t N) {
-        return static_cast<int>(std::ceil(std::min(c::sqrt3<> * R, 1.5 * N)));
+    inline int max_q_shells(double R_max, size_t N) {
+        return std::ceil(std::min(c::sqrt3<> * R_max, N * 1.5));
     }
 
     /* @brief Convert a cumulative index, counted over all shells, to octahedral
