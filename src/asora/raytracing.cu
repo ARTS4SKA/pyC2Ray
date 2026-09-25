@@ -3,6 +3,10 @@
 #include "memory.h"
 #include "utils.cuh"
 
+#include <algorithm>
+#include <cmath>
+#include <format>
+#include <iostream>
 #include <stdexcept>
 
 namespace asora {
@@ -105,14 +109,90 @@ namespace {
         );
     }
 
+    /* @brief Resolve how many blocks to launch.
+     *
+     * Three things bound the grid: how many blocks of this kernel the device can
+     * keep resident, how many per-block column density buffers the memory budget
+     * can pay for, and how many sources there are. Blocks are persistent, so the
+     * grid no longer has to grow with the source count.
+     *
+     * Call this once everything else this pass needs is already allocated: the
+     * memory bound is read from what is left, so anything taken afterwards is
+     * memory this grid has already been handed.
+     *
+     * @param[in] q_max Largest octahedral shell, which sets the per-block buffer
+     * @param[in] num_src Number of sources
+     * @param[in] block_size Threads per block, as launched
+     *
+     * @return Number of blocks to launch, never zero
+     * @throw std::runtime_error if a single block's buffer does not fit
+     */
+    size_t resolve_grid_size(int q_max, size_t num_src, size_t block_size) {
+        int blocks_per_sm = 0;
+        safe_cuda(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+            &blocks_per_sm, evolve0D_gpu, static_cast<int>(block_size), 0
+        ));
+
+        // Zero means the kernel cannot be launched at this block size at all,
+        // usually because it exceeds the thread or register limits.
+        if (blocks_per_sm == 0)
+            throw std::runtime_error(
+                std::format(
+                    "no block of {} threads fits on a multiprocessor for this kernel",
+                    block_size
+                )
+            );
+
+        int num_sms = 0;
+        safe_cuda(cudaDeviceGetAttribute(
+            &num_sms, cudaDevAttrMultiProcessorCount, device::device_id()
+        ));
+
+        size_t free_bytes = 0, total_bytes = 0;
+        safe_cuda(cudaMemGetInfo(&free_bytes, &total_bytes));
+
+        // cudaMemGetInfo answers for the driver, which counts everything the pool
+        // has reserved as used, including the part it is holding for reuse. That
+        // part is what the next cudaMallocAsync is served from without touching the
+        // driver at all, so it has to be added back or the grid shrinks as soon as
+        // the pool has cached anything.
+        if (auto pool = device::pool()) {
+            uint64_t reserved = 0;
+            uint64_t used = 0;
+            safe_cuda(cudaMemPoolGetAttribute(
+                pool, cudaMemPoolAttrReservedMemCurrent, &reserved
+            ));
+            safe_cuda(
+                cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemCurrent, &used)
+            );
+            free_bytes += reserved - used;
+        }
+
+        auto bytes_per_block = cells_to_shell(q_max) * sizeof(double);
+
+        if (free_bytes <= bytes_per_block)
+            throw std::runtime_error(
+                std::format(
+                    "column density scratch for a single block is {} MiB at q_max = "
+                    "{}, "
+                    "and only {} MiB are available on the device",
+                    bytes_per_block >> 20, q_max, free_bytes >> 20
+                )
+            );
+
+        auto by_memory = free_bytes / bytes_per_block;
+        auto by_occupancy = static_cast<size_t>(blocks_per_sm) * num_sms;
+
+        return std::min({by_occupancy, by_memory, num_src});
+    }
+
 }  // namespace
 
 namespace asora {
 
     void do_all_sources_gpu(
         double R, double sigma, double dr, double *phi_ion, size_t num_src, size_t m1,
-        double minlogtau, double dlogtau, size_t num_tau, size_t grid_size,
-        size_t block_size
+        double minlogtau, double dlogtau, size_t num_tau, size_t block_size
     ) {
         device::check_initialized();
 
@@ -159,28 +239,35 @@ namespace asora {
         auto phion_HI = device::scratch<double>(n_cells);
         phion_HI.zero();
 
-        // Determine how large the octahedron should be, based on the raytracing
-        // radius. The radius equals the distance from the source to the middle of
-        // the faces of the octahedron. To raytrace the whole volume, the octahedron
-        // must be 1.5*N in size. Allocate (if necessary) the column density array.
-        int q_max = std::ceil(c::sqrt3<> * std::min(R, c::sqrt3<> * m1 / 2.0));
-        auto column_density_HI =
-            device::scratch<double>(cells_to_shell(q_max) * grid_size);
+        // With no sources there is nothing to accumulate, but the caller still
+        // expects a zeroed rate field.
+        if (num_src > 0) {
+            // Determine how large the octahedron should be, based on the raytracing
+            // radius. The radius equals the distance from the source to the middle
+            // of the faces of the octahedron. To raytrace the whole volume, the
+            // octahedron must be 1.5*N in size. Allocate (if necessary) the column
+            // density array, one buffer per block.
+            int q_max = std::ceil(c::sqrt3<> * std::min(R, c::sqrt3<> * m1 / 2.0));
+            auto grid_size = resolve_grid_size(q_max, num_src, block_size);
+            std::cout << std::format(
+                "Launching {} blocks of {} threads for {} sources, q_max = {}\n",
+                grid_size, block_size, num_src, q_max
+            );
+            auto column_density_HI =
+                device::scratch<double>(cells_to_shell(q_max) * grid_size);
 
-        // Create helper data structures: data_HI, ion_tables, logtau
+            // Create helper data structures: data_HI, ion_tables, logtau
 
-        element_data data_HI{phion_HI.data(), column_density_HI.data(), sigma};
-        photo_tables ion_tables{photo_ion_thin.data(), photo_ion_thick.data()};
-        linspace<double> logtau{minlogtau, dlogtau, static_cast<size_t>(num_tau)};
+            element_data data_HI{phion_HI.data(), column_density_HI.data(), sigma};
+            photo_tables ion_tables{photo_ion_thin.data(), photo_ion_thick.data()};
+            linspace<double> logtau{minlogtau, dlogtau, static_cast<size_t>(num_tau)};
 
-        // Loop over batches of sources
-        for (size_t ns = 0; ns < num_src; ns += grid_size) {
-            // Raytrace the current batch of sources in parallel
-            // Consecutive kernel launches are in the same stream and so are
-            // serialized
+            // A single launch: the blocks are persistent and share out the sources
+            // between themselves, so there is no batch loop and no barrier between
+            // batches for an early-finishing block to wait on.
             evolve0D_gpu<<<grid_size, block_size>>>(
-                m1, dr, R, q_max, ns, num_src, source_position.data(),
-                source_flux.data(), data_HI, densities, ion_tables, logtau
+                m1, dr, R, q_max, num_src, source_position.data(), source_flux.data(),
+                data_HI, densities, ion_tables, logtau
             );
 
             safe_cuda(cudaPeekAtLastError());
@@ -196,68 +283,70 @@ namespace asora {
     // to the current cell and finds the photoionization rate
     // ========================================================================
     __global__ void evolve0D_gpu(
-        size_t m1, double dr, double R_max, int q_max, size_t ns_start, size_t num_src,
+        size_t m1, double dr, double R_max, int q_max, size_t num_src,
         const int *__restrict__ src_pos, const double *__restrict__ src_flux,
         element_data data_HI, density_maps densities, photo_tables ion_tables,
         linspace<double> logtau
     ) {
         /* The raytracing kernel proceeds as follows:
-         * 1. Select the source based on the thread-block number
+         * 1. Take the next source assigned to this block
          * 2. Loop over the asora q-shells around the source, up to q_max
          * 3. For each shell, threads independently raytrace on all cells
          * 4. Before moving to the next q-shell, threads are synchronized to ensure
          * causality
+         * 5. Go back to 1 until the block's share of the sources is exhausted
          */
 
-        // Source identifier: one source per thread-block.
-        const size_t ns = ns_start + blockIdx.x;
-
-        // Ensure the source index is valid.
-        if (ns >= num_src) return;
-
-        // Get source properties.
-        const auto i0 = src_pos[3 * ns + 0];
-        const auto j0 = src_pos[3 * ns + 1];
-        const auto k0 = src_pos[3 * ns + 2];
-        const auto strength = src_flux[ns];
-
         // Offset pointer to the outgoing column density array used for
-        // interpolation (each block works on its own array).
-        size_t cd_offset = blockIdx.x * cells_to_shell(q_max);
-        data_HI.column_density += cd_offset;
+        // interpolation. Each block owns one buffer for the whole launch, so the
+        // binding is static and no two blocks can ever share one: nothing has to be
+        // synchronized to protect it.
+        data_HI.column_density += blockIdx.x * cells_to_shell(q_max);
 
-        // Calculate column density and photoionization rate for the source cell.
-        // This is done separately from the main loop because to take advantage of
-        // some simplifications.
-        if (threadIdx.x == 0) {
-            const auto index = ravel_index(i0, j0, k0, m1);
-            auto nHI = densities.get(index);
-            update_photo_rates(
-                data_HI, 0, index, 0.0, nHI, 0.5 * dr, strength, dr * dr * dr,
-                ion_tables, logtau
-            );
-        }
-        __syncthreads();
+        // The blocks are persistent and walk the source list in strides. A block
+        // that finishes a source early takes the next one straight away instead of
+        // idling until the rest of the grid catches up, which is what a batch of
+        // one-source-per-block would have made it do.
+        for (size_t ns = blockIdx.x; ns < num_src; ns += gridDim.x) {
+            // Get source properties.
+            const auto i0 = src_pos[3 * ns + 0];
+            const auto j0 = src_pos[3 * ns + 1];
+            const auto k0 = src_pos[3 * ns + 2];
+            const auto strength = src_flux[ns];
 
-        // Loop over q-shells and each thread peforms raytracing on one or more
-        // cells. "s" is the index in the range [0, ..., 4q^2 + 2) that gets mapped
-        // to the cells in the shell. (q, s) indices are mapped to (i, j, k) indices
-        // via asora::linthrd2cart.
-        for (int q = 1; q <= q_max; ++q) {
-            // Prepare shared memory for column density interpolation for this
-            // shell.
-            data_HI.partition_column_density(q);
-
-            // Each thread can process multiple cells.
-            int s = threadIdx.x;
-            while (static_cast<size_t>(s) < cells_in_shell(q)) {
-                raytrace(
-                    q, s, i0, j0, k0, strength, data_HI, dr, R_max, densities, m1,
+            // Calculate column density and photoionization rate for the source
+            // cell. This is done separately from the main loop because to take
+            // advantage of some simplifications.
+            if (threadIdx.x == 0) {
+                const auto index = ravel_index(i0, j0, k0, m1);
+                auto nHI = densities.get(index);
+                update_photo_rates(
+                    data_HI, 0, index, 0.0, nHI, 0.5 * dr, strength, dr * dr * dr,
                     ion_tables, logtau
                 );
-                s += blockDim.x;
             }
             __syncthreads();
+
+            // Loop over q-shells and each thread peforms raytracing on one or more
+            // cells. "s" is the index in the range [0, ..., 4q^2 + 2) that gets
+            // mapped to the cells in the shell. (q, s) indices are mapped to
+            // (i, j, k) indices via asora::linthrd2cart.
+            for (int q = 1; q <= q_max; ++q) {
+                // Prepare shared memory for column density interpolation for this
+                // shell.
+                data_HI.partition_column_density(q);
+
+                // Each thread can process multiple cells.
+                int s = threadIdx.x;
+                while (static_cast<size_t>(s) < cells_in_shell(q)) {
+                    raytrace(
+                        q, s, i0, j0, k0, strength, data_HI, dr, R_max, densities, m1,
+                        ion_tables, logtau
+                    );
+                    s += blockDim.x;
+                }
+                __syncthreads();
+            }
         }
     }
 
