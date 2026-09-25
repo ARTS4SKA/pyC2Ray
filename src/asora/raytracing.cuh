@@ -58,17 +58,11 @@ namespace asora {
         __device__ void partition_column_density(int q);
     };
 
-    /* @brief Read-only maps of number and fractional densities
+    /* @brief Read-only maps of number densities
      */
     struct density_maps {
-        /// Number density data
-        const double *__restrict__ ndens;
-
-        /// Ionized hydrogen fraction data
-        const double *__restrict__ xHII;
-
-        /// Get hydrogen density value at the specified index
-        __device__ double get(size_t index) const;
+        /// Neutral hydrogen number density
+        const double *__restrict__ nHI;
     };
 
     /* @brief GPU kernel for raytracing and photoionization evolution
