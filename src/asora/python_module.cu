@@ -100,7 +100,7 @@ PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) 
         return nullptr;
     }
 
-    return Py_None;
+    Py_RETURN_NONE;
 }
 
 /// Expose asora::device::initialize
@@ -116,7 +116,7 @@ PyObject *asora_device_init([[maybe_unused]] PyObject *self, PyObject *args) {
         return nullptr;
     }
 
-    return Py_None;
+    Py_RETURN_NONE;
 }
 
 /// Expose asora::device::close
@@ -129,14 +129,14 @@ PyObject *asora_device_close([[maybe_unused]] PyObject *self, PyObject *args) {
         PyErr_SetString(PyExc_MemoryError, e.what());
         return nullptr;
     }
-    return Py_None;
+    Py_RETURN_NONE;
 }
 
 /// Expose asora::device::is_initialized.
 PyObject *asora_is_device_init([[maybe_unused]] PyObject *self, PyObject *args) {
     if (!PyArg_ParseTuple(args, "")) return nullptr;
 
-    return asora::device::is_initialized() ? Py_True : Py_False;
+    return Py_NewRef(asora::device::is_initialized() ? Py_True : Py_False);
 }
 
 /// Expose whether the extension was compiled with periodic boundary mode.
@@ -159,7 +159,7 @@ PyObject *asora_density_to_device([[maybe_unused]] PyObject *self, PyObject *arg
                    load_array_to_device<double>(
                        ndens, asora::buffer_tag::number_density
                    )
-               ? Py_None
+               ? Py_NewRef(Py_None)
                : nullptr;
 }
 
@@ -173,7 +173,7 @@ PyObject *asora_photo_table_to_device([[maybe_unused]] PyObject *self, PyObject 
                    load_array_to_device<double>(
                        thick_table, asora::buffer_tag::photo_ion_thick_table
                    )
-               ? Py_None
+               ? Py_NewRef(Py_None)
                : nullptr;
 }
 
@@ -187,7 +187,7 @@ PyObject *asora_source_data_to_device([[maybe_unused]] PyObject *self, PyObject 
                    load_array_to_device<double>(
                        src_flux, asora::buffer_tag::source_flux
                    )
-               ? Py_None
+               ? Py_NewRef(Py_None)
                : nullptr;
 }
 
@@ -215,7 +215,7 @@ PyObject *asora_prepare_grid_buffers([[maybe_unused]] PyObject *self, PyObject *
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return nullptr;
     }
-    return Py_None;
+    Py_RETURN_NONE;
 }
 
 PyObject *asora_chemistry_global_pass([[maybe_unused]] PyObject *self, PyObject *args) {
@@ -258,7 +258,6 @@ PyObject *asora_chemistry_global_pass([[maybe_unused]] PyObject *self, PyObject 
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return nullptr;
     }
-    return Py_None;
 }
 
 #ifdef __cplusplus
