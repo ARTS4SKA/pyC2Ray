@@ -19,7 +19,10 @@ namespace asora {
         int gpu_id = static_cast<int>(rank % static_cast<unsigned int>(device_count));
         safe_cuda(cudaSetDevice(gpu_id));
 
-        // TODO: use a dedicated stream
+        // TODO: create the streams the entry points schedule on here, once the
+        // kernel launches and the copies move onto them together. Until then
+        // callers pass 0 to scratch() and everything stays on the default
+        // stream.
 
         auto &self = instance();
 
@@ -67,7 +70,7 @@ namespace asora {
             _pool = nullptr;
         }
 
-        // TODO: nothing else to destroy while _stream is the legacy default stream.
+        // TODO: destroy the entry points' streams here once they exist.
         _gpu_id = -1;
     }
 
