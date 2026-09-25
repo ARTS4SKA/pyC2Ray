@@ -101,7 +101,7 @@ PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) 
     try {
         asora::do_all_sources_gpu(
             R, sig, dr, phi_ion_data, num_src, m1, minlogtau, dlogtau, num_tau,
-            grid_size, block_size
+            block_size
         );
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
