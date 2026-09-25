@@ -1,10 +1,14 @@
 #pragma once
 
-/* @file chemistry.h
- * @brief Global pass routine for the chemistry ODE solver.
- */
+#include "resident_tag.h"
 
 namespace asora {
+    namespace resident_tag {
+
+        struct temperature : base<double> {};  ///< Temperature map
+        struct clumping : base<double> {};     ///< Clumping factor map
+
+    }  // namespace resident_tag
 
     /* @brief Perform a global pass of the chemistry solver.
      *
