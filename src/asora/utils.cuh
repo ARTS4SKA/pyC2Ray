@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 
 #include <cassert>
+#include <cmath>
 #include <concepts>
 #include <format>
 #include <source_location>
