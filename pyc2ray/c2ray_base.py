@@ -322,7 +322,6 @@ class C2Ray:
             dr=self.dr,
             src_flux=src_flux,
             src_pos=src_pos,
-            src_batch_size=self.raytracing_params.source_batch_size,
             use_gpu=self.gpu,
             decomposition=self._decomposition_handler,
             max_subbox=self.max_subbox,

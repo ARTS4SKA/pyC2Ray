@@ -17,7 +17,6 @@ if libasora is None:
 def setup_do_all_sources(
     num_sources: int = 10,
     mesh_size: int = 50,
-    batch_size: int = 8,
     block_size: int = 256,
     radius: float = 15.0,
 ):
@@ -76,7 +75,6 @@ def setup_do_all_sources(
         minlog_tau,
         dlogtau,
         num_tau,
-        batch_size,
         block_size,
     )
 
@@ -92,13 +90,10 @@ def test_do_all_sources(data_dir, init_device):
 
 
 @pytest.mark.parametrize("mesh_size", [32, 64, 128])
-@pytest.mark.parametrize("batch_size", [8, 16, 32])
 @pytest.mark.parametrize("block_size", [128, 256, 512])
 @pytest.mark.benchmark(warmup=True, warmup_iterations=1)
-def test_benchmark_do_all_sources(
-    benchmark, init_device, mesh_size, batch_size, block_size
-):
-    with setup_do_all_sources(10000, mesh_size, batch_size, block_size) as args:
+def test_benchmark_do_all_sources(benchmark, init_device, mesh_size, block_size):
+    with setup_do_all_sources(10000, mesh_size, block_size) as args:
         benchmark(libasora.do_all_sources, *args)
 
 
