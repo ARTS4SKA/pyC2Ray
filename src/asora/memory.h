@@ -1,10 +1,13 @@
 #pragma once
 
+#include "resident_tag.h"
 #include "utils.cuh"
 
 #include <cuda_runtime.h>
 
+#include <concepts>
 #include <format>
+#include <functional>
 #include <memory>
 #include <source_location>
 #include <span>
@@ -45,15 +48,9 @@ namespace asora {
     /* @brief RAII-managed typed array in device memory.
      *
      * The array is the unique owner of its allocation, which is released when
-     * it goes out of scope. It is movable but not copyable: observers take a
-     * raw pointer through data(), and arrays that several subsystems need to
-     * read live in resident_data.
-     *
-     * A pooled array records the stream its allocation is ordered on, because
-     * the destructor has no other way to obtain one. It does not own that
-     * stream: which stream to schedule on is decided by the entry point that
-     * launches the work. The array must only be accessed by work ordered on
-     * that same stream.
+     * it goes out of scope. During creation, the stream on which its allocation is
+     * ordered on is recorded, for the deleter. The array must only be accessed by work
+     * ordered on that same stream.
      *
      * @tparam T Element type
      * @warning Do not access the underlying memory from host code!
@@ -65,13 +62,9 @@ namespace asora {
             "device_array elements must be trivially copyable"
         );
 
-        /* @brief Releases an allocation through the allocator that made it.
+        /* @brief Releases an allocation dispatching on the correct the allocator.
          *
-         * The allocator and stream are held here rather than in the enclosing
-         * array so that the deleter never depends on the lifetime of that
-         * object or of the device singleton. A deleter is installed even when
-         * nothing is allocated, so that an empty array still remembers how it
-         * is meant to grow.
+         * The allocator and stream are held here.
          */
         struct deleter {
             allocation alloc = allocation::device;
@@ -250,8 +243,14 @@ namespace asora {
             copy_from_device(src);
         }
 
-        /// @brief Set all elements of the array to zero.
+        /// Set all elements of the array to zero.
         void zero() { safe_cuda(cudaMemset(data(), 0, bytes())); }
+
+        /// Release the device memory but keep the object alive.
+        void reset() noexcept {
+            _ptr.reset();
+            _items = 0;
+        }
 
        private:
         /// Allocate _items elements through the allocator recorded in the deleter
@@ -287,26 +286,7 @@ namespace asora {
         size_t _items = 0;
     };
 
-    /* @brief Device arrays whose contents outlive a single library call.
-     *
-     * These are pushed from Python and read back by the raytracing and
-     * chemistry entry points without being re-uploaded, so they are kept in
-     * plain device allocations rather than in the memory pool. Everything else
-     * is per-call scratch and should be a local device_array obtained from
-     * device::scratch.
-     */
-    struct resident_data {
-        device_array<double> number_density;    ///< Matter number density
-        device_array<double> fraction_HII;      ///< HII fraction at timestep start
-        device_array<double> fraction_HII_avg;  ///< Average HII fraction, updated
-                                                ///< in place by every chemistry pass
-        device_array<double> temperature;       ///< Temperature map
-        device_array<double> clumping;          ///< Clumping factor map
-        device_array<double> photo_ion_thin;    ///< Optically thin photoion. table
-        device_array<double> photo_ion_thick;   ///< Optically thick photoion. table
-        device_array<double> source_flux;       ///< Source flux array
-        device_array<int> source_position;      ///< Source position array
-    };
+    namespace resident_tag {}  // namespace resident_tag
 
     /* @brief Singleton managing only one GPU device and its memory pool.
      *
@@ -352,7 +332,14 @@ namespace asora {
          *
          * @throw std::runtime_error if device not initialized
          */
-        static resident_data &resident();
+        template <typename Tag>
+            requires std::derived_from<Tag, resident_tag::base<typename Tag::type>>
+        static device_array<typename Tag::type> &resident(size_t items = 0) {
+            check_initialized();
+            static auto &array = make_resident<Tag>();
+            array.ensure(items);
+            return array;
+        }
 
         /* @brief Allocate a per-call array from the stream-ordered memory pool.
          *
@@ -376,14 +363,10 @@ namespace asora {
          * @throw std::runtime_error if device not initialized
          */
         template <typename T>
-        static device_array<T> scratch(size_t items, cudaStream_t stream) {
+        static device_array<T> scratch(size_t items = 0, cudaStream_t stream = 0) {
             check_initialized();
             return instance()._pool ? device_array<T>(items, stream)
                                     : device_array<T>(items);
-        }
-        template <typename T>
-        static device_array<T> scratch(size_t items) {
-            return scratch<T>(items, 0);
         }
 
         /// Get the CUDA device ID, or -1 if not initialized
@@ -396,28 +379,33 @@ namespace asora {
         static cudaMemPool_t pool() noexcept { return instance()._pool; }
 
        private:
-        /// Private constructor to enforce singleton pattern
         device() {}
         device(const device &) = delete;
         device &operator=(const device &) = delete;
-
-        /// Releases whatever close() would, as a backstop at process exit
         ~device() { release(); }
 
-        /// Idempotent, non-throwing release of the device resources
+        /// Release of the device resources
         void release() noexcept;
 
         /// Get or create the singleton instance
         static device &instance() noexcept;
+
+        /// Teardown functions to run on release
+        std::vector<std::function<void()>> _teardown;
+
+        // Create array once and register it for teardown only once.
+        template <typename Tag>
+        static device_array<typename Tag::type> &make_resident() {
+            static device_array<typename Tag::type> array;
+            instance()._teardown.push_back([] { array.reset(); });
+            return array;
+        }
 
         /// Device ID (-1 means uninitialized)
         int _gpu_id = -1;
 
         /// Stream-ordered pool for scratch allocations; null if unsupported
         cudaMemPool_t _pool = nullptr;
-
-        /// Arrays that outlive a single library call
-        resident_data _resident;
     };
 
 }  // namespace asora
