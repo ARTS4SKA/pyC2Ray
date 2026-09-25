@@ -8,6 +8,7 @@ import numpy as np
 from pyc2ray.load_extensions import libasora
 
 __all__ = [
+    "available_memory",
     "average_fraction_to_device",
     "average_fraction_to_host",
     "check_device_init",
@@ -17,6 +18,8 @@ __all__ = [
     "flat_contiguous",
     "is_device_init",
     "is_periodic_mode_active",
+    "max_q_shells",
+    "max_resident_blocks",
     "num_column_density_banks",
     "photo_table_to_device",
     "source_data_to_device",
@@ -56,6 +59,17 @@ def is_device_init() -> bool:
 
 
 @check_libasora
+def max_q_shells(R: float, N: int) -> int:
+    """Return the maximum q-shell number for a given radius and grid size."""
+    assert libasora is not None
+    if N <= 0:
+        raise ValueError("N must be > 0")
+    if R < 0:
+        raise ValueError("R must be >= 0")
+    return libasora.max_q_shells(R, N)
+
+
+@check_libasora
 def is_periodic_mode_active() -> bool:
     """Return whether libasora was compiled with periodic boundary conditions"""
     assert libasora is not None
@@ -67,6 +81,27 @@ def num_column_density_banks() -> int:
     """Return the number of q-shells kept in the libasora column density ring buffer"""
     assert libasora is not None
     return libasora.num_column_density_banks()
+
+
+@check_libasora
+def available_memory() -> int:
+    """Return the available device memory in bytes, or 0 if the device is not initialized"""
+    assert libasora is not None
+    return libasora.available_memory()
+
+
+@check_device_init
+def max_resident_blocks(block_size: int | None = None) -> int:
+    """Return the number of raytracing blocks the device can keep resident.
+
+    Each resident block raytraces one source at a time, so this is the maximum number
+    of sources raytraced concurrently. Without block_size, the default block size of
+    the raytracing kernel is used.
+    """
+    assert libasora is not None
+    if block_size is None:
+        return libasora.max_resident_blocks()
+    return libasora.max_resident_blocks(block_size)
 
 
 @check_libasora

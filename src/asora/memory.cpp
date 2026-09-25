@@ -92,4 +92,26 @@ namespace asora {
         }
     }
 
+    size_t device::available_memory() {
+        if (!is_initialized()) return 0;
+
+        size_t free = 0, total = 0;
+        safe_cuda(cudaMemGetInfo(&free, &total));
+
+        // The pool may have reserved memory that is not currently used
+        if (instance()._pool) {
+            uint64_t reserved = 0;
+            uint64_t used = 0;
+            safe_cuda(cudaMemPoolGetAttribute(
+                instance()._pool, cudaMemPoolAttrReservedMemCurrent, &reserved
+            ));
+            safe_cuda(cudaMemPoolGetAttribute(
+                instance()._pool, cudaMemPoolAttrUsedMemCurrent, &used
+            ));
+            free += reserved - used;
+        }
+
+        return free;
+    }
+
 }  // namespace asora
