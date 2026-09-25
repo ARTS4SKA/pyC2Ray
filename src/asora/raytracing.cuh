@@ -1,11 +1,21 @@
 #pragma once
 
 #include "rates.cuh"
+#include "resident_tag.h"
 #include "utils.cuh"
 
+#include <cuda_runtime.h>
 #include <cuda/std/array>
 
 namespace asora {
+    namespace resident_tag {
+
+        struct photo_ion_thin : base<double> {};   ///< Optically thin photoion. table
+        struct photo_ion_thick : base<double> {};  ///< Optically thick photoion. table
+        struct source_flux : base<double> {};      ///< Source flux array
+        struct source_position : base<int> {};     ///< Source position array
+
+    }  // namespace resident_tag
 
     /* @brief Raytrace all sources and compute photoionization rates
      *
@@ -51,7 +61,6 @@ namespace asora {
          * the asora::cell_interpolator class. The pointers are stored in the
          * `shared_cdens` member.
          *
-         * @param q Current q-index
          * @see cell_interpolator::interpolate() for how these pointers are used in
          *      interpolation
          */

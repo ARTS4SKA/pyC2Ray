@@ -2,9 +2,7 @@
 
 #include "memory.h"
 
-#include <cuda_runtime.h>
-
-#include <exception>
+#include <stdexcept>
 
 namespace asora {
 
@@ -120,23 +118,29 @@ namespace asora {
     ) {
         device::check_initialized();
 
-        const auto &resident = device::resident();
-        if (!resident.number_density)
+        namespace tag = resident_tag;
+        const auto &number_density = device::resident<tag::number_density>();
+        const auto &photo_ion_thin = device::resident<tag::photo_ion_thin>();
+        const auto &photo_ion_thick = device::resident<tag::photo_ion_thick>();
+        const auto &source_flux = device::resident<tag::source_flux>();
+        const auto &source_position = device::resident<tag::source_position>();
+        const auto &fraction_HII_avg = device::resident<tag::fraction_HII_avg>();
+        if (!number_density)
             throw std::runtime_error(
                 "number density array must be allocated on the device before calling "
                 "do_all_sources_gpu"
             );
-        if (!resident.photo_ion_thin || !resident.photo_ion_thick)
+        if (!photo_ion_thin || !photo_ion_thick)
             throw std::runtime_error(
                 "photo ionization tables (thin, thick) must be allocated on the device "
                 "before calling do_all_sources_gpu"
             );
-        if (!resident.source_flux || !resident.source_position)
+        if (!source_flux || !source_position)
             throw std::runtime_error(
                 "source data (flux, position) must be allocated on the device before "
                 "calling do_all_sources_gpu"
             );
-        if (!resident.fraction_HII_avg)
+        if (!fraction_HII_avg)
             throw std::runtime_error(
                 "average ionized fraction must be allocated on the device before "
                 "calling do_all_sources_gpu"
@@ -150,9 +154,7 @@ namespace asora {
         // place by the chemistry pass, so no transfer is needed. Ranks that do not
         // run chemistry refresh it with average_fraction_to_device after the
         // broadcast.
-        density_maps densities{
-            resident.number_density.data(), resident.fraction_HII_avg.data()
-        };
+        density_maps densities{number_density.data(), fraction_HII_avg.data()};
 
         // Allocate (if necessary) and zero the output array for the photoionization
         // rate
@@ -168,17 +170,10 @@ namespace asora {
         auto column_density_HI =
             device::scratch<double>(grid_size * bank_size * num_banks);
 
-        auto src_flux_d = resident.source_flux.data();
-        auto src_pos_d = resident.source_position.data();
-
         // Create helper data structures: data_HI, ion_tables, logtau
 
         element_data data_HI{phion_HI.data(), column_density_HI.data(), sigma};
-
-        photo_tables ion_tables{
-            resident.photo_ion_thin.data(), resident.photo_ion_thick.data()
-        };
-
+        photo_tables ion_tables{photo_ion_thin.data(), photo_ion_thick.data()};
         linspace<double> logtau{minlogtau, dlogtau, static_cast<size_t>(num_tau)};
 
         // Loop over batches of sources
@@ -187,8 +182,8 @@ namespace asora {
             // Consecutive kernel launches are in the same stream and so are
             // serialized
             evolve0D_gpu<<<grid_size, block_size>>>(
-                m1, dr, R, q_max, ns, num_src, src_pos_d, src_flux_d, data_HI,
-                densities, ion_tables, logtau
+                m1, dr, R, q_max, ns, num_src, source_position.data(),
+                source_flux.data(), data_HI, densities, ion_tables, logtau
             );
 
             safe_cuda(cudaPeekAtLastError());

@@ -57,13 +57,12 @@ namespace asora {
 
     void device::close() { instance().release(); }
 
-    // Runs on the explicit close() path and again when the singleton is destroyed at
-    // exit, so it must be idempotent. It must not throw, release failures are not
-    // actionable, so their status is discarded rather than checked.
+    // Run on the explicit close() path and when the singleton is destroyed
     void device::release() noexcept {
         // Release the resident arrays and wait for any pending stream-ordered
         // frees, so that the pool has nothing in flight left to release.
-        _resident = {};
+        for (auto &tear : instance()._teardown) tear();
+
         if (_pool) {
             cudaDeviceSynchronize();
             cudaMemPoolTrimTo(_pool, 0);
@@ -72,11 +71,6 @@ namespace asora {
 
         // TODO: destroy the entry points' streams here once they exist.
         _gpu_id = -1;
-    }
-
-    resident_data &device::resident() {
-        check_initialized();
-        return instance()._resident;
     }
 
     // Thread-safe singleton by C++11 standard. Construction is lazy, on the
