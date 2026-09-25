@@ -1,12 +1,9 @@
 #include "chemistry.h"
 
 #include "memory.h"
-#include "utils.cuh"
 
 #include <thrust/count.h>
 #include <thrust/execution_policy.h>
-#include <cmath>
-#include <iostream>
 
 namespace {
 
@@ -126,25 +123,26 @@ namespace asora {
         double* xh_int, const double* phi_ion, double dt, double bh00, double albpow,
         double colh0, double temph0, double abu_c, size_t n_cells, size_t block_size
     ) {
-        auto& resident = device::resident();
-        if (!resident.number_density || !resident.temperature || !resident.clumping)
+        device::check_initialized();
+
+        namespace tag = resident_tag;
+        const auto& number_density = device::resident<tag::number_density>();
+        const auto& temperature = device::resident<tag::temperature>();
+        const auto& clumping = device::resident<tag::clumping>();
+        if (!number_density || !temperature || !clumping)
             throw std::runtime_error(
                 "number density, temperature, and clumping arrays must be allocated on "
                 "the device before calling global_pass"
             );
 
-        if (!resident.fraction_HII || !resident.fraction_HII_avg)
+        const auto& fraction_HII = device::resident<tag::fraction_HII>();
+        auto& fraction_HII_avg = device::resident<tag::fraction_HII_avg>();
+        if (!fraction_HII || !fraction_HII_avg)
             throw std::runtime_error(
                 "initial and average fraction maps must be allocated on the device "
                 "before calling global_pass"
             );
-
-        // Both fractions are resident: the initial one is read only and uploaded once
-        // per timestep, the average one is updated in place here and read by the next
-        // raytracing pass without ever going through the host.
-        const auto& frac_HII = resident.fraction_HII;
-        auto& frac_HII_avg = resident.fraction_HII_avg;
-        auto frac_HII_int = device::scratch<double>(n_cells);
+        auto fraction_HII_int = device::scratch<double>(n_cells);
 
         auto phion_HI = device::scratch<double>(n_cells);
         phion_HI.copy_from_host(phi_ion);
@@ -154,10 +152,9 @@ namespace asora {
         // Launch kernel, divide by 2 so that threads do more work.
         size_t grid_size = std::ceil(static_cast<float>(n_cells) / block_size / 2);
         evolve0D_gpu<<<grid_size, block_size>>>(
-            frac_HII.data(), frac_HII_avg.data(), frac_HII_int.data(),
-            resident.temperature.data(), resident.number_density.data(),
-            phion_HI.data(), resident.clumping.data(), conv_flag.data(), dt, bh00,
-            albpow, colh0, temph0, abu_c, n_cells
+            fraction_HII.data(), fraction_HII_avg.data(), fraction_HII_int.data(),
+            temperature.data(), number_density.data(), phion_HI.data(), clumping.data(),
+            conv_flag.data(), dt, bh00, albpow, colh0, temph0, abu_c, n_cells
         );
 
         // Check for errors.
@@ -172,7 +169,7 @@ namespace asora {
         // The average fraction stays on the device for the next raytracing pass. It
         // is only read back when an MPI rank has to broadcast it, through
         // average_fraction_to_host.
-        frac_HII_int.copy_to_host(xh_int);
+        fraction_HII_int.copy_to_host(xh_int);
         return convergence;
     }
 

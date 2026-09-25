@@ -4,7 +4,7 @@
 #include "utils.cuh"
 
 #include <algorithm>
-#include <cmath>
+#include <functional>
 #include <numeric>
 #include <vector>
 
