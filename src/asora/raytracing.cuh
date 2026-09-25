@@ -1,10 +1,20 @@
 #pragma once
 
 #include "rates.cuh"
+#include "resident_tag.h"
 
+#include <cuda_runtime.h>
 #include <cuda/std/array>
 
 namespace asora {
+    namespace resident_tag {
+
+        struct photo_ion_thin : base<double> {};   ///< Optically thin photoion. table
+        struct photo_ion_thick : base<double> {};  ///< Optically thick photoion. table
+        struct source_flux : base<double> {};      ///< Source flux array
+        struct source_position : base<int> {};     ///< Source position array
+
+    }  // namespace resident_tag
 
     /* @brief Raytrace all sources and compute photoionization rates
      *
