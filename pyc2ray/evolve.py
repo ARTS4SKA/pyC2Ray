@@ -443,18 +443,26 @@ Domain decomposition is active
 
     assert libasora is not None
 
-    # Initialize average and intermediate results
-    xh_flat = np.ravel(xh).astype(np.float64)
-    xh_av = xh_flat.copy()
-    xh_int = xh_flat.copy()
+    # Only rank 0 runs chemistry, so only rank 0 keeps the flat global inputs of
+    # chemistry_global_pass. Other ranks only need receive buffers for the xh_av and
+    # xh_int broadcasts at the end of every iteration, and they read xh_av only after
+    # the first of them (the first iteration maps the global xh instead). This allows
+    # to save memory on non root ranks.
+    # For rank 0, copy=False avoids a second full-grid copy: np.ravel already copies the
+    # Fortran-ordered fields, and chemistry_global_pass never writes these arrays back.
+    if rank == 0:
+        xh_flat = np.ravel(xh).astype(np.float64, copy=False)
+        xh_av = xh_flat.copy()
+        xh_int = xh_flat.copy()
+        ndens_flat = np.ravel(ndens).astype(np.float64, copy=False)
+        temp_flat = np.ravel(temp).astype(np.float64, copy=False)
+        clump_flat = np.ravel(clump).astype(np.float64, copy=False)
+    else:
+        xh_av = np.empty(num_cells, dtype=np.float64)
+        xh_int = np.empty(num_cells, dtype=np.float64)
 
     # Initialize ionization rate array.
     phi_ion = np.zeros((N, N, N), dtype=np.float64)
-
-    # Prepare other inputs
-    ndens_flat = np.ravel(ndens).astype(np.float64)
-    temp_flat = np.ravel(temp).astype(np.float64)
-    clump_flat = np.ravel(clump).astype(np.float64)
 
     # Declare local xh and ndens storages
     local_xh = np.array([], dtype=np.float64)
