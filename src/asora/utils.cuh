@@ -151,6 +151,11 @@ namespace asora {
         int di, int dj, int dk
     );
 
+    /* Number of shells required for column density interpolation (1 current + 3
+     * previous)
+     */
+    constexpr size_t num_banks = 4;
+
     /* @brief Short-characteristics interpolator for radiative transfer.
      *
      * Implements the short-characteristics method for computing column densities
@@ -182,7 +187,8 @@ namespace asora {
          *      banks of column densities.
          */
         __device__ double interpolate(
-            const cuda::std::array<const double *__restrict__, 3> &coldens, double sigma
+            const cuda::std::array<const double *__restrict__, num_banks> &coldens,
+            double sigma
         );
 
        private:
