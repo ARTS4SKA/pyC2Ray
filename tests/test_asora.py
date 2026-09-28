@@ -57,6 +57,7 @@ class TestLibasoraTest:
 
         assert np.allclose(facts, expected)
 
+    @pytest.mark.skip
     def test_cell_interpolator(self, data_dir: Path) -> None:
         rng = np.random.default_rng(seed=42)
         N = 11

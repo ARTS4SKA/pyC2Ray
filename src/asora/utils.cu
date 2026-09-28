@@ -258,15 +258,12 @@ namespace asora {
     ) {
         // Given the offset of a neighbor cell, we can compute its octahedral
         // coordinates (q, s) and so determine which column density pointer to use.
-        auto &&[q, s] = cart2linthrd(_di - i_off, _dj - j_off, _dk - k_off);
-        auto qlev = _q0 - q - 1;
-        assert(qlev >= 0 && qlev < 3);
-
-        return {qlev, s};
+        return cart2linthrd(_di - i_off, _dj - j_off, _dk - k_off);
     }
 
     __device__ double cell_interpolator::interpolate(
-        const cuda::std::array<const double *__restrict__, 3> &coldens, double sigma
+        const cuda::std::array<const double *__restrict__, num_banks> &coldens,
+        double sigma
     ) {
         // Degenerate case.
         if (is_origin()) return 0.0;
@@ -285,8 +282,8 @@ namespace asora {
             if (w > 0.0) {
                 // Compute which cell and so q-shell correspond to the current weight
                 // and read the column density.
-                auto &&[qlev, s] = get_qlevel(xa[0], xa[1], xa[2]);
-                auto c = coldens[qlev][s];
+                auto &&[q, s] = get_qlevel(xa[0], xa[1], xa[2]);
+                auto c = coldens[q % num_banks][s];
 
                 // Rescale weight by optical path
                 w /= max(tau_0, c * sigma);

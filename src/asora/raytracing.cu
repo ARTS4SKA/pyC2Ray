@@ -1,7 +1,6 @@
 #include "raytracing.cuh"
 
 #include "memory.h"
-#include "utils.cuh"
 
 #include <cuda_runtime.h>
 
@@ -9,13 +8,14 @@
 
 namespace asora {
 
-    __device__ void element_data::partition_column_density(int q) {
-        /// Partition the column density array into 3 shared memory banks for easier
+    __device__ void element_data::partition_column_density(size_t bank_size) {
+        /// Partition the column density array into shared memory banks for easier
         /// interpolation
         shared_cdens = {
-            column_density + cells_to_shell(q - 2),
-            column_density + cells_to_shell(q - 3),
-            column_density + cells_to_shell(q - 4)
+            column_density + bank_size * 0,
+            column_density + bank_size * 1,
+            column_density + bank_size * 2,
+            column_density + bank_size * 3,
         };
     }
 
@@ -65,8 +65,8 @@ namespace {
     // cover the full q-shell.
     __device__ void raytrace(
         int q, int s, int i0, int j0, int k0, double strength, element_data &data_HI,
-        double dr, double R_max, const density_maps &densities, size_t m1,
-        const photo_tables &ion_tables, const linspace<double> &logtau
+        double dr, double R_max, size_t bank_size, const density_maps &densities,
+        size_t m1, const photo_tables &ion_tables, const linspace<double> &logtau
     ) {
         auto &&[di, dj, dk] = linthrd2cart(q, s);
 
@@ -101,13 +101,15 @@ namespace {
         auto vol_ph = 4 * c::pi<> * dist2 * path * dr * dr;
 
         // Get local ionization fraction & neutral hydrogen density in the cell
-        const auto index = ravel_index(i0 + di, j0 + dj, k0 + dk, m1);
-        const auto q_off = cells_to_shell(q - 1);
-        auto nHI = densities.get(index);
+        const auto bank = q % num_banks;
+        const auto cd_index = bank_size * bank + s;
+
+        const auto ph_index = ravel_index(i0 + di, j0 + dj, k0 + dk, m1);
+        auto nHI = densities.get(ph_index);
 
         // Compute photoionization rates from column density.
         update_photo_rates(
-            data_HI, q_off + s, index, coldens_in, nHI, path, strength, vol_ph,
+            data_HI, cd_index, ph_index, coldens_in, nHI, path, strength, vol_ph,
             ion_tables, logtau
         );
     }
@@ -153,8 +155,9 @@ namespace asora {
         // faces of the octahedron. To raytrace the whole volume, the octahedron must
         // be 1.5*N in size. Allocate (if necessary) the column density array.
         int q_max = std::ceil(c::sqrt3<> * std::min(R, c::sqrt3<> * m1 / 2.0));
+        auto bank_size = cells_in_shell(q_max);
         device::ensure<double>(
-            buffer_tag::column_density_HI, grid_size * cells_to_shell(q_max)
+            buffer_tag::column_density_HI, grid_size * bank_size * num_banks
         );
 
         // Get source properties, assuming the arrays are already on the device.
@@ -228,8 +231,10 @@ namespace asora {
 
         // Offset pointer to the outgoing column density array used for
         // interpolation (each block works on its own array).
-        size_t cd_offset = blockIdx.x * cells_to_shell(q_max);
+        auto bank_size = cells_in_shell(q_max);
+        size_t cd_offset = blockIdx.x * bank_size * num_banks;
         data_HI.column_density += cd_offset;
+        data_HI.partition_column_density(bank_size);
 
         // Calculate column density and photoionization rate for the source cell.
         // This is done separately from the main loop because to take advantage of
@@ -250,14 +255,13 @@ namespace asora {
         // asora::linthrd2cart.
         for (int q = 1; q <= q_max; ++q) {
             // Prepare shared memory for column density interpolation for this shell.
-            data_HI.partition_column_density(q);
 
             // Each thread can process multiple cells.
             int s = threadIdx.x;
             while (static_cast<size_t>(s) < cells_in_shell(q)) {
                 raytrace(
-                    q, s, i0, j0, k0, strength, data_HI, dr, R_max, densities, m1,
-                    ion_tables, logtau
+                    q, s, i0, j0, k0, strength, data_HI, dr, R_max, bank_size,
+                    densities, m1, ion_tables, logtau
                 );
                 s += blockDim.x;
             }
