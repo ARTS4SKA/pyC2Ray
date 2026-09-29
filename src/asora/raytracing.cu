@@ -8,8 +8,8 @@
 
 #include <cuda_runtime.h>
 
-#include <cuda/std/array>
-#include <exception>
+#include <iostream>
+#include <stdexcept>
 
 namespace asora {
 
@@ -111,13 +111,19 @@ namespace asora {
     ) {
         device::check_initialized();
 
-        // Number density array is not modified, it is assumed that it is already on the
-        // device.
         if (!device::contains(buffer_tag::number_density))
             throw std::runtime_error(
                 "Number density array must be allocated on the device before calling "
                 "do_all_sources_gpu"
             );
+
+        if (!device::contains(buffer_tag::source_flux) ||
+            !device::contains(buffer_tag::source_position))
+            throw std::runtime_error(
+                "Source properties must be allocated on the device before calling "
+                "do_all_sources_gpu"
+            );
+
         // Size of grid data
         auto n_cells = m1 * m1 * m1;
 
@@ -142,15 +148,15 @@ namespace asora {
             buffer_tag::column_density_HI, grid_size * bank_size * num_banks
         );
 
-        // Get source properties, assuming the arrays are already on the device.
-        if (!device::contains(buffer_tag::source_flux) ||
-            !device::contains(buffer_tag::source_position))
-            throw std::runtime_error(
-                "Source properties must be allocated on the device before calling "
-                "do_all_sources_gpu"
-            );
+        // Get device pointers for the kernel.
+
         auto src_flux_d = get_data_view<double>(buffer_tag::source_flux);
         auto src_pos_d = get_data_view<int>(buffer_tag::source_position);
+
+        density_maps densities{
+            get_data_view<double>(buffer_tag::number_density),
+            get_data_view<double>(buffer_tag::fraction_HII)
+        };
 
         element_data data_HI{
             phi_d, get_data_view<double>(buffer_tag::column_density_HI), sigma
