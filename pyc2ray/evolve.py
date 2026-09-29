@@ -243,7 +243,7 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             N,
             minlogtau,
             dlogtau,
-            num_tau,
+            num_tau - 1,
             src_batch_size,
         )
 
@@ -547,7 +547,7 @@ Domain decomposition is active
                 local_mesh_size,
                 minlogtau,
                 dlogtau,
-                num_tau,
+                num_tau - 1,
                 src_batch_size,  # Determines the CUDA kernel grid size
             )
 

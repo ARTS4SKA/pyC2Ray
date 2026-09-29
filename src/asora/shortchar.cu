@@ -235,8 +235,14 @@ namespace asora {
         // Launch kernel to fill lut
         shortchar_lut lut_d{std::in_place};
 
-        fill_lut_kernel<<<1, 1024>>>(lut_d, q_max);
+#ifdef NDEBUG
+        constexpr int block_size = 1024;
+#else
+        constexpr int block_size = 128;
+#endif
+        fill_lut_kernel<<<1, block_size>>>(lut_d, q_max);
         safe_cuda(cudaDeviceSynchronize());
+        safe_cuda(cudaGetLastError());
 
         return lut_d;
     }
