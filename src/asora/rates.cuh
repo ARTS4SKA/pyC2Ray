@@ -31,12 +31,12 @@ namespace asora {
         __host__ __device__ T start() const { return start_; }
         __host__ __device__ T step() const { return step_; }
         __host__ __device__ size_t num() const { return num_; }
-        __host__ __device__ T stop() const { return fma(step_, num_, start_); }
+        __host__ __device__ T stop() const {
+            return fma(step_, static_cast<T>(num_ - 1), start_);
+        }
 
         __host__ __device__ T locate(T x) const {
-            return min(
-                static_cast<T>(num_), max(static_cast<T>(0), fma(x, inv_step_, offset_))
-            );
+            return fma(min(stop(), max(start(), x)), inv_step_, offset_);
         }
 
        private:
@@ -75,12 +75,13 @@ namespace asora {
      */
     template <std::floating_point T = double>
     struct tau_pos {
-        size_t i0;
-        size_t i1;
-        T p;
+        const T p;
+        const size_t idx;
+        const bool end_point;
 
         __host__ __device__ T interp(const T *table) const {
-            return (1 - p) * table[i0] + p * table[i1];
+            if (end_point) return table[idx];
+            return (1 - p) * table[idx] + p * table[idx + 1];
         }
     };
 
@@ -100,22 +101,19 @@ namespace asora {
     __host__ __device__ tau_pos<T> log_table_index(
         T x, const asora::linspace<T> &logscale
     ) {
-        // Map lx to its position in the table
+        // Map lx to its position in the table.
         auto lx = log10(x);
         auto interp = logscale.locate(lx);
 
         // Split the continuous index into integer and fractional parts
-        // integral = floor of the index, used for table lookup
-        // residual = fractional part, used for interpolation weight
+        //   - integral = floor of the index, used for table lookup
+        //   - residual = fractional part, used for interpolation weight
         T integral;
         auto residual = modf(interp, &integral);
 
-        // Determine the two table indices for linear interpolation and perform the
-        // interpolation
-        auto i0 = static_cast<size_t>(integral);
-        auto i1 = min(logscale.num(), i0 + 1);
-
-        return {i0, i1, residual};
+        // Determine the table index for linear interpolation.
+        auto idx = static_cast<size_t>(integral);
+        return {residual, idx, idx == 1 || idx == logscale.num()};
     }
 
     /* @brief Compute photo rate from optical depths using lookup tables.
