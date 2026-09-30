@@ -351,6 +351,42 @@ def test_regular_grid_index_and_position_maps() -> None:
         grid.global_to_local_index_map(np.array([1, 2, 2]))
 
 
+def test_regular_grid_position_map_accepts_a_batch() -> None:
+    """A (num_positions, 3) batch must map to the same indices as one call per position."""
+    grid = RegularGrid(
+        cell_size=0.5, num_cells=4, offset=np.array([2, 2, 2], dtype=np.int64)
+    )
+    positions = np.array(
+        [
+            [1.25, 1.75, 2.75],
+            [1.0, 1.0, 1.0],
+            [2.99, 2.5, 1.5],
+        ]
+    )
+
+    local = grid.global_to_local_position_map(positions)
+
+    np.testing.assert_array_equal(local, np.array([[0, 1, 3], [0, 0, 0], [3, 3, 1]]))
+    np.testing.assert_array_equal(
+        local, np.stack([grid.global_to_local_position_map(p) for p in positions])
+    )
+
+
+def test_regular_grid_position_map_rejects_a_batch_with_one_outside_position() -> None:
+    grid = RegularGrid(
+        cell_size=0.5, num_cells=4, offset=np.array([2, 2, 2], dtype=np.int64)
+    )
+    positions = np.array(
+        [
+            [1.25, 1.75, 2.75],
+            [0.5, 1.0, 1.0],  # global cell 1 on x, below the offset
+        ]
+    )
+
+    with pytest.raises(ValueError):
+        grid.global_to_local_position_map(positions)
+
+
 def test_regular_grid_resize_local_field() -> None:
     grid = RegularGrid(cell_size=1.0, num_cells=3)
     local_field = np.zeros((2, 2, 2), dtype=float)
