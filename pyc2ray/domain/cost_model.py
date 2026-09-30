@@ -125,6 +125,7 @@ class pyC2RayCostModel(CostModel):
         Concerning the computational cost, for the pyC2Ray raytracing algorithm, we can temporarily use a simple cost model
         where the cost is proportional to the number of sources in the group and the number of cells influenced by the
         sources at least in periodic mode.
+        # TODO: add the data transfer cost to the computational cost model, which is currently ignored.
 
         It is assumed that all the sources in the group have the same radius of influence R and that the
         local grid is regular and cubic.
