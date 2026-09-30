@@ -114,16 +114,18 @@ class Grid(ABC):
 
     @abstractmethod
     def global_to_local_position_map(self, global_position: np.ndarray) -> np.ndarray:
-        """Map a global position in domain coordinates to the corresponding local subdomain coordinates.
+        """Map global positions in domain coordinates to the corresponding local subdomain coordinates.
+
+        Implementations must accept both a single position and a batch of positions.
 
         Parameters
         ----------
-        global_position : The global position in domain coordinates to map (shape `(3,)`).
+        global_position : The global position(s) in domain coordinates to map (shape `(3,)`
+            or `(num_positions, 3)`).
 
         Returns
         -------
-        The corresponding local subdomain coordinates (shape `(3,)`).
-            The corresponding local grid index (shape `(3,)`).
+        The corresponding local subdomain coordinates, with the same shape as global_position.
         """
 
     @abstractmethod
