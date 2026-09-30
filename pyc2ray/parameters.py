@@ -156,9 +156,11 @@ class DomainDecompositionParameters(YmlParameters):
                 f"max_num_sources_per_group must be a positive integer. "
                 f"Provided value is {self.max_num_sources_per_group}."
             )
-        if self.morton_bits <= 0:
+        from pyc2ray.domain.morton_grouping import MAX_MORTON_BITS
+
+        if not 0 < self.morton_bits <= MAX_MORTON_BITS:
             raise ValueError(
-                f"morton_bits must be a positive integer. "
+                f"morton_bits must be an integer in [1, {MAX_MORTON_BITS}]. "
                 f"Provided value is {self.morton_bits}."
             )
         if self.max_memory_cost_per_group <= 0:

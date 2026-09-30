@@ -365,15 +365,18 @@ class RegularGrid(Grid):
         return (max_x - min_x + 1) * (max_y - min_y + 1) * (max_z - min_z + 1)
 
     def global_to_local_index_map(self, global_index: np.ndarray) -> np.ndarray:
-        """Map a global grid index to the corresponding local grid index.
+        """Map global grid indices to the corresponding local grid indices.
+
+        The operations are element-wise, so a batch of indices is mapped in one call.
 
         Parameters
         ----------
-        global_index : The global grid index to map (shape `(3,)`).
+        global_index : The global grid index(es) to map (shape `(3,)` or `(num_indices, 3)`).
 
         Returns
         -------
-        The corresponding local grid index (shape `(3,)`).
+        The corresponding local grid indices, with the same shape as global_index.
+        Raises ValueError if any of the indices is outside the local grid.
         """
         local_index = global_index - self.offset
         if np.any(local_index < 0) or np.any(local_index >= self.num_cells):
@@ -381,15 +384,19 @@ class RegularGrid(Grid):
         return local_index
 
     def global_to_local_position_map(self, global_position: np.ndarray) -> np.ndarray:
-        """Map a global position in domain coordinates to the corresponding local subdomain coordinates.
+        """Map global positions in domain coordinates to the corresponding local grid indices.
+
+        The operations are element-wise, so a batch of positions is mapped in one call.
 
         Parameters
         ----------
-        global_position : The global position in domain coordinates to map (shape `(3,)`).
+        global_position : The global position(s) in domain coordinates to map (shape `(3,)`
+            or `(num_positions, 3)`).
 
         Returns
         -------
-        The corresponding local grid index (shape `(3,)`).
+        The corresponding local grid indices, with the same shape as global_position.
+        Raises ValueError if any of the positions is outside the local grid.
         """
         global_index = np.floor(global_position / self.cell_size).astype(int)
         return self.global_to_local_index_map(global_index)
