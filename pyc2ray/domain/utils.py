@@ -1,5 +1,6 @@
 import logging
 from collections.abc import Sequence
+from math import sqrt
 from pathlib import Path
 
 import numpy as np
@@ -32,8 +33,8 @@ def find_enclosing_sphere(
     if len(centers) == 1:
         return centers[0].copy(), float(radii[0])
 
-    # Compute the initial guess as the mean of the centers. If all spheres have the same radius,
-    # this is already the optimal solution. Otherwise, we will iteratively move towards the farthest sphere.
+    # Compute the initial guess for the enclosing sphere center as the mean of the centers and
+    # then iteratively move it towards the farthest sphere
     c = centers.mean(axis=0)
     tol2 = tol * tol
     n = centers.shape[0]
@@ -76,6 +77,64 @@ def find_enclosing_sphere(
         d += radii
         R = np.max(d)
     return c, float(R)
+
+
+def expand_enclosing_sphere(
+    center: np.ndarray,
+    radius: float,
+    sphere_center: np.ndarray,
+    sphere_radius: float,
+) -> tuple[np.ndarray, float]:
+    """Grow a sphere just enough to also enclose a second sphere.
+
+    The result always encloses both input spheres, but it is only an upper bound on the
+    minimum enclosing sphere, and it depends on the order in which spheres are merged.
+    This function should only be used as a fast approximation for preliminary group
+    cost evaluation while the final enclosing sphere is computed with find_enclosing_sphere.
+
+    The arithmetic is done on the unpacked coordinates, as numpy operations on 3-element
+    arrays are slower than the scalar ones, and this runs once per candidate source.
+
+    Parameters
+    ----------
+    center : Center of the sphere to grow.
+    radius : Radius of the sphere to grow.
+    sphere_center : Center of the sphere to enclose.
+    sphere_radius : Radius of the sphere to enclose.
+
+    Returns
+    -------
+    Center and radius of a sphere enclosing both input spheres. The center is always a
+    new array, never one of the inputs.
+    """
+    center_x, center_y, center_z = center
+    sphere_x, sphere_y, sphere_z = sphere_center
+    dx = sphere_x - center_x
+    dy = sphere_y - center_y
+    dz = sphere_z - center_z
+    distance_squared = dx * dx + dy * dy + dz * dz
+
+    # Concentric spheres: the larger one already encloses the smaller one.
+    # Negative values are not possible here
+    if distance_squared <= 0.0:
+        return np.array((center_x, center_y, center_z)), max(radius, sphere_radius)
+
+    distance = sqrt(distance_squared)
+
+    # One sphere already contains the other, so it is itself the enclosing sphere.
+    if distance + sphere_radius <= radius:
+        return np.array((center_x, center_y, center_z)), radius
+    if distance + radius <= sphere_radius:
+        return np.array((sphere_x, sphere_y, sphere_z)), sphere_radius
+
+    # Otherwise the enclosing sphere is the one whose diameter spans the two far points of
+    # the spheres along the line joining their centers.
+    new_radius = 0.5 * (radius + distance + sphere_radius)
+    shift = (new_radius - radius) / distance
+    return (
+        np.array((center_x + shift * dx, center_y + shift * dy, center_z + shift * dz)),
+        new_radius,
+    )
 
 
 def evaluate_sphere_intersection(
