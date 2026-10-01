@@ -1,6 +1,7 @@
 #pragma once
 
 #include "rates.cuh"
+#include "utils.cuh"
 
 #include <cuda/std/array>
 
@@ -43,7 +44,7 @@ namespace asora {
         double cross_section;
 
         /// Shared memory banks for column density interpolation
-        cuda::std::array<const double *__restrict__, 3> shared_cdens = {};
+        cuda::std::array<const double *__restrict__, num_banks> shared_cdens = {};
 
         /* @brief Prepare shared column density memory banks for cell interpolation
          *
@@ -55,7 +56,7 @@ namespace asora {
          * @see cell_interpolator::interpolate() for how these pointers are used in
          *      interpolation
          */
-        __device__ void partition_column_density(int q);
+        __device__ void partition_column_density(size_t bank_size);
     };
 
     /* @brief Read-only maps of number and fractional densities
