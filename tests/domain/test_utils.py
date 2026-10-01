@@ -7,6 +7,7 @@ import pytest
 
 from pyc2ray.domain.utils import (
     evaluate_sphere_intersection,
+    expand_enclosing_sphere,
     find_enclosing_sphere,
 )
 
@@ -151,3 +152,148 @@ def test_evaluate_sphere_intersection_handles_zero_radii_and_integer_centers() -
     center_b = center_a + np.array([2, 3, 6])
     assert evaluate_sphere_intersection(center_a, 3.0, center_b, 4.1)
     assert not evaluate_sphere_intersection(center_a, 3.0, center_b, 3.9)
+
+
+def assert_encloses(
+    center: np.ndarray | tuple[float, ...],
+    radius: float,
+    sphere_center: np.ndarray | tuple[float, ...],
+    sphere_radius: float,
+) -> None:
+    """Assert the sphere (center, radius) fully contains the second sphere."""
+    reach = float(np.linalg.norm(np.asarray(center) - np.asarray(sphere_center)))
+    assert reach + sphere_radius <= radius + 1e-10
+
+
+def expand(
+    sphere_to_grow: tuple[float, float, float, float],
+    sphere_to_enclose: tuple[float, float, float, float],
+) -> tuple[np.ndarray, float]:
+    """Call expand_enclosing_sphere on two (x, y, z, radius) spheres."""
+    return expand_enclosing_sphere(
+        np.array(sphere_to_grow[:3]),
+        sphere_to_grow[3],
+        np.array(sphere_to_enclose[:3]),
+        sphere_to_enclose[3],
+    )
+
+
+def test_expand_enclosing_sphere_keeps_the_larger_radius_when_concentric() -> None:
+    center, radius = expand((1.0, 2.0, 3.0, 0.5), (1.0, 2.0, 3.0, 2.0))
+
+    assert center.tolist() == [1.0, 2.0, 3.0]
+    assert radius == pytest.approx(2.0)
+
+
+@pytest.mark.parametrize(
+    "sphere_to_grow, sphere_to_enclose",
+    [
+        ((0.0, 0.0, 0.0, 10.0), (1.0, 0.0, 0.0, 2.0)),
+        ((1.0, 0.0, 0.0, 2.0), (0.0, 0.0, 0.0, 10.0)),
+    ],
+    ids=["enclosed-already-inside", "grown-inside-enclosed"],
+)
+def test_expand_enclosing_sphere_returns_the_containing_sphere(
+    sphere_to_grow: tuple[float, float, float, float],
+    sphere_to_enclose: tuple[float, float, float, float],
+) -> None:
+    center, radius = expand(sphere_to_grow, sphere_to_enclose)
+
+    assert center.tolist() == [0.0, 0.0, 0.0]
+    assert radius == pytest.approx(10.0)
+
+
+@pytest.mark.parametrize(
+    "sphere_to_grow, sphere_to_enclose, expected_center, expected_radius",
+    [
+        # Two disjoint unit spheres 4.0 apart along x: the result has to span from -1.0 to 5.0.
+        ((0.0, 0.0, 0.0, 1.0), (4.0, 0.0, 0.0, 1.0), (2.0, 0.0, 0.0), 3.0),
+        # The same, fully three-dimensional: the (2, 3, 6) offset is exactly 7.0 long, so
+        # the result spans 1 + 7 + 2 = 10 and its center sits 4/7 of the way along.
+        ((0.0, 0.0, 0.0, 1.0), (2.0, 3.0, 6.0, 2.0), (8 / 7, 12 / 7, 24 / 7), 5.0),
+    ],
+    ids=["along-x", "three-dimensional"],
+)
+def test_expand_enclosing_sphere_spans_both_when_neither_is_contained(
+    sphere_to_grow: tuple[float, float, float, float],
+    sphere_to_enclose: tuple[float, float, float, float],
+    expected_center: tuple[float, float, float],
+    expected_radius: float,
+) -> None:
+    center, radius = expand(sphere_to_grow, sphere_to_enclose)
+
+    assert center == pytest.approx(expected_center)
+    assert radius == pytest.approx(expected_radius)
+
+
+@pytest.mark.parametrize(
+    "sphere_to_grow, sphere_to_enclose",
+    [
+        ((0.0, 0.0, 0.0, 1.0), (4.0, 0.0, 0.0, 1.0)),
+        ((0.0, 0.0, 0.0, 1.0), (2.0, 3.0, 6.0, 2.0)),
+        ((1.0, 2.0, 3.0, 0.5), (1.0, 2.0, 3.0, 2.0)),
+        ((0.0, 0.0, 0.0, 10.0), (1.0, 0.0, 0.0, 2.0)),
+        ((1.0, 0.0, 0.0, 2.0), (0.0, 0.0, 0.0, 10.0)),
+        ((-3.0, 1.5, 0.25, 0.75), (2.5, -4.0, 3.0, 1.25)),
+        ((0.0, 0.0, 0.0, 2.0), (1.0, 1.0, 1.0, 1.5)),
+        ((0.0, 0.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.0)),
+    ],
+    ids=[
+        "disjoint",
+        "disjoint-3d",
+        "concentric",
+        "enclosed-already-inside",
+        "grown-inside-enclosed",
+        "disjoint-off-axis",
+        "overlapping",
+        "degenerate-points",
+    ],
+)
+def test_expand_enclosing_sphere_encloses_both_inputs(
+    sphere_to_grow: tuple[float, float, float, float],
+    sphere_to_enclose: tuple[float, float, float, float],
+) -> None:
+    """Every branch of the merge must cover both input spheres."""
+    center, radius = expand(sphere_to_grow, sphere_to_enclose)
+
+    assert_encloses(center, radius, sphere_to_grow[:3], sphere_to_grow[3])
+    assert_encloses(center, radius, sphere_to_enclose[:3], sphere_to_enclose[3])
+
+
+def test_expand_enclosing_sphere_is_an_upper_bound_on_the_minimum_sphere() -> None:
+    """Merging one sphere at a time may overshoot, but must never undershoot.
+
+    The incremental sphere encloses every input, so its radius is an upper bound on the
+    one of the minimum enclosing sphere. It is checked against a lower bound on that
+    radius rather than against :func:`find_enclosing_sphere`: the fit only approximates
+    the minimum sphere, and can come out larger than the incremental one. This is why a
+    closed group keeps the fit only when it is tighter.
+    """
+    centers = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [2.0, 3.0, 6.0],
+            [-1.5, 0.5, 2.0],
+            [4.0, -2.0, 1.0],
+            [0.25, 5.0, -3.0],
+            [-4.0, -4.0, -4.0],
+        ]
+    )
+    radii = np.full(len(centers), 0.3)
+
+    center, radius = centers[0], float(radii[0])
+    for sphere_center, sphere_radius in zip(centers[1:], radii[1:]):
+        center, radius = expand_enclosing_sphere(
+            center, radius, sphere_center, float(sphere_radius)
+        )
+
+    # Any sphere enclosing spheres i and j spans at least |x_i - x_j| + r_i + r_j, so its
+    # radius is at least half of that, and the minimum sphere is bounded by the worst pair.
+    pair_distances = np.linalg.norm(centers[:, None, :] - centers[None, :, :], axis=-1)
+    min_radius_lower_bound = 0.5 * np.max(
+        pair_distances + radii[:, None] + radii[None, :]
+    )
+
+    assert radius >= min_radius_lower_bound - 1e-10
+    for sphere_center in centers:
+        assert_encloses(center, radius, sphere_center, 0.3)

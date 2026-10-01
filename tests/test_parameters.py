@@ -5,6 +5,7 @@ from typing import ClassVar
 import pytest
 
 import pyc2ray.constants as c
+from pyc2ray.domain.morton_grouping import MAX_MORTON_BITS
 from pyc2ray.parameters import (
     AbundancesParameters,
     BlackBodyParameters,
@@ -102,7 +103,7 @@ class TestYmlParameters:
         obj = DomainDecompositionParameters.from_dict({})
 
         assert obj.enabled is False
-        assert obj.grouping_algorithm == "morton"
+        assert obj.grouping_algorithm == "morton_incremental"
         assert obj.max_num_sources_per_group == 1000
         assert obj.morton_bits == 10
         assert obj.max_memory_cost_per_group == 50.0e9
@@ -129,6 +130,17 @@ class TestYmlParameters:
     def test_domain_decomposition_rejects_non_positive_morton_bits(self):
         with pytest.raises(ValueError):
             DomainDecompositionParameters.from_dict({"morton_bits": -1})
+
+    def test_domain_decomposition_rejects_too_large_morton_bits(self):
+        with pytest.raises(ValueError):
+            DomainDecompositionParameters.from_dict(
+                {"morton_bits": MAX_MORTON_BITS + 1}
+            )
+
+    def test_domain_decomposition_accepts_max_morton_bits(self):
+        obj = DomainDecompositionParameters.from_dict({"morton_bits": MAX_MORTON_BITS})
+
+        assert obj.morton_bits == MAX_MORTON_BITS
 
     def test_domain_decomposition_rejects_non_positive_max_memory_cost_per_group(self):
         with pytest.raises(ValueError):
