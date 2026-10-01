@@ -83,12 +83,11 @@ PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) 
     double minlogtau;
     double dlogtau;
     size_t num_tau;
-    size_t grid_size;
     size_t block_size = 256;
 
     if (!PyArg_ParseTuple(
             args, "dddOkkddkk|k", &R, &sig, &dr, &phi_ion, &num_src, &m1, &minlogtau,
-            &dlogtau, &num_tau, &grid_size, &block_size
+            &dlogtau, &num_tau, &block_size
         ))
         return nullptr;
 
