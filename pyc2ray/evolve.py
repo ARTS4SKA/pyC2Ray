@@ -458,8 +458,8 @@ Domain decomposition is active
         temp_flat = np.ravel(temp).astype(np.float64, copy=False)
         clump_flat = np.ravel(clump).astype(np.float64, copy=False)
     else:
-        xh_av = np.empty(num_cells, dtype=np.float64)
-        xh_int = np.empty(num_cells, dtype=np.float64)
+        xh_av = np.empty(xh.size, dtype=np.float64)
+        xh_int = np.empty(xh.size, dtype=np.float64)
 
     # Initialize ionization rate array.
     phi_ion = np.zeros((N, N, N), dtype=np.float64)
