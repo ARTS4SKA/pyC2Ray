@@ -4,7 +4,8 @@
 #include "utils.cuh"
 
 #include <cuda_runtime.h>
-
+#include <thrust/execution_policy.h>
+#include <thrust/transform.h>
 #include <exception>
 
 namespace asora {
@@ -19,9 +20,9 @@ namespace asora {
         };
     }
 
-    __device__ double density_maps::get(size_t index) const {
-        return ndens[index] * (1.0 - xHII[index]);
-    }
+    struct neutral_density {
+        __device__ double operator()(double n, double x) const { return n * (1.0 - x); }
+    };
 
 }  // namespace asora
 
@@ -103,7 +104,7 @@ namespace {
         // Get local ionization fraction & neutral hydrogen density in the cell
         const auto index = ravel_index(i0 + di, j0 + dj, k0 + dk, m1);
         const auto q_off = cells_to_shell(q - 1);
-        auto nHI = densities.get(index);
+        const auto &nHI = densities.nHI[index];
 
         // Compute photoionization rates from column density.
         update_photo_rates(
@@ -126,9 +127,6 @@ namespace asora {
         // Size of grid data
         auto n_cells = m1 * m1 * m1;
 
-        // Allocate (if necessary) and copy the ionized fraction array to the device
-        device::ensure_transfer<double>(buffer_tag::fraction_HII, xh_av, n_cells);
-
         // Number density array is not modified, it is assumed that it is already on the
         // device
         if (!device::contains(buffer_tag::number_density))
@@ -136,10 +134,19 @@ namespace asora {
                 "Number density array must be allocated on the device before calling "
                 "do_all_sources_gpu"
             );
-        density_maps densities{
-            get_data_view<double>(buffer_tag::number_density),
-            get_data_view<double>(buffer_tag::fraction_HII)
-        };
+
+        // Allocate (if necessary) and copy the ionized fraction array to the device
+        device::ensure_transfer<double>(buffer_tag::fraction_HII, xh_av, n_cells);
+
+        // Transform fraction in place to get number density.
+        auto ndens_d = get_data_view<double>(buffer_tag::number_density);
+        auto xHII_d = get_data_view<double>(buffer_tag::fraction_HII);
+        thrust::transform(
+            thrust::device, ndens_d, ndens_d + n_cells, xHII_d, xHII_d,
+            neutral_density{}
+        );
+
+        density_maps densities{xHII_d};
 
         // Allocate (if necessary) and zero the output array for the photoionization
         // rate
@@ -188,9 +195,8 @@ namespace asora {
                 m1, dr, R, q_max, ns, num_src, src_pos_d, src_flux_d, data_HI,
                 densities, ion_tables, logtau
             );
-
-            safe_cuda(cudaPeekAtLastError());
         }
+        safe_cuda(cudaGetLastError());
 
         // Copy the accumulated ionization fraction back to the host.
         // Memcpy blocks until last kernel has finished.
@@ -236,7 +242,7 @@ namespace asora {
         // some simplifications.
         if (threadIdx.x == 0) {
             const auto index = ravel_index(i0, j0, k0, m1);
-            auto nHI = densities.get(index);
+            const auto &nHI = densities.nHI[index];
             update_photo_rates(
                 data_HI, 0, index, 0.0, nHI, 0.5 * dr, strength, dr * dr * dr,
                 ion_tables, logtau
