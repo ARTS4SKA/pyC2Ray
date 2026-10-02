@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cuda_runtime.h>
-#include <array>
 #include <cassert>
 #include <cstdint>
 #include <vector>
@@ -41,7 +40,6 @@ namespace asora {
         int3 pos;
 
         /// Geometric factors.
-        float multiplier;
         float dx;
         float dy;
         float path;
@@ -72,7 +70,6 @@ namespace asora {
     /// Structure of arrays for a short-characteristic interpolation LUT on device.
     struct shortchar_lut {
         uint32_t *__restrict__ offsets = nullptr;
-        float *__restrict__ multipliers = nullptr;
         float *__restrict__ dxs = nullptr;
         float *__restrict__ dys = nullptr;
         float *__restrict__ paths = nullptr;
@@ -84,16 +81,11 @@ namespace asora {
         shortchar_lut &operator=(const shortchar_lut &) = default;
 
         __device__ bool is_set() const {
-            return offsets && multipliers && dxs && dys && paths && indices;
+            return offsets && dxs && dys && paths && indices;
         }
 
         __device__ shortchar_info operator[](size_t i) const {
-            return {unpack_offset(offsets[i]),
-                    multipliers[i],
-                    dxs[i],
-                    dys[i],
-                    paths[i],
-                    indices[i]};
+            return {unpack_offset(offsets[i]), dxs[i], dys[i], paths[i], indices[i]};
         }
     };
 
@@ -117,6 +109,15 @@ namespace asora {
      */
     shortchar_entries copy_shortchar_lut_to_host();
 
+    __device__ inline float shortchar_multiplier(int di, int dj, int dk) {
+        auto ai = std::abs(di);
+        auto aj = std::abs(dj);
+        auto ak = std::abs(dk);
+        if (ai <= 1 && aj <= 1 && ak <= 1)
+            return std::sqrt(static_cast<float>(ai + aj + ak));
+        return 1.f;
+    }
+
     /* @brief Perform short-characteristic interpolation for a given cell.
      *
      * @param info Short-characteristic interpolation information for the cell.
@@ -126,7 +127,7 @@ namespace asora {
      */
     __device__ double shortchar_interpolation(
         const shortchar_info &__restrict__ info, const double *__restrict__ column_dens,
-        double cross_section
+        double cross_section, float multiplier = 1.f
     );
 
 }  // namespace asora
