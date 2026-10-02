@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cuda_runtime.h>
-#include <cuda/std/array>
 
 #include <concepts>
 #include <source_location>

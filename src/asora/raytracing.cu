@@ -73,8 +73,9 @@ namespace {
         auto dist2 = di * di + dj * dj + dk * dk;
         if (dist2 > static_cast<int>(R_max * R_max)) return;
 
+        auto multiplier = shortchar_multiplier(di, dj, dk);
         auto coldens_in = shortchar_interpolation(
-            info, data_HI.column_density, data_HI.cross_section
+            info, data_HI.column_density, data_HI.cross_section, multiplier
         );
 
         constexpr double max_coldens = 2e30;

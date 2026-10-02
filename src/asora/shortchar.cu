@@ -114,7 +114,7 @@ namespace asora {
 
     __device__ shortchar_info make_shortchar_interpolation_info(const int3& pos) {
         if (pos.x == 0 && pos.y == 0 && pos.z == 0)
-            return {pos, 1.f, 0.f, 0.f, 0.5f, {0, 0, 0, 0}};
+            return {pos, 0.f, 0.f, 0.5f, {0, 0, 0, 0}};
 
         auto&& [di, dj, dk] = pos;
 
@@ -123,10 +123,6 @@ namespace asora {
         auto ak = std::abs(dk);
 
         assert(ai + aj + ak > 0);
-
-        float multiplier = 1.f;
-        if (ai <= 1 && aj <= 1 && ak <= 1)
-            multiplier = sqrt(static_cast<float>(ai + ak + aj));
 
         // Compute geometric factors and interpolation indices using inverse_lut.
         int si = (di > 0) - (di < 0);
@@ -175,7 +171,7 @@ namespace asora {
             sx += 3;
         }
 
-        return {pos, multiplier, dd.x, dd.y, dd.z, std::move(indices)};
+        return {pos, dd.x, dd.y, dd.z, std::move(indices)};
     }
 
     shortchar_lut::shortchar_lut(std::in_place_t) {
@@ -183,7 +179,6 @@ namespace asora {
         if (!device::contains(buffer_tag::raylut_offsets)) return;
 
         offsets = device::get(buffer_tag::raylut_offsets).data<uint32_t>();
-        multipliers = device::get(buffer_tag::raylut_multipliers).data<float>();
         dxs = device::get(buffer_tag::raylut_dx).data<float>();
         dys = device::get(buffer_tag::raylut_dy).data<float>();
         paths = device::get(buffer_tag::raylut_path).data<float>();
@@ -198,7 +193,6 @@ namespace asora {
                 auto index = cells_to_shell(q - 1) + s;
                 auto info = make_shortchar_interpolation_info(shell2cart(q, s));
                 sclut.offsets[index] = pack_offset(info.pos);
-                sclut.multipliers[index] = info.multiplier;
                 sclut.dxs[index] = info.dx;
                 sclut.dys[index] = info.dy;
                 sclut.paths[index] = info.path;
@@ -226,7 +220,6 @@ namespace asora {
 
         // Allocate lut memory on device
         device::ensure<uint32_t>(buffer_tag::raylut_offsets, n_cells);
-        device::ensure<float>(buffer_tag::raylut_multipliers, n_cells);
         device::ensure<float>(buffer_tag::raylut_dx, n_cells);
         device::ensure<float>(buffer_tag::raylut_dy, n_cells);
         device::ensure<float>(buffer_tag::raylut_path, n_cells);
@@ -255,7 +248,6 @@ namespace asora {
         }
 
         auto offsets = device::get(buffer_tag::raylut_offsets);
-        auto multipliers = device::get(buffer_tag::raylut_multipliers);
         auto dxs = device::get(buffer_tag::raylut_dx);
         auto dys = device::get(buffer_tag::raylut_dy);
         auto paths = device::get(buffer_tag::raylut_path);
@@ -264,14 +256,12 @@ namespace asora {
         auto n_cells = offsets.size<uint32_t>();
 
         std::vector<uint32_t> offsets_h(n_cells);
-        std::vector<float> multipliers_h(n_cells);
         std::vector<float> dxs_h(n_cells);
         std::vector<float> dys_h(n_cells);
         std::vector<float> paths_h(n_cells);
         std::vector<index4> indices_h(n_cells);
 
         offsets.copyToHost(offsets_h.data(), sizeof(uint32_t) * n_cells);
-        multipliers.copyToHost(multipliers_h.data(), sizeof(float) * n_cells);
         dxs.copyToHost(dxs_h.data(), sizeof(float) * n_cells);
         dys.copyToHost(dys_h.data(), sizeof(float) * n_cells);
         paths.copyToHost(paths_h.data(), sizeof(float) * n_cells);
@@ -281,10 +271,7 @@ namespace asora {
         lut.reserve(n_cells);
         for (size_t i = 0; i < n_cells; ++i) {
             auto&& [di, dj, dk] = unpack_offset(offsets_h[i]);
-            lut.push_back(
-                {di, dj, dk, multipliers_h[i], dxs_h[i], dys_h[i], paths_h[i],
-                 indices_h[i]}
-            );
+            lut.push_back({di, dj, dk, dxs_h[i], dys_h[i], paths_h[i], indices_h[i]});
         }
 
         return lut;
@@ -292,7 +279,7 @@ namespace asora {
 
     __device__ double shortchar_interpolation(
         const shortchar_info& __restrict__ info, const double* __restrict__ column_dens,
-        double cross_section
+        double cross_section, float multiplier
     ) {
         // Reference optical depth from C2-Ray interpolation function.
         constexpr float tau_0 = 0.6f;
@@ -310,7 +297,7 @@ namespace asora {
             wtot += w;
         }
 
-        return cdens / wtot * info.multiplier;
+        return cdens / wtot * multiplier;
     }
 
 }  // namespace asora
