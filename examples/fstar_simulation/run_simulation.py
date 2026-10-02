@@ -40,8 +40,8 @@ def run_simulation(paramfile: PathType, num_steps_between_slices: int = 2) -> No
 
     # Check for resume simulation
     if sim.resume:
-        i_start = (zred_array > sim.zred).nonzero()[0][-1]
-        sim.resume = i_start + 1
+        # Start from the checkpoint matching the last written output
+        i_start = int(np.argmin(np.abs(zred_array - sim.zred)))
     else:
         i_start = 0
 
