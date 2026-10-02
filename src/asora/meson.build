@@ -37,12 +37,14 @@ compute_cap = '-arch=sm_' + compute_cap
 nvcc_flags = [
     compute_cap,
     '-rdc=true',
-    '-DPERIODIC',
-    '-DLOCALRATES',
     '-use_fast_math',
     '--generate-line-info',
 ]
 nvlink_flags = [compute_cap]
+
+if get_option('periodic')
+    nvcc_flags += ['-DPERIODIC']
+endif
 
 if get_option('buildtype') in ['release', 'minsize']
     nvcc_flags += ['-dlto']
