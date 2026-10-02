@@ -1,17 +1,14 @@
 #pragma once
 
 #include <cuda_runtime.h>
-#include <cuda/std/array>
 
-#include <algorithm>
+#include <cassert>
 #include <cmath>
-#include <ranges>
 
 /* @file octahedron.cuh
  * @brief Octahedral coordinate system transformations for ASORA GPU raytracing
  *
  * Provides:
- * - Maximum q-shell index constant for LUTs
  * - Functions to compute number of cells in octahedral shells
  * - Functions to convert between octahedral (q,s) and Cartesian (i,j,k) coordinates
  */
