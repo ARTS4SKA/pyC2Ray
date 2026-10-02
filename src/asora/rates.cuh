@@ -112,7 +112,8 @@ namespace asora {
         auto residual = modf(interp, &integral);
 
         // Determine the table index for linear interpolation.
-        auto idx = static_cast<size_t>(integral);
+        // FIXME: Remove idx == 1
+        size_t idx = integral;
         return {residual, idx, idx == 1 || idx == logscale.num()};
     }
 

@@ -279,7 +279,7 @@ namespace asora {
 
     __device__ double shortchar_interpolation(
         const shortchar_info& __restrict__ info, const double* __restrict__ column_dens,
-        double cross_section, float multiplier
+        double cross_section
     ) {
         // Reference optical depth from C2-Ray interpolation function.
         constexpr float tau_0 = 0.6f;
@@ -297,7 +297,7 @@ namespace asora {
             wtot += w;
         }
 
-        return cdens / wtot * multiplier;
+        return cdens / wtot;
     }
 
 }  // namespace asora
