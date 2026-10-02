@@ -174,6 +174,8 @@ class TestOctahedron:
 
 
 class TestModuleInterface:
+    assert libasora is not None
+
     def test_device_init(self, init_device):
         libasora.is_device_init()
 
@@ -190,7 +192,6 @@ class TestModuleInterface:
             dens = np.full(mesh_size**3, 0.5, dtype=np.float64)
             return dens
 
-        assert libasora is not None
         libasora.density_to_device(create_density_data(16))
         libasora.density_to_device(create_density_data(64))
         libasora.density_to_device(create_density_data(32))
@@ -211,7 +212,6 @@ class TestModuleInterface:
             thick = np.linspace(-20, 4, num_tau + 1, dtype=np.float64)
             return thin, thick
 
-        assert libasora is not None
         libasora.photo_table_to_device(*create_photo_table_data(80))
         libasora.photo_table_to_device(*create_photo_table_data(100))
         libasora.photo_table_to_device(*create_photo_table_data(90))
@@ -232,7 +232,6 @@ class TestModuleInterface:
             norm_flux = np.ones(num_sources, dtype=np.float64)
             return src_pos, norm_flux
 
-        assert libasora is not None
         libasora.source_data_to_device(*create_source_data(50))
         libasora.source_data_to_device(*create_source_data(100))
         libasora.source_data_to_device(*create_source_data(80))
@@ -264,3 +263,38 @@ class TestModuleInterface:
         # Keep integration-level sanity check with a matching density upload.
         dens = np.full(20**3, 0.5, dtype=np.float64)
         libasora.density_to_device(dens)
+
+    def test_is_periodic_mode_active(self):
+        assert isinstance(libasora.is_periodic_mode_active(), bool)
+
+    @pytest.mark.skipif(
+        not libasora.is_periodic_mode_active(),
+        reason="libasora not compiled with periodic boundary conditions",
+    )
+    @pytest.mark.parametrize("N", [10, 11], ids=["even", "odd"])
+    def test_in_domain_periodic(self, N: int):
+        # Unused in periodic mode
+        pos = 0, 0, 0
+
+        N = 10
+        q = N // 2 + 2
+        low_lim = -(N // 2)
+        up_lim = N // 2 + N % 1 - 1
+
+        assert libasora is not None
+        for off in itertools.product(range(-q, q + 1), repeat=3):
+            assert libasora.in_domain(pos, off, N) == all(
+                low_lim <= x <= up_lim for x in off
+            )
+
+    @pytest.mark.skipif(
+        libasora.is_periodic_mode_active(),
+        reason="libasora compiled with periodic boundary conditions",
+    )
+    def test_in_domain_non_periodic(self):
+        N = 10
+        for pos in itertools.product(range(N // 2, N), repeat=3):
+            for off in itertools.product(range(-3, 4), repeat=3):
+                assert libasora.in_domain(pos, off, N) == all(
+                    0 <= x + y < N for x, y in zip(pos, off)
+                )
