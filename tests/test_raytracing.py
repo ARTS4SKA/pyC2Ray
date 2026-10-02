@@ -78,6 +78,10 @@ def setup_do_all_sources(
     )
 
 
+@pytest.mark.skipif(
+    not libasora.is_periodic_mode_active(),
+    reason="libasora not compiled with periodic boundary conditions",
+)
 def test_do_all_sources(data_dir, init_device):
     with setup_do_all_sources() as args:
         libasora.do_all_sources(*args)

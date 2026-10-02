@@ -264,3 +264,40 @@ class TestModuleInterface:
         # Keep integration-level sanity check with a matching density upload.
         dens = np.full(20**3, 0.5, dtype=np.float64)
         libasora.density_to_device(dens)
+
+    def test_is_periodic_mode_active(self):
+        assert isinstance(libasora.is_periodic_mode_active(), bool)
+
+    @pytest.mark.skipif(
+        not libasora.is_periodic_mode_active(),
+        reason="libasora not compiled with periodic boundary conditions",
+    )
+    def test_in_domain_periodic(self):
+        assert libasora is not None
+        # Unused in periodic mode
+        pos = 0, 0, 0
+
+        N = 10
+        q = N // 2 + 2
+        low_lim = -(N // 2)
+        up_lim = N // 2 + N % 1 - 1
+
+        for off in itertools.product(range(-q, q + 1), repeat=3):
+            assert libasora.in_domain(pos, off, N) == all(
+                low_lim <= x <= up_lim for x in off
+            )
+
+    @pytest.mark.skipif(
+        libasora.is_periodic_mode_active(),
+        reason="libasora compiled with periodic boundary conditions",
+    )
+    def test_in_domain_non_periodic(self):
+        assert libasora is not None
+
+        N = 10
+        for pos in itertools.product(range(N // 2, N), repeat=3):
+            for off in itertools.product(range(-3, 4), repeat=3):
+                print(pos, off)
+                assert libasora.in_domain(pos, off, N) == all(
+                    0 <= x + y < N for x, y in zip(pos, off)
+                )

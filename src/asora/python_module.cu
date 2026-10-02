@@ -275,17 +275,27 @@ PyObject *asora_is_device_init([[maybe_unused]] PyObject *self, PyObject *args) 
     return Py_NewRef(asora::device::is_initialized() ? Py_True : Py_False);
 }
 
+PyObject *asora_in_domain([[maybe_unused]] PyObject *self, PyObject *args) {
+    int3 pos, off;
+    size_t N;
+    if (!PyArg_ParseTuple(
+            args, "(iii)(iii)k", &pos.x, &pos.y, &pos.z, &off.x, &off.y, &off.z, &N
+        ))
+        return nullptr;
+
+    return Py_NewRef(asora::in_domain(pos, off, N) ? Py_True : Py_False);
+}
+
 /// Expose whether the extension was compiled with periodic boundary mode.
 PyObject *asora_is_periodic_mode_active(
     [[maybe_unused]] PyObject *self, [[maybe_unused]] PyObject *args
 ) {
     if (!PyArg_ParseTuple(args, "")) return nullptr;
 
-#if defined(PERIODIC)
-    Py_RETURN_TRUE;
-#else
-    Py_RETURN_FALSE;
-#endif
+    if constexpr (asora::periodic_conditions)
+        Py_RETURN_TRUE;
+    else
+        Py_RETURN_FALSE;
 }
 
 /// Allocate and copy density grid to the device.
@@ -464,6 +474,8 @@ static PyMethodDef asoraMethods[] = {
     {"device_close", asora_device_close, METH_VARARGS, "Close device and free memory"},
     {"is_device_init", asora_is_device_init, METH_VARARGS,
      "Check if the device is initialized"},
+    {"in_domain", asora_in_domain, METH_VARARGS,
+     "Check if a cell offset from a source is within the domain"},
     {"is_periodic_mode_active", asora_is_periodic_mode_active, METH_VARARGS,
      "Check if libasora was compiled with PERIODIC"},
     {"density_to_device", asora_density_to_device, METH_VARARGS,

@@ -127,7 +127,7 @@ namespace asora {
      */
     __device__ double shortchar_interpolation(
         const shortchar_info &__restrict__ info, const double *__restrict__ column_dens,
-        double cross_section, float multiplier = 1.f
+        double cross_section
     );
 
 }  // namespace asora
