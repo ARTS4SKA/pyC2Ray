@@ -1,10 +1,20 @@
 #pragma once
 
 #include "rates.cuh"
+#include "resident_tag.h"
 
+#include <cuda_runtime.h>
 #include <cuda/std/array>
 
 namespace asora {
+    namespace resident_tag {
+
+        struct photo_ion_thin : base<double> {};   ///< Optically thin photoion. table
+        struct photo_ion_thick : base<double> {};  ///< Optically thick photoion. table
+        struct source_flux : base<double> {};      ///< Source flux array
+        struct source_position : base<int> {};     ///< Source position array
+
+    }  // namespace resident_tag
 
     /* @brief Raytrace all sources and compute photoionization rates
      *
@@ -14,20 +24,23 @@ namespace asora {
      * @param R Maximum propagation radius for photons from the source
      * @param sig Ionization cross section
      * @param dr Co-moving dimension of one grid cell
-     * @param xh_av Array of average neutral hydrogen fractions
      * @param phi_ion Output array for computed photoionization rates
      * @param num_src Number of radiation sources
      * @param m1 Grid dimension size for a cubic domain (total grid points = m1^3)
      * @param minlogtau Minimum log10(optical depth)
      * @param dlogtau Step size in log10(optical depth)
      * @param num_tau Number of optical depth bins
-     * @param grid_size GPU grid size for kernel launch
      * @param block_size GPU block size for kernel launch (default: 256)
+     *
+     * @note The number of blocks is not a parameter: it is resolved from the
+     * device occupancy of the kernel, the memory the per-block column density
+     * buffers need, and the number of sources. Every block then works through the
+     * source list in strides, so a block that finishes early picks up the next
+     * source instead of waiting for the rest of the grid.
      */
     void do_all_sources_gpu(
-        double R, double sig, double dr, const double *xh_av, double *phi_ion,
-        size_t num_src, size_t m1, double minlogtau, double dlogtau, size_t num_tau,
-        size_t grid_size, size_t block_size = 256
+        double R, double sig, double dr, double *phi_ion, size_t num_src, size_t m1,
+        double minlogtau, double dlogtau, size_t num_tau, size_t block_size = 256
     );
 
     /* @brief Data structure for chemical element properties used in raytracing
@@ -77,11 +90,14 @@ namespace asora {
      * from all sources through the computational domain and computing photoionization
      * rates based on optical depth and cross sections.
      *
+     * The grid is persistent: each block owns one column density buffer for the
+     * whole launch and walks the source list in strides of gridDim.x, so the grid
+     * is sized to the device rather than to the source count.
+     *
      * @param m1 Grid dimension size
      * @param dr Co-moving dimension of a grid pixel
      * @param R_max Maximum propagation radius for photons from the source
      * @param q_max Maximum octahedral q-shell for raytracing
-     * @param ns_start Starting source index for this kernel invocation
      * @param num_src Number of sources to process
      * @param src_pos Array of source positions (integer grid coordinates)
      * @param src_flux Array of source luminosities/flux values
@@ -91,9 +107,9 @@ namespace asora {
      * @param logtau Logarithmically-spaced optical depth grid
      */
     __global__ void evolve0D_gpu(
-        size_t m1, double dr, double R_max, int q_max, size_t ns_start, size_t num_src,
-        int *src_pos, double *src_flux, element_data data_HI, density_maps densities,
-        photo_tables ion_tables, linspace<double> logtau
+        size_t m1, double dr, double R_max, int q_max, size_t num_src,
+        const int *src_pos, const double *src_flux, element_data data_HI,
+        density_maps densities, photo_tables ion_tables, linspace<double> logtau
     );
 
 }  // namespace asora
