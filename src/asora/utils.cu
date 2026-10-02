@@ -1,8 +1,8 @@
 #include "utils.cuh"
 
-#include <exception>
 #include <format>
 #include <iostream>
+#include <stdexcept>
 
 namespace asora {
 
