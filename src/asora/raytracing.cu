@@ -58,26 +58,21 @@ namespace {
         const shortchar_info &info, int q, int s, const int3 &pos, double scale,
         element_data &data_HI, double dr, double R_max, size_t bank_size,
         const density_maps &densities, size_t m1, const photo_tables<> &ion_tables,
-        const linspace<double> &logtau, const int2 &limit
+        const linspace<double> &logtau
     ) {
+        // Check if the cell is within the simulated box.
+        if (!in_domain(pos, info.pos, m1)) return;
+
         const auto &[di, dj, dk] = info.pos;
 
-        if ((di < limit.x) || (di > limit.y) || (dj < limit.x) || (dj > limit.y) ||
-            (dk < limit.x) || (dk > limit.y))
-            return;
-
-#if !defined(PERIODIC)
-        // When not in periodic mode, only treat cell if its in the grid
-        if (!in_box(pos.x + di, pos.y + dj, pos.z + dk, m1)) return;
-#endif
         // Using integers for threshold check as it is more consistent.
         auto dist2 = di * di + dj * dj + dk * dk;
         if (dist2 > static_cast<int>(R_max * R_max)) return;
 
-        auto multiplier = shortchar_multiplier(di, dj, dk);
         auto coldens_in = shortchar_interpolation(
-            info, data_HI.column_density, data_HI.cross_section, multiplier
+            info, data_HI.column_density, data_HI.cross_section
         );
+        coldens_in *= shortchar_multiplier(di, dj, dk);
 
         constexpr double max_coldens = 2e30;
         if (coldens_in > max_coldens) return;
@@ -142,7 +137,7 @@ namespace asora {
         // radius. The radius equals the distance from the source to the middle of the
         // faces of the octahedron. To raytrace the whole volume, the octahedron must
         // be 1.5*N in size. Allocate (if necessary) the column density array.
-        int q_max = std::ceil(c::sqrt3<> * std::min(R, c::sqrt3<> * m1 / 2.0));
+        int q_max = std::ceil(std::min(c::sqrt3<> * R, m1 * 1.5));
         auto bank_size = cells_in_shell(q_max);
 
         device::ensure<double>(
@@ -245,9 +240,6 @@ namespace asora {
         }
         __syncthreads();
 
-        int ll = -m1 / 2;
-        int lr = m1 % 2 - 1 - ll;
-
         // Cell-independent part of the photon volume 4*pi * dist2 * path * dr^2.
         scale /= 4 * c::pi<>;
 
@@ -263,7 +255,7 @@ namespace asora {
                                 : make_shortchar_interpolation_info(shell2cart(q, s));
                 raytrace(
                     info, q, s, {i0, j0, k0}, scale, data_HI, dr, R_max, bank_size,
-                    densities, m1, ion_tables, logtau, {ll, lr}
+                    densities, m1, ion_tables, logtau,
                 );
 
                 s += blockDim.x;

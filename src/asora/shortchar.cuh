@@ -7,6 +7,8 @@
 
 namespace asora {
 
+    constexpr size_t num_banks = 4;
+
     /* @brief Pack the integer coordinates (di, dj, dk) of a cell in the q-shell into a
      * single 32bit value.
      *
@@ -127,7 +129,7 @@ namespace asora {
      */
     __device__ double shortchar_interpolation(
         const shortchar_info &__restrict__ info, const double *__restrict__ column_dens,
-        double cross_section, float multiplier = 1.f
+        double cross_section
     );
 
 }  // namespace asora
