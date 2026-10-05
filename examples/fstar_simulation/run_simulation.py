@@ -1,60 +1,64 @@
-"""
-Example for pyc2ray: Cosmological simulation from N-body
-"""
-
+import argparse
 import logging
 import os
 import shutil
 import sys
-import time
+from itertools import pairwise
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 
 import pyc2ray as pc2r
+from pyc2ray.utils.other_utils import find_redshit_index
 
 PathType = str | os.PathLike
 
 logger = logging.getLogger("pyc2ray")
 
 
-def run_simulation(paramfile: PathType, num_steps_between_slices: int = 2) -> None:
+def main(
+    parameters: PathType,
+    sub_time_steps: int = 2,
+    z_start: float | None = None,
+    z_end: float | None = None,
+) -> int:
     """
     Parameter
     ----------
-    paramfile :
+    parameters :
         Name of a YAML file containing parameters for the C2Ray simulation
-    num_steps_between_slices :
+    sub_time_steps :
         Number of timesteps between redshift slices (default: 2)
     """
     # Create C2Ray object
-    sim = pc2r.C2Ray_fstar(paramfile=paramfile)
+    sim = pc2r.C2Ray_fstar(paramfile=parameters)
 
     # Copy parameter file into the output directory
     if sim.rank == 0:
-        shutil.copy(paramfile, sim.results_basename)
+        shutil.copy(parameters, sim.results_basename)
 
-    # Get redshift list (test case)
-    idx_zred, zred_array = np.loadtxt(
+    # Get list of redshift slices to simulate
+    zred_idx, zred_array = np.loadtxt(
         sim.inputs_basename / "redshift_checkpoints.txt", unpack=True
     )
 
-    # Check for resume simulation
-    if sim.resume:
-        # Start from the checkpoint matching the last written output
-        i_start = int(np.argmin(np.abs(zred_array - sim.zred)))
-    else:
-        i_start = 0
+    start_idx = 0
+    if sim.resume or z_start is not None:
+        z_start = min(sim.zred, z_start) if z_start is not None else sim.zred
+        start_idx = find_redshit_index(zred_array, z_start)
+
+    end_idx = len(zred_array)
+    if z_end is not None:
+        end_idx = find_redshit_index(zred_array, z_end)
 
     # Measure time
     timer = pc2r.Timer()
     timer.start()
 
     # Loop over redshifts
-    for k in range(i_start, len(zred_array) - 1):
-        iz = int(idx_zred[k])  # Index redshift
-        zi = zred_array[k]  # Start redshift
-        zf = zred_array[k + 1]  # End redshift
-
+    for k, (zi, zf) in enumerate(pairwise(zred_array[start_idx:end_idx]), start_idx):
+        iz = int(zred_idx[k])
         logger.info(
             "\n=================================\n"
             f"Doing redshift {zi:.3f} to {zf:.3f}"
@@ -62,7 +66,7 @@ def run_simulation(paramfile: PathType, num_steps_between_slices: int = 2) -> No
         )
 
         # Compute timestep of current redshift slice
-        dt = sim.set_timestep(zi, zf, num_steps_between_slices)
+        dt = sim.set_timestep(zi, zf, sub_time_steps)
 
         # Read input files
         # FIXME: This should come from parameter file
@@ -75,14 +79,14 @@ def run_simulation(paramfile: PathType, num_steps_between_slices: int = 2) -> No
         )
 
         # Save previous time-step output (or initial state)
-        if sim.rank == 0 and k != i_start:
+        if sim.rank == 0 and k != start_idx:
             sim.write_output(z=zi, ext=".npy")
 
         # Set redshift to current slice redshift
         sim.zred = zi
 
         # Loop over timesteps
-        for t in range(num_steps_between_slices):
+        for t in range(sub_time_steps):
             # Get cosmological time of the intermediate time-steps
             t_age = sim.cosmology.age(zi).cgs.value + t * dt
 
@@ -111,7 +115,27 @@ def run_simulation(paramfile: PathType, num_steps_between_slices: int = 2) -> No
     timer.stop()
     logger.info(timer.summary)
 
+    return 0
+
+
+def parse_args() -> dict[str, Any]:
+    parser = argparse.ArgumentParser(
+        description="Run an F* pyC2Ray simulation",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("parameters", type=Path, help="Path to parameter file")
+    parser.add_argument(
+        "-t",
+        "--sub-time-steps",
+        type=int,
+        default=2,
+        help="Number of time steps between redshift slices",
+    )
+    parser.add_argument("--z-start", type=float, help="Starting redshift (optional)")
+    parser.add_argument("--z-end", type=float, help="Ending redshift (optional)")
+
+    return vars(parser.parse_args())
+
 
 if __name__ == "__main__":
-    paramfile = sys.argv[1]
-    sys.exit(run_simulation(paramfile))
+    sys.exit(main(**parse_args()))

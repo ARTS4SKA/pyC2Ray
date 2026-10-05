@@ -1,0 +1,63 @@
+include:
+  - remote: 'https://gitlab.com/cscs-ci/recipes/-/raw/master/templates/v2/.ci-ext.yml'
+
+stages:
+  - setup
+  - run
+  - check
+  - cleanup
+
+.common:
+  extends: .uenv-runner-daint-gh200
+  image: prgenv-gnu/26.3:v1
+  variables:
+    WITH_UENV_VIEW: default
+  before_script:
+    # Set up a scratch directory that persists throught the pipeline
+    - export PYC2RAY_CI="$SCRATCH/$CI_PIPELINE_ID"
+
+setup:
+  # Set up the environemnt, install pyC2Ray and copy the parameters file to the scratch directory
+  extends: .common
+  stage: setup
+  script:
+    - python -m venv $PYC2RAY_CI/env
+    - source $PYC2RAY_CI/env/bin/activate
+    - MPICC=mpicc python -m pip install --no-binary=mpi4py --no-cache-dir mpi4py .
+    - cp ci/fstar-parameters.yml $PYC2RAY_CI/parameters.yml
+    - |
+      sed -i "s|results_basename: .*|results_basename: $PYC2RAY_CI/results|g" $PYC2RAY_CI/parameters.yml
+    - deactivate
+
+run fstar:
+  # Run the fstar simulation in parallel, up to redsfhit 6.0
+  extends: .common
+  stage: run
+  variables:
+    SLURM_JOB_NUM_NODES: 8
+    SLURM_NTASKS_PER_NODE: 4
+    SLURM_GPUS_PER_TASK: 1
+    SLURM_TIMELIMIT: '02:00:00'
+  script:
+    - source $PYC2RAY_CI/env/bin/activate
+    - python examples/fstar_simulation/run_simulation.py $PYC2RAY_CI/parameters.yml --z-end 6.0
+    - deactivate
+
+check:
+  # Verify the output of the simulation
+  extends: .common
+  stage: check
+  script:
+    - source $PYC2RAY_CI/env/bin/activate
+    - echo "Check the output is sound"
+    - python ci/check-fstar-output.py $PYC2RAY_CI/results --z_-end 6.0
+    - deactivate
+
+cleanup:
+  # Clean up the scratch directory
+  extends: .common
+  stage: cleanup
+  script:
+    - echo "Cleaning up"
+    - rm -rf $PYC2RAY_CI
+  when: always
