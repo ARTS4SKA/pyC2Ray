@@ -10,15 +10,14 @@ import pyc2ray.constants as c
 from pyc2ray.c2ray_base import C2Ray
 from pyc2ray.source_model import BurstySFR, EscapeFraction, StellarToHaloRelation
 from pyc2ray.utils import bin_sources
-from pyc2ray.utils.other_utils import find_bins, get_redshifts_from_output
 from pyc2ray.utils.sourceutils import FloatArray, IntArray, PathType
 
 __all__ = ["C2Ray_fstar"]
 logger = logging.getLogger(__name__)
 
 # ======================================================================
-# This file contains the C2Ray_CubeP3M subclass of C2Ray, which is a
-# version used for simulations that read in N-Body data from CubeP3M
+# This file contains the C2Ray_fstar subclass of C2Ray, which is a
+# version used for simulations that read in N-Body data from F-star
 # ======================================================================
 
 
@@ -28,13 +27,7 @@ class C2Ray_fstar(C2Ray):
 
         Parameters
         ----------
-        paramfile : str
-            Name of a YAML file containing parameters for the C2Ray simulation
-        Nmesh : int
-            Mesh size (number of cells in each dimension)
-        use_gpu : bool
-            Whether to use the GPU-accelerated ASORA library for raytracing
-
+        paramfile : Name of a YAML file containing parameters for the C2Ray simulation
         """
         super().__init__(paramfile)
         logger.info('Running: "C2Ray for %d Mpc/h volume"', self.boxsize)
@@ -299,70 +292,6 @@ class C2Ray_fstar(C2Ray):
     # =====================================================================================================
     # Below are the overridden initialization routines specific to the f_star case
     # =====================================================================================================
-
-    def _redshift_init(self):
-        """Initialize time and redshift counter"""
-        # FIXME: HARDCODED FILE NAMES
-        self.zred_density = np.loadtxt(
-            self.density_basename / "redshift_density.txt", usecols=1
-        )
-        self.zred_sources = np.loadtxt(
-            self.sources_basename / "redshift_sources.txt", usecols=1
-        )
-        if self.resume:
-            # get the resuming redshift
-            self.zred = np.min(get_redshifts_from_output(self.results_basename))
-            _, self.prev_zdens = find_bins(self.zred, self.zred_density)
-            _, self.prev_zsourc = find_bins(self.zred, self.zred_sources)
-        else:
-            self.prev_zdens = -1
-            self.prev_zsourc = -1
-            self.zred = self.zred_0
-
-        self.time = self.zred2time(self.zred)
-
-    def _material_init(self):
-        """Initialize material properties of the grid"""
-        if not self.resume:
-            super()._material_init()
-            return
-
-        # get extension of the output file
-        # ext = get_extension_in_folder(path=self.results_basename)
-        ext = ".npy"
-        if ext == ".dat":
-            fname = "%sxfrac_z%.3f.dat" % (self.results_basename, self.zred)
-            self.xh = t2c.read_cbin(filename=fname, bits=64, order="F")
-            self.phi_ion = t2c.read_cbin(
-                filename="%sIonRates_z%.3f.dat" % (self.results_basename, self.zred),
-                bits=32,
-                order="F",
-            )
-        elif ext == ".npy":
-            fname = self.results_basename / ("xfrac_z%.3f.npy" % self.zred)
-            self.xh = np.load(fname)
-            self.phi_ion = np.load(
-                self.results_basename / ("IonRates_z%.3f.npy" % self.zred)
-            )
-        else:
-            raise FileNotFoundError(
-                " Resume file not found: %sxfrac_%.3f.npy"
-                % (self.results_basename, self.zred)
-            )
-
-        logger.info(
-            """
----- Reading ionized fraction field:
-%s
- min, mean and max density : %.5e  %.5e  %.5e""",
-            fname,
-            self.xh.min(),
-            self.xh.mean(),
-            self.xh.max(),
-        )
-
-        # TODO: implement heating
-        self.temp = np.full(self.shape, self.material_params.temp0, order="F")
 
     @property
     def fstar_kind(self) -> str:
