@@ -1,4 +1,5 @@
 import argparse
+import itertools
 import logging
 import os
 import shutil
@@ -15,24 +16,25 @@ logger = logging.getLogger("pyc2ray")
 
 
 def main(
-    paramfile: PathType,
+    parameters: PathType,
     numzred: int,
-    t_evol: float = 5e8,
-    flux_strength: float = 1e54,
-    avg_dens: float = 1.87e-7,
+    tevolve: float = 5e8,
+    redshift_start: float = 9.0,
+    flux: float = 1e54,
+    avg_density: float = 1.87e-7,
     num_steps_between_slices: int = 1,
 ) -> int:
     # Create C2Ray object
-    sim = pc2r.C2Ray_Test(paramfile)
-    shutil.copy(paramfile, sim.results_basename / Path(paramfile).name)
+    sim = pc2r.C2Ray_Test(parameters, redshift_start)
+    shutil.copy(parameters, sim.results_basename / Path(parameters).name)
 
     # Generate redshift list (test case)
-    zreds = sim.generate_redshift_array(numzred + 1, t_evol / numzred)
+    zreds = sim.generate_redshift_array(numzred + 1, tevolve / numzred)
 
     src_pos = np.expand_dims(sim.shape, 1) // 2
-    src_flux = np.array([flux_strength]) / 1e48
+    src_flux = np.array([flux]) / 1e48
     logger.info(
-        f"Placing a single source at the center of the box ({src_pos.ravel()}) with flux {flux_strength}"
+        f"Placing a single source at the center of the box ({src_pos.ravel()}) with flux {flux}"
     )
 
     # Measure time
@@ -40,7 +42,7 @@ def main(
     timer.start()
 
     # Loop over redshifts
-    for zi, zf in zip(zreds[:-1], zreds[1:]):
+    for zi, zf in itertools.pairwise(zreds):
         logger.info(
             "\n=================================\n"
             f"Doing redshift {zi:.3f} to {zf:.3f}"
@@ -54,7 +56,7 @@ def main(
         sim.write_output(zi)
 
         # Set density (when cosmological is false, zi has no effect)
-        sim.set_constant_average_density(avg_dens, zi)
+        sim.set_constant_average_density(avg_density, zi)
 
         # Set redshift to current slice redshift
         sim.zred = zi
@@ -92,7 +94,7 @@ if __name__ == "__main__":
     source_default = Path(__file__).parent / "source.txt"
     source_default_rel = source_default.relative_to(Path.cwd(), walk_up=True)
     parser.add_argument(
-        "-z",
+        "-n",
         "--numzred",
         type=int,
         default=10,
@@ -106,6 +108,13 @@ if __name__ == "__main__":
         help="Total evolution time in years (default: 5e8)",
     )
     parser.add_argument(
+        "-z",
+        "--redshift-start",
+        type=float,
+        default=9.0,
+        help="Starting redshift for the simulation (default: 9.0)",
+    )
+    parser.add_argument(
         "-f",
         "--flux",
         type=float,
@@ -113,14 +122,12 @@ if __name__ == "__main__":
         help="Flux strength of the single source (default: 1e54)",
     )
     parser.add_argument(
-        "-n",
+        "-p",
         "--avg-density",
         type=float,
         default=1.87e-7,
         help="Average number density in cm^-3 (default: 1.87e-7)",
     )
-    args = parser.parse_args()
+    args = vars(parser.parse_args())
 
-    sys.exit(
-        main(args.parameters, args.numzred, args.tevolve, args.flux, args.avg_density)
-    )
+    sys.exit(main(**args))
