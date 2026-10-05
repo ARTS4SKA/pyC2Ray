@@ -242,8 +242,6 @@ class CosmologyParameters(YmlParameters):
     Omega0: float = 0.27
     # Omega baryon t=0
     Omega_B: float = 0.043
-    # Initial redshift of the simulation
-    zred_0: float = 9.0
     # Temperature of CMB in Kelvin
     cmbtemp: float = 2.726
 

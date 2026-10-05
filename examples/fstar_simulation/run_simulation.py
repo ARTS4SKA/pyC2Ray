@@ -7,8 +7,6 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
 import pyc2ray as pc2r
 from pyc2ray.utils.other_utils import find_closest_redshift_index
 
@@ -33,32 +31,34 @@ def main(
     """
     # Create C2Ray object
     sim = pc2r.C2Ray_fstar(paramfile=parameters)
+    input_prefix = f"CDM_{sim.boxsize:.0f}Mpc_2048"
 
     # Copy parameter file into the output directory
     if sim.rank == 0:
         shutil.copy(parameters, sim.results_basename)
 
-    # Get list of redshift slices to simulate
-    zred_idx, zred_array = np.loadtxt(
-        sim.inputs_basename / "redshift_checkpoints.txt", unpack=True
-    )
-
-    start_idx = 0
-    if sim.resume or z_start is not None:
-        z_start = min(sim.zred, z_start) if z_start is not None else sim.zred
-        start_idx = find_closest_redshift_index(zred_array, z_start)
-
-    end_idx = len(zred_array)
-    if z_end is not None:
-        end_idx = find_closest_redshift_index(zred_array, z_end) + 1
-
     # Measure time
     timer = pc2r.Timer()
     timer.start()
 
-    # Loop over redshifts
-    for k, (zi, zf) in enumerate(pairwise(zred_array[start_idx:end_idx]), start_idx):
-        iz = int(zred_idx[k])
+    # Define redshift range
+    start_idx = 0
+    if z_start is not None:
+        start_idx = find_closest_redshift_index(sim.zred_array, z_start)
+
+    end_idx = len(sim.zred_array)
+    if z_end is not None:
+        end_idx = find_closest_redshift_index(sim.zred_array, z_end) + 1
+
+    idx_zred = sim.idx_zred[start_idx:end_idx]
+    zred_array = sim.zred_array[start_idx:end_idx]
+    save_initial_state = not sim.resume
+
+    # pairwise is equivalent to zip(array[:-1], array[1:])
+    # iz: index of the density file
+    # zi: initial redshift of the slice
+    # zf: final redshift of the slice
+    for iz, (zi, zf) in zip(idx_zred, pairwise(zred_array)):
         logger.info(
             "\n=================================\n"
             f"Doing redshift {zi:.3f} to {zf:.3f}"
@@ -69,21 +69,20 @@ def main(
         dt = sim.set_timestep(zi, zf, sub_time_steps)
 
         # Read input files
-        # FIXME: This should come from parameter file
-        sim.read_density(f"CDM_200Mpc_2048.{iz:05d}.den.256.0", z=zi)
+        sim.read_density(f"{input_prefix}.{iz:05d}.den.256.0", z=zi)
 
         # Read source files
-        # FIXME: This should come from parameter file
         srcpos, normflux = sim.ionizing_flux(
-            f"CDM_200Mpc_2048.{iz:05d}.fof.txt", z=zi, dt=dt
+            f"{input_prefix}.{iz:05d}.fof.txt", z=zi, dt=dt
         )
-
-        # Save previous time-step output (or initial state)
-        if sim.rank == 0 and (k == 0 or k != start_idx):
-            sim.write_output(z=zi, ext=".npy")
 
         # Set redshift to current slice redshift
         sim.zred = zi
+
+        # Save the initial state only if not resuming
+        if save_initial_state:
+            sim.write_output(z=zi, ext=".npy")
+            save_initial_state = False
 
         # Loop over timesteps
         for t in range(sub_time_steps):
@@ -108,8 +107,8 @@ def main(
         # Evolve cosmology over final half time step to reach the correct time for next slice (see note in c2ray_base.py)
         sim.cosmo_evolve_to_now()
 
-    # Write final output
-    sim.write_output(zf, ext=".npy")
+        # Save the current state of the simulation
+        sim.write_output(z=zf, ext=".npy")
 
     # stop the timer and print the summary
     timer.stop()

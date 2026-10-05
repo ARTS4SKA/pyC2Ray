@@ -1,4 +1,5 @@
 import logging
+import warnings
 from pathlib import Path
 
 import h5py
@@ -10,11 +11,8 @@ from pyc2ray.utils.sourceutils import FloatArray, IntArray, PathType
 
 from .c2ray_base import C2Ray
 from .utils import bin_sources
-from .utils.other_utils import (
-    find_bins,
-    get_extension_in_folder,
-    get_redshifts_from_output,
-)
+
+warnings.warn("This module module is deprecated", DeprecationWarning, stacklevel=2)
 
 # from .source_model import StellarToHaloRelation, BurstySFR, EscapeFraction, Halo2Grid
 
@@ -256,69 +254,6 @@ class C2Ray_Thesan(C2Ray):
     # =====================================================================================================
     # Below are the overridden initialization routines specific to the f_star case
     # =====================================================================================================
-
-    def _redshift_init(self) -> None:
-        """Initialize time and redshift counter"""
-        self.zred_density = np.loadtxt(self.density_basename / "redshift_density.txt")
-        self.zred_sources = np.loadtxt(self.sources_basename / "redshift_sources.txt")
-        if self.resume:
-            # get the resuming redshift
-            self.zred = np.min(get_redshifts_from_output(self.results_basename))
-            _, self.prev_zdens = find_bins(self.zred, self.zred_density)
-            _, self.prev_zsourc = find_bins(self.zred, self.zred_sources)
-        else:
-            self.prev_zdens = -1
-            self.prev_zsourc = -1
-            self.zred = self.zred_0
-
-        self.time = self.zred2time(self.zred)
-
-    def _material_init(self) -> None:
-        """Initialize material properties of the grid"""
-        if self.resume:
-            # get fields at the resuming redshift
-            self.read_density(
-                fbase="CDM_200Mpc_2048.%05d.den.256.0" % self.resume, z=self.prev_zdens
-            )
-
-            # get extension of the output file
-            ext = get_extension_in_folder(path=self.results_basename)
-            if ext == ".dat":
-                fname = "%sxfrac_z%.3f.dat" % (self.results_basename, self.zred)
-                self.xh = t2c.read_cbin(filename=fname, bits=64, order="F")
-                self.phi_ion = t2c.read_cbin(
-                    filename="%sIonRates_z%.3f.dat"
-                    % (self.results_basename, self.zred),
-                    bits=32,
-                    order="F",
-                )
-            elif ext == ".npy":
-                fname = "%sxfrac_z%.3f.npy" % (self.results_basename, self.zred)
-                self.xh = np.load(fname)
-                self.phi_ion = np.load(
-                    "%sIonRates_z%.3f.npy" % (self.results_basename, self.zred)
-                )
-            else:
-                raise FileNotFoundError(
-                    " Resume file not found: %sxfrac_%.3f.npy"
-                    % (self.results_basename, self.zred)
-                )
-
-            logger.info(
-                """
----- Reading ionized fraction field:
- %s
- min, mean and max density : %.5e  %.5e  %.5e""",
-                fname,
-                self.xh.min(),
-                self.xh.mean(),
-                self.xh.max(),
-            )
-
-            # TODO: implement heating
-            self.temp = np.full(self.shape, self.material_params.temp0, order="F")
-        else:
-            super()._material_init()
 
     def _sources_init(self) -> None:
         """Initialize settings to read source files"""
