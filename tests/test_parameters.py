@@ -176,7 +176,6 @@ class TestYmlParameters:
         assert obj.Omega0 == 0.27
         assert obj.Omega_B == 0.044
         assert obj.cmbtemp == 2.726
-        assert obj.zred_0 == 9.0
 
     def test_abundance_parameters(self, params_file: Path):
         obj = AbundancesParameters.from_file(params_file, "Abundances")

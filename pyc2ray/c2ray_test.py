@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class C2Ray_Test(C2Ray):
-    def __init__(self, paramfile: PathType) -> None:
+    def __init__(self, paramfile: PathType, zred_0: float) -> None:
         """A C2Ray Test-case simulation
 
         Parameters
@@ -32,6 +32,7 @@ class C2Ray_Test(C2Ray):
             Name of a YAML file containing parameters for the C2Ray simulation
         """
         super().__init__(paramfile)
+        self.zred_0 = zred_0
         if self.rank == 0:
             logger.info('Running: "C2Ray Test"')
 
@@ -109,8 +110,7 @@ class C2Ray_Test(C2Ray):
         ----------
         ndens : float
             Value of the hydrogen density in cm^-3. When in a cosmological
-            run, this is the comoving density, or the proper density at
-            z = 0.
+            run, this is the comoving density, or the proper density at z = 0.
         z : float
             Redshift to scale the density. When cosmological is false,
             this parameter has no effect and the initial redshift specified
@@ -142,7 +142,7 @@ class C2Ray_Test(C2Ray):
         step = delta_t * c.year2s
         zred_array = np.empty(num_zred)
         for i in range(num_zred):
-            zred_array[i] = self.time2zred(self.age_0 + i * step)
+            zred_array[i] = self.time2zred(self.time + i * step)
         return zred_array
 
     # =====================================================================================================
@@ -151,8 +151,8 @@ class C2Ray_Test(C2Ray):
 
     def _redshift_init(self) -> None:
         """Initialize time and redshift counter"""
-        self.time = self.age_0
         self.zred = self.zred_0
+        self.time = self.zred2time(self.zred)
 
     @property
     def avg_dens(self) -> float:

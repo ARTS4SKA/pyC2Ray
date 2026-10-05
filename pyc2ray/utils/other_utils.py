@@ -1,40 +1,52 @@
 import datetime
-import glob
-import os
+import re
 import time
+from pathlib import Path
 
 import numpy as np
 from scipy import stats
 
-
-def get_extension_in_folder(path):
-    arr = glob.glob(str(path) + "xfrac*")
-    f = arr[0]
-    if os.path.isfile(f):
-        ext = f[f.rfind(".") :]
-    elif os.path.isdir(f):
-        f = arr[1]
-        ext = f[f.rfind(".") :]
-    else:
-        raise ValueError("Check the output directory, it maybe empty or do not exist")
-    return ext
+from pyc2ray.utils.logutils import PathType
 
 
-def get_redshifts_from_output(output_dir, z_low=None, z_high=None, bracket=False):
-    """from a given directory get the redshift based on the name of the file.
-    (remark: file name must be in the form of 'xfrac_%.3f.[extension]')
-    """
-    output_files = glob.glob(os.path.join(output_dir, "xfrac*"))
+def get_extension_in_folder(output_dir: PathType, prefix: str) -> str:
+    """Get the extension of the files in a given folder with a given prefix.
+    It assumes that all the files with the same prefix have the same extension."""
+    for file in Path(output_dir).glob(f"{prefix}*"):
+        if file.is_file():
+            return file.suffix
 
-    redshifts = []
-    for f in output_files:
-        try:
-            z = float(f.split("z")[-1][:-4])
-            redshifts.append(z)
-        except Exception:  # noqa: S110, BLE001
-            pass
+    raise ValueError("No files found in the output directory with the given prefix.")
 
-    return np.sort(np.array(redshifts))[::-1]
+
+def _get_redshift_list_from_output_npy(
+    output_dir: PathType, prefix: str
+) -> list[float]:
+    """From a given directory get the redshift z based on the name of the file.
+    It assumes the output format is "{prefix}z{z:f}.npy"""
+    redshifts: list[float] = []
+    for file in Path(output_dir).glob(f"{prefix}z*.npy"):
+        if not file.is_file():
+            continue
+        match = re.search(rf"{prefix}z(\d+\.\d+).npy", file.name)
+        if match:
+            redshifts.append(float(match.group(1)))
+
+    return sorted(redshifts, reverse=True)
+
+
+def get_redshift_list_from_output(output_dir: PathType, prefix: str) -> list[float]:
+    """From a given directory get the redshift z based on the name of the file."""
+    ext = get_extension_in_folder(output_dir, prefix)
+    if ext == ".npy":
+        return _get_redshift_list_from_output_npy(output_dir, prefix)
+
+    raise ValueError(f"Unsupported file extension {ext}.")
+
+
+def get_resume_redshift_from_output(output_dir: PathType, prefix: str) -> float:
+    """From a given directory get the redshift z based on the name of the file."""
+    return min(get_redshift_list_from_output(output_dir, prefix))
 
 
 def find_closest_redshift_index(zreds: np.ndarray, z: float) -> int:
@@ -108,12 +120,8 @@ def get_source_redshifts(source_dir, z_low=None, z_high=None, bracket=False):
     Returns:
             The redhifts of the files (numpy array of floats)"""
 
-    source_files = glob.glob(
-        os.path.join(source_dir, "*-coarsest_wsubgrid_sources.dat")
-    )
-
     redshifts = []
-    for f in source_files:
+    for f in Path(source_dir).glob("*-coarsest_wsubgrid_sources.dat"):
         try:
             z = float(f[f.rfind("/") + 1 : f.rfind("-coarsest_wsubgrid_sources")])
             redshifts.append(z)

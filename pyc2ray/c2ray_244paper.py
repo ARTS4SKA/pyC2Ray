@@ -1,4 +1,5 @@
 import logging
+import warnings
 from pathlib import Path
 
 import h5py
@@ -8,9 +9,9 @@ import tools21cm as t2c
 import pyc2ray.constants as c
 
 from .c2ray_base import C2Ray
-from .utils import get_source_redshifts
-from .utils.other_utils import find_bins, get_redshifts_from_output
 from .utils.sourceutils import FloatArray, IntArray, PathType
+
+warnings.warn("This module module is deprecated", DeprecationWarning, stacklevel=2)
 
 __all__ = ["C2Ray_244Test"]
 
@@ -147,6 +148,10 @@ class C2Ray_244Test(C2Ray):
     # =====================================================================================================
     # INITIALIZATION METHODS (PRIVATE)
     # =====================================================================================================
+
+    def _redshift_init(self) -> None:
+        super()._redshift_init()
+        self.zred_0 = self.zred
 
     def _cosmology_init(self) -> None:
         """Set up cosmology from parameters (H0, Omega,..)"""
@@ -338,32 +343,6 @@ class C2Ray_244Test(C2Ray):
     # Below are the overridden initialization routines specific to the CubeP3M case
     # =============================================================================
 
-    def _redshift_init(self) -> None:
-        """Initialize time and redshift counter"""
-        self.zred_density = t2c.get_dens_redshifts(
-            self.inputs_basename / "coarser_densities/"
-        )[::-1]
-        # self.zred_sources = get_source_redshifts(self.inputs_basename / "sources/")[
-        #     ::-1
-        # ]
-        # TODO: waiting for next tools21cm release
-        self.zred_sources = get_source_redshifts(self.inputs_basename / "sources/")[
-            ::-1
-        ]
-        if self.resume:
-            # get the resuming redshift
-            self.zred = np.min(get_redshifts_from_output(self.results_basename))
-            # self.age_0 = self.zred2time(self.zred_0)
-            _, self.prev_zdens = find_bins(self.zred, self.zred_density)
-            _, self.prev_zsourc = find_bins(self.zred, self.zred_sources)
-        else:
-            self.prev_zdens = -1
-            self.prev_zsourc = -1
-            self.zred = self.zred_0
-
-        self.time = self.zred2time(self.zred)
-        # self.time = self.age_0
-
     def _material_init(self) -> None:
         """Initialize material properties of the grid"""
         if self.resume:
@@ -378,14 +357,14 @@ class C2Ray_244Test(C2Ray):
             )
             # self.ndens = self.read_density(z=self.zred)
             self.xh = t2c.read_cbin(
-                filename="%sxfrac_%.3f.dat" % (self.results_basename, self.zred),
+                filename="%sxfrac_z%.3f.dat" % (self.results_basename, self.zred),
                 bits=64,
                 order="F",
             )
             # TODO: implement heating
             self.temp = np.full(self.shape, self.material_params.temp0, order="F")
             self.phi_ion = t2c.read_cbin(
-                filename="%sIonRates_%.3f.dat" % (self.results_basename, self.zred),
+                filename="%sIonRates_z%.3f.dat" % (self.results_basename, self.zred),
                 bits=32,
                 order="F",
             )
