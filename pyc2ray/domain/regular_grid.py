@@ -288,7 +288,7 @@ class RegularGrid(Grid):
                 # A larger local grid is both unusable and useless: in periodic mode it would map
                 # several local cells onto the same global cell (see _periodic_global_indices), and
                 # the raytracer caps the number of traversed shells with the local grid size anyway
-                # (q_max = ceil(sqrt(3) * min(R, sqrt(3) * num_cells / 2))), so the extra cells would
+                # q_max = ceil(min(sqrt(3) * R, n_cell * 1.5)), so the extra cells would
                 # only be periodic images of a domain that is already fully covered.
                 # The offset is the one of this grid (zero for the global grid): the local grid
                 # must coincide with it, so that both the field mapping and the source index
