@@ -85,7 +85,6 @@ def _evolve3D_asora(
     dr: float,
     src_flux: FloatArray,
     src_pos: IntArray,
-    src_batch_size: int,
     max_subbox: int,
     subboxsize: int,
     loss_fraction: float,
@@ -245,7 +244,6 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             minlogtau,
             dlogtau,
             num_tau,
-            src_batch_size,
         )
 
         time_end = time.perf_counter()
@@ -348,7 +346,6 @@ def _subdomain_raytracing(
     sigma: float,
     dr: float,
     logtauspace: tuple[float, float, int],
-    src_batch_size: int,
     rank: int,
     rank_prefix: str,
 ) -> FloatArray:
@@ -399,7 +396,6 @@ def _subdomain_raytracing(
         num_local_sources,
         local_mesh_size,
         *logtauspace,
-        src_batch_size,
     )
     return local_phi_ion.reshape(local_shape)
 
@@ -410,7 +406,6 @@ def _evolve3D_asora_domain_decomposition(
     dr: float,
     src_flux: FloatArray,
     src_pos: IntArray,
-    src_batch_size: int,
     max_subbox: int,
     subboxsize: int,
     loss_fraction: float,
@@ -564,7 +559,6 @@ Domain decomposition is active
                 sigma,
                 dr,
                 logtauspace,
-                src_batch_size,
                 rank,
                 rank_prefix,
             )
@@ -680,7 +674,6 @@ def _evolve3D_c2ray(
     dr: float,
     src_flux: FloatArray,
     src_pos: IntArray,
-    src_batch_size: int,
     max_subbox: int,
     subboxsize: int,
     loss_fraction: float,
