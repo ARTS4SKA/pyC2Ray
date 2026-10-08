@@ -60,6 +60,24 @@ def is_device_init() -> bool:
 
 
 @check_libasora
+def cells_in_shell(q: int) -> int:
+    """Return the number of cells in the given q-shell."""
+    assert libasora is not None
+    if q < 0:
+        raise ValueError("q must be >= 0")
+    return libasora.cells_in_shell(q)
+
+
+@check_libasora
+def cells_to_shell(q: int) -> int:
+    """Return the number of cells from all shells up to the given q-shell."""
+    assert libasora is not None
+    if q < 0:
+        raise ValueError("q must be >= 0")
+    return libasora.cells_to_shell(q)
+
+
+@check_libasora
 def max_q_shells(R: float, N: int) -> int:
     """Return the maximum q-shell number for a given radius and grid size."""
     assert libasora is not None
