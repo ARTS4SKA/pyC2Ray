@@ -1,10 +1,20 @@
 #pragma once
 
 #include "rates.cuh"
+#include "resident_tag.h"
 
+#include <cuda_runtime.h>
 #include <cuda/std/array>
 
 namespace asora {
+    namespace resident_tag {
+
+        struct photo_ion_thin : base<double> {};   ///< Optically thin photoion. table
+        struct photo_ion_thick : base<double> {};  ///< Optically thick photoion. table
+        struct source_flux : base<double> {};      ///< Source flux array
+        struct source_position : base<int> {};     ///< Source position array
+
+    }  // namespace resident_tag
 
     /* @brief Raytrace all sources and compute photoionization rates
      *
@@ -14,7 +24,6 @@ namespace asora {
      * @param R Maximum propagation radius for photons from the source
      * @param sig Ionization cross section
      * @param dr Co-moving dimension of one grid cell
-     * @param xh_av Array of average neutral hydrogen fractions
      * @param phi_ion Output array for computed photoionization rates
      * @param num_src Number of radiation sources
      * @param m1 Grid dimension size for a cubic domain (total grid points = m1^3)
@@ -25,9 +34,9 @@ namespace asora {
      * @param block_size GPU block size for kernel launch (default: 256)
      */
     void do_all_sources_gpu(
-        double R, double sig, double dr, const double *xh_av, double *phi_ion,
-        size_t num_src, size_t m1, double minlogtau, double dlogtau, size_t num_tau,
-        size_t grid_size, size_t block_size = 256
+        double R, double sig, double dr, double *phi_ion, size_t num_src, size_t m1,
+        double minlogtau, double dlogtau, size_t num_tau, size_t grid_size,
+        size_t block_size = 256
     );
 
     /* @brief Data structure for chemical element properties used in raytracing
@@ -92,8 +101,8 @@ namespace asora {
      */
     __global__ void evolve0D_gpu(
         size_t m1, double dr, double R_max, int q_max, size_t ns_start, size_t num_src,
-        int *src_pos, double *src_flux, element_data data_HI, density_maps densities,
-        photo_tables ion_tables, linspace<double> logtau
+        const int *src_pos, const double *src_flux, element_data data_HI,
+        density_maps densities, photo_tables ion_tables, linspace<double> logtau
     );
 
 }  // namespace asora
