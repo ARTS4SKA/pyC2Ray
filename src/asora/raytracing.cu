@@ -135,6 +135,36 @@ namespace {
     size_t resolve_grid_size(
         size_t scratch_per_block, size_t num_src, size_t block_size
     ) {
+        // Maximum occupancy on this device.
+        auto by_occupancy = max_resident_blocks(block_size);
+
+        // Memory required for each block.
+        auto bytes_per_block = scratch_per_block * sizeof(double);
+        auto free_bytes = device::available_memory();
+
+        if (free_bytes <= bytes_per_block)
+            throw std::runtime_error(
+                std::format(
+                    "column density scratch for a single block is {} MiB, but only {} "
+                    "MiB are available on the device",
+                    bytes_per_block >> 20, free_bytes >> 20
+                )
+            );
+
+        // Number of blocks that can fit in free memory.
+        auto by_memory = free_bytes / bytes_per_block;
+
+        return std::min({by_occupancy, by_memory, num_src});
+    }
+
+}  // namespace
+
+namespace asora {
+
+    // TODO: Generalize this function to take an arbitrary kernel as an argument.
+    size_t max_resident_blocks(size_t block_size) {
+        device::check_initialized();
+
         // Determine how many blocks of this kernel can be resident on a SM.
         int blocks_per_sm = 0;
         safe_cuda(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
@@ -156,47 +186,8 @@ namespace {
             &num_sms, cudaDevAttrMultiProcessorCount, device::device_id()
         ));
 
-        // Maximum occupancy on this device.
-        auto by_occupancy = static_cast<size_t>(blocks_per_sm) * num_sms;
-
-        // Get free memory from the driver.
-        size_t free_bytes = 0, total_bytes = 0;
-        safe_cuda(cudaMemGetInfo(&free_bytes, &total_bytes));
-
-        // Get free memory from the pool.
-        if (auto pool = device::pool()) {
-            uint64_t reserved = 0;
-            uint64_t used = 0;
-            safe_cuda(cudaMemPoolGetAttribute(
-                pool, cudaMemPoolAttrReservedMemCurrent, &reserved
-            ));
-            safe_cuda(
-                cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemCurrent, &used)
-            );
-            free_bytes += reserved - used;
-        }
-
-        // Memory required for each block.
-        auto bytes_per_block = scratch_per_block * sizeof(double);
-
-        if (free_bytes <= bytes_per_block)
-            throw std::runtime_error(
-                std::format(
-                    "column density scratch for a single block is {} MiB, but only {} "
-                    "MiB are available on the device",
-                    bytes_per_block >> 20, free_bytes >> 20
-                )
-            );
-
-        // Number of blocks that can fit in free memory.
-        auto by_memory = free_bytes / bytes_per_block;
-
-        return std::min({by_occupancy, by_memory, num_src});
+        return static_cast<size_t>(blocks_per_sm) * num_sms;
     }
-
-}  // namespace
-
-namespace asora {
 
     void do_all_sources_gpu(
         double R, double sigma, double dr, double *phi_ion, size_t num_src, size_t m1,

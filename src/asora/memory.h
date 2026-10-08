@@ -369,6 +369,12 @@ namespace asora {
                                     : device_array<T>(items);
         }
 
+        /* @brief Get the amount of free device memory in bytes.
+         *
+         * @return Free memory in bytes, or 0 if device not initialized
+         */
+        static size_t available_memory();
+
         /// Get the CUDA device ID, or -1 if not initialized
         static int device_id() noexcept { return instance()._gpu_id; }
 
