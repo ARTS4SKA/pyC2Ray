@@ -83,7 +83,7 @@ PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) 
     double minlogtau;
     double dlogtau;
     size_t num_tau;
-    size_t block_size = 256;
+    size_t block_size = asora::default_block_size;
 
     if (!PyArg_ParseTuple(
             args, "dddOkkddk|k", &R, &sig, &dr, &phi_ion, &num_src, &m1, &minlogtau,
@@ -143,6 +143,54 @@ PyObject *asora_is_device_init([[maybe_unused]] PyObject *self, PyObject *args) 
     if (!PyArg_ParseTuple(args, "")) return nullptr;
 
     return Py_NewRef(asora::device::is_initialized() ? Py_True : Py_False);
+}
+
+/// Expose asora::device::available_memory.
+PyObject *asora_available_memory([[maybe_unused]] PyObject *self, PyObject *args) {
+    if (!PyArg_ParseTuple(args, "")) return nullptr;
+
+    size_t available_mem = 0;
+    try {
+        available_mem = asora::device::available_memory();
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return nullptr;
+    }
+
+    return Py_BuildValue("K", available_mem);
+}
+
+/// Expose asora::max_resident_blocks.
+PyObject *asora_max_resident_blocks([[maybe_unused]] PyObject *self, PyObject *args) {
+    size_t block_size = asora::default_block_size;
+    if (!PyArg_ParseTuple(args, "|k", &block_size)) return nullptr;
+
+    size_t blocks = 0;
+    try {
+        blocks = asora::max_resident_blocks(block_size);
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return nullptr;
+    }
+
+    return Py_BuildValue("k", blocks);
+}
+
+/// Expose asora::max_q_shells.
+PyObject *asora_max_q_shells([[maybe_unused]] PyObject *self, PyObject *args) {
+    double R;
+    size_t m1;
+    if (!PyArg_ParseTuple(args, "dk", &R, &m1)) return nullptr;
+
+    int q_max;
+    try {
+        q_max = asora::max_q_shells(R, m1);
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return nullptr;
+    }
+
+    return Py_BuildValue("i", q_max);
 }
 
 /// Expose whether the extension was compiled with periodic boundary mode.
@@ -332,6 +380,12 @@ static PyMethodDef asoraMethods[] = {
     {"device_close", asora_device_close, METH_VARARGS, "Close device and free memory"},
     {"is_device_init", asora_is_device_init, METH_VARARGS,
      "Check if the device is initialized"},
+    {"available_memory", asora_available_memory, METH_VARARGS,
+     "Get available device memory in bytes"},
+    {"max_resident_blocks", asora_max_resident_blocks, METH_VARARGS,
+     "Get the number of raytracing blocks the device can keep resident"},
+    {"max_q_shells", asora_max_q_shells, METH_VARARGS,
+     "Get the maximum number of shells for a given radius and grid size"},
     {"is_periodic_mode_active", asora_is_periodic_mode_active, METH_VARARGS,
      "Check if libasora was compiled with PERIODIC"},
     {"density_to_device", asora_density_to_device, METH_VARARGS,

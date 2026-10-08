@@ -33,6 +33,9 @@ def mock_asora():
     mock = Mock()
     mock.is_device_init.return_value = True
     mock.chemistry_global_pass.return_value = 1
+    mock.available_memory.return_value = 8 * (1 << 30)  # 8 GiB
+    mock.max_resident_blocks.return_value = 1024
+    mock.max_q_shells.return_value = 50
     with (
         patch("pyc2ray.evolve.libasora", mock),
         patch("pyc2ray.asora_core.libasora", mock),
@@ -87,17 +90,8 @@ def call_evolve3D(
     # The domain decomposition path consumes a decomposition handler owned by the caller.
     decomposition = None
     if domain_decomposition_params is not None:
-        decomposition = DomainDecompositionHandler(MPI.COMM_WORLD)
-        decomposition.update_decomposition(
-            cell_size=dr,
-            src_pos=src_pos.T,
-            src_flux=src_flux,
-            N=N,
-            R_max=R_max,
-            src_batch_size=8,
-            num_tau=num_tau,
-            is_domain_periodic=True,
-            domain_decomposition_params=domain_decomposition_params,
+        decomposition = DomainDecompositionHandler(
+            MPI.COMM_WORLD, domain_decomposition_params
         )
 
     return evolve3D(

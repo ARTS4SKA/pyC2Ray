@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 import numpy as np
@@ -106,6 +107,11 @@ class TestLibasora:
 
     def test_device_init(self, init_device):
         assert libasora.is_device_init()
+
+    @pytest.mark.parametrize("R", [0.0, 1.0, 10.0, 20.0])
+    def test_max_q_shells(self, R: float):
+        assert libasora is not None
+        assert libasora.max_q_shells(R, 10) == min(math.ceil(math.sqrt(3) * R), 15)
 
     @staticmethod
     def create_density_data(size: int) -> np.ndarray:
@@ -310,3 +316,27 @@ class TestLibasora:
         libasora.average_fraction_to_host(received)
 
         assert np.array_equal(received, xh_av)
+
+    def test_device_available_memory_no_init(self):
+        assert libasora is not None
+        assert libasora.available_memory() == 0
+
+    def test_device_available_memory(self, init_device):
+        """The device has some memory available, and it is a positive number."""
+        assert libasora is not None
+        mem = libasora.available_memory()
+        assert mem > 0
+
+        libasora.density_to_device(self.create_density_data(16))
+        assert libasora.available_memory() < mem
+
+    def test_max_resident_blocks_no_init(self):
+        assert libasora is not None
+        with pytest.raises(RuntimeError):
+            libasora.max_resident_blocks()
+
+    def test_max_resident_blocks(self, init_device):
+        """At least one block is resident, and larger blocks never fit more."""
+        assert libasora is not None
+        assert libasora.max_resident_blocks() > 0
+        assert libasora.max_resident_blocks(1024) <= libasora.max_resident_blocks(128)

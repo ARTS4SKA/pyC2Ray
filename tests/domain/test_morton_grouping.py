@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from pyc2ray.domain.cost_model import CostModel, pyC2RayCostModel
+from pyc2ray.domain.cost_model import ASORACostModel, CostModel
 from pyc2ray.domain.grid import Grid
 from pyc2ray.domain.morton_grouping import (
     MAX_MORTON_BITS,
@@ -432,11 +432,11 @@ def test_build_groups_incremental_stored_costs_match_stored_geometry() -> None:
     grouping = MortonSourceGrouping()
     grid: Grid = RegularGrid(cell_size=1.0, num_cells=32, is_periodic_mode_active=True)
     params = MortonGroupingParams(max_num_sources_per_group=12, morton_bits=8)
-    cost_model = pyC2RayCostModel(
-        max_memory_cost_per_group=2.0e4,
-        source_batch_size=4,
+    cost_model = ASORACostModel(
+        available_memory=8 * (1 << 30),  # 8 GiB
+        max_resident_blocks=1024,
         is_periodic_mode_active=True,
-        photo_ion_table_size=16,
+        budget=0.9,
     )
 
     groups = grouping.build_groups_incremental(sources, grid, params, cost_model)
