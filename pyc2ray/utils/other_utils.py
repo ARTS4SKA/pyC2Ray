@@ -21,7 +21,9 @@ def get_extension_in_folder(path):
 
 
 def get_redshifts_from_output(output_dir, z_low=None, z_high=None, bracket=False):
-    """from a given directory get the redshift based on the name of the file (remark: file name must be in the form of 'xfrac_%.3f.[extension]')"""
+    """from a given directory get the redshift based on the name of the file.
+    (remark: file name must be in the form of 'xfrac_%.3f.[extension]')
+    """
     output_files = glob.glob(os.path.join(output_dir, "xfrac*"))
 
     redshifts = []
@@ -33,6 +35,13 @@ def get_redshifts_from_output(output_dir, z_low=None, z_high=None, bracket=False
             pass
 
     return np.sort(np.array(redshifts))[::-1]
+
+
+def find_redshit_index(zreds: np.ndarray, z: float) -> int:
+    """Find the index of the redshift slice corresponding to a given redshift z in the zreds array.
+    The array is assumed to be sorted in descending order.
+    """
+    return max(len(zreds) - 1 - int(np.searchsorted(zreds[::-1], z)), 0)
 
 
 def find_bins(input_array, binning_array):
