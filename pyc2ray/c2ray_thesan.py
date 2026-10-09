@@ -317,7 +317,7 @@ class C2Ray_Thesan(C2Ray):
             )
 
             # TODO: implement heating
-            self.temp = np.full(self.shape, self.material_params.temp0, order="F")
+            self.temp = np.full(self.shape, self.parameters.material.temp0, order="F")
         else:
             super()._material_init()
 
