@@ -461,7 +461,7 @@ PyObject *asora_chemistry_global_pass([[maybe_unused]] PyObject *self, PyObject 
 extern "C" {
 #endif  // __cplusplus
 
-static PyMethodDef asoraMethods[] = {
+static PyMethodDef asora_methods[] = {
     {"cells_in_shell", asora_cells_in_shell, METH_VARARGS,
      "Number of cells in q-shell"},
     {"cells_to_shell", asora_cells_to_shell, METH_VARARGS,
@@ -502,12 +502,19 @@ static PyMethodDef asoraMethods[] = {
     {"do_all_sources", asora_do_all_sources, METH_VARARGS, "Perform ASORA raytracing"},
     {"chemistry_global_pass", asora_chemistry_global_pass, METH_VARARGS,
      "Solve chemistry ODE"},
-    {NULL, NULL, 0, NULL} /* Sentinel */
+    {NULL, NULL, 0, NULL}  // sentinel
 };
 
 static struct PyModuleDef asoramodule = {
-    PyModuleDef_HEAD_INIT, "libasora",
-    "CUDA C++ implementation of the short-characteristics RT", -1, asoraMethods
+    PyModuleDef_HEAD_INIT,
+    "libasora",                                                 // m_name
+    "CUDA C++ implementation of the short-characteristics RT",  // m_doc
+    -1,                                                         // m_size
+    asora_methods,                                              // m_methods
+    nullptr,                                                    // m_slots
+    nullptr,                                                    // m_traverse
+    nullptr,                                                    // m_clear
+    nullptr                                                     // m_free
 };
 
 PyMODINIT_FUNC PyInit_libasora(void) {
