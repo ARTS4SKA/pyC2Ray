@@ -112,7 +112,8 @@ namespace asora {
         };
     }
 
-    __device__ shortchar_info make_shortchar_interpolation_info(const int3& pos) {
+    __device__ shortchar_info
+    make_shortchar_interpolation_info(const int3& pos, size_t bank_size) {
         if (pos.x == 0 && pos.y == 0 && pos.z == 0)
             return {pos, 0.f, 0.f, 0.5f, {0, 0, 0, 0}};
 
@@ -165,7 +166,7 @@ namespace asora {
         for (size_t k = 0; k < 4; ++k) {
             if (weights[k] > 0.0) {
                 auto&& [q, s] = cart2shell(di - sx[0], dj - sx[1], dk - sx[2]);
-                index = q > 0 ? cells_to_shell(q - 1) + s : 0;
+                index = bank_size * (q % num_banks) + s;
             }
             indices[k] = index;
             sx += 3;
@@ -187,11 +188,13 @@ namespace asora {
 
     // Performed by a single block for now
     __global__ void fill_lut_kernel(shortchar_lut sclut, int q_max) {
+        auto bank_size = asora::cells_in_shell(q_max);
         for (int q = 0; q <= q_max; ++q) {
             size_t s = threadIdx.x;
             while (s < cells_in_shell(q)) {
                 auto index = cells_to_shell(q - 1) + s;
-                auto info = make_shortchar_interpolation_info(shell2cart(q, s));
+                auto info =
+                    make_shortchar_interpolation_info(shell2cart(q, s), bank_size);
                 sclut.offsets[index] = pack_offset(info.pos);
                 sclut.dxs[index] = info.dx;
                 sclut.dys[index] = info.dy;
