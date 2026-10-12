@@ -1,12 +1,9 @@
 #include "chemistry.h"
 
 #include "memory.h"
-#include "utils.cuh"
 
 #include <thrust/count.h>
 #include <thrust/execution_policy.h>
-#include <cmath>
-#include <iostream>
 
 namespace {
 
@@ -91,8 +88,8 @@ namespace {
 
     // Global pass kernel
     __global__ void evolve0D_gpu(
-        double* __restrict__ xh, double* __restrict__ xh_av,
-        double* __restrict__ xh_int, double* __restrict__ temp,
+        const double* __restrict__ xh, double* __restrict__ xh_avg,
+        double* __restrict__ xh_int, const double* __restrict__ temp,
         const double* __restrict__ ndens, const double* __restrict__ phi_ion,
         const double* __restrict__ clump, bool* conv_flag, double dt, double bh00,
         double albpow, double colh0, double temph0, double abu_c, size_t size
@@ -102,16 +99,16 @@ namespace {
         // Thread can process more than one cell.
         while (idx < size) {
             // Get average fraction value as a reference: it will be updated later.
-            auto& xh_av_p = xh_av[idx];
+            auto& xh_avg_p = xh_avg[idx];
 
-            auto&& [xh_int_new, xh_av_new] = do_chemistry(
-                xh[idx], xh_av_p, temp[idx], ndens[idx], phi_ion[idx], clump[idx], dt,
+            auto&& [xh_int_new, xh_avg_new] = do_chemistry(
+                xh[idx], xh_avg_p, temp[idx], ndens[idx], phi_ion[idx], clump[idx], dt,
                 bh00, albpow, colh0, temph0, abu_c
             );
 
-            conv_flag[idx] = check_convergence_global(xh_av_new, xh_av_p);
+            conv_flag[idx] = check_convergence_global(xh_avg_new, xh_avg_p);
             xh_int[idx] = xh_int_new;
-            xh_av_p = xh_av_new;
+            xh_avg_p = xh_avg_new;
 
             idx += blockDim.x * gridDim.x;
         }
@@ -123,59 +120,56 @@ namespace asora {
 
     // Host function to call global_pass
     size_t global_pass(
-        double* xh, double* xh_av, double* xh_int, const double* temp,
-        const double* phi_ion, const double* clump, double dt, double bh00,
-        double albpow, double colh0, double temph0, double abu_c, size_t n_cells,
-        size_t block_size
+        double* xh_int, const double* phi_ion, double dt, double bh00, double albpow,
+        double colh0, double temph0, double abu_c, size_t n_cells, size_t block_size
     ) {
-        // Allocate (if necessary) and copy the average ionized fraction array to the
-        // device. This array is also used by raytracing.
-        device::transfer<double>(buffer_tag::fraction_HII, xh_av, n_cells);
-        auto xh_av_buf = asora::device::get(buffer_tag::fraction_HII);
+        device::check_initialized();
 
-        // Initialize and copy non-const data.
-        auto xh_buf = device_buffer(n_cells * sizeof(double));
-        auto xh_int_buf = device_buffer(n_cells * sizeof(double));
-        xh_buf.copyFromHost(xh);
-        xh_int_buf.copyFromHost(xh_int);
+        namespace tag = resident_tag;
+        const auto& number_density = device::resident<tag::number_density>();
+        const auto& temperature = device::resident<tag::temperature>();
+        const auto& clumping = device::resident<tag::clumping>();
+        if (!number_density || !temperature || !clumping)
+            throw std::runtime_error(
+                "number density, temperature, and clumping arrays must be allocated on "
+                "the device before calling global_pass"
+            );
 
-        // Initialize and copy const data.
-        for (auto&& [tag, data] : {
-                 std::pair{buffer_tag::photo_ionization_HI, phi_ion},
-                 std::pair{buffer_tag::temperature, temp},
-                 std::pair{buffer_tag::clumping_factor, clump},
-             }) {
-            device::ensure_transfer<double>(tag, data, n_cells);
-        }
+        const auto& fraction_HII = device::resident<tag::fraction_HII>();
+        auto& fraction_HII_avg = device::resident<tag::fraction_HII_avg>();
+        if (!fraction_HII || !fraction_HII_avg)
+            throw std::runtime_error(
+                "initial and average fraction maps must be allocated on the device "
+                "before calling global_pass"
+            );
+        auto fraction_HII_int = device::scratch<double>(n_cells);
 
-        device_buffer conv_flag(n_cells);
-        auto conv_flag_d = conv_flag.view<bool>().data();
+        auto phion_HI = device::scratch<double>(n_cells);
+        phion_HI.copy_from_host(phi_ion);
 
-        auto xh_d = xh_buf.data<double>();
-        auto xh_av_d = xh_av_buf.data<double>();
-        auto xh_int_d = xh_int_buf.data<double>();
-
-        auto temp_d = device::get(buffer_tag::temperature).data<double>();
-        auto ndens_d = device::get(buffer_tag::number_density).data<double>();
-        auto phi_ion_d = device::get(buffer_tag::photo_ionization_HI).data<double>();
-        auto clump_d = device::get(buffer_tag::clumping_factor).data<double>();
+        auto conv_flag = device::scratch<bool>(n_cells);
 
         // Launch kernel, divide by 2 so that threads do more work.
         size_t grid_size = std::ceil(static_cast<float>(n_cells) / block_size / 2);
         evolve0D_gpu<<<grid_size, block_size>>>(
-            xh_d, xh_av_d, xh_int_d, temp_d, ndens_d, phi_ion_d, clump_d, conv_flag_d,
-            dt, bh00, albpow, colh0, temph0, abu_c, n_cells
+            fraction_HII.data(), fraction_HII_avg.data(), fraction_HII_int.data(),
+            temperature.data(), number_density.data(), phion_HI.data(), clumping.data(),
+            conv_flag.data(), dt, bh00, albpow, colh0, temph0, abu_c, n_cells
         );
 
         // Check for errors.
         safe_cuda(cudaPeekAtLastError());
 
         // Reduction kernel to count non-zero elements.
-        auto convergence =
-            thrust::count(thrust::device, conv_flag_d, conv_flag_d + n_cells, true);
+        // TODO: set thrust to the correct stream
+        auto convergence = thrust::count(
+            thrust::device, conv_flag.data(), conv_flag.data() + n_cells, true
+        );
 
-        xh_av_buf.copyToHost(xh_av, xh_av_buf.size());
-        xh_int_buf.copyToHost(xh_int, xh_int_buf.size());
+        // The average fraction stays on the device for the next raytracing pass. It
+        // is only read back when an MPI rank has to broadcast it, through
+        // average_fraction_to_host.
+        fraction_HII_int.copy_to_host(xh_int);
         return convergence;
     }
 

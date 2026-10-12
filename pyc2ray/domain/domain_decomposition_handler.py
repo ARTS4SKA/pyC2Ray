@@ -84,7 +84,7 @@ class DomainDecompositionHandler:
         src_pos: np.ndarray,
         src_flux: np.ndarray,
         N: int,
-        R_max_LLS: float,
+        R_max: float,
         src_batch_size: int,
         num_tau: int,
         is_domain_periodic: bool,
@@ -101,7 +101,7 @@ class DomainDecompositionHandler:
         has position (0, 0, 0)).
         src_flux : Array containing the total ionizing flux of each source.
         N : Number of cells per side of the (cubic) global grid.
-        R_max_LLS : Mean free path of photons, in cell units.
+        R_max : Mean free path of photons, in cell units.
         src_batch_size : Number of sources processed per batch, used by the cost model.
         num_tau : Size of the photoionization table, used by the cost model.
         is_domain_periodic : Whether the global domain uses periodic boundary conditions.
@@ -114,7 +114,7 @@ class DomainDecompositionHandler:
         # grouping is invariant under a uniform cell-size scaling, so a cosmological cell-size
         # change alone does not require a rebuild.
         # TODO: save memory by using a hash instead of the full bytes representation of the arrays.
-        decomposition_key = (src_pos.tobytes(), src_flux.tobytes(), float(R_max_LLS))
+        decomposition_key = (src_pos.tobytes(), src_flux.tobytes(), float(R_max))
         if decomposition_key == self._decomposition_key:
             logger.info("Reusing cached source grouping/domain decomposition.")
             return
@@ -124,7 +124,7 @@ class DomainDecompositionHandler:
             src_pos,
             src_flux,
             N,
-            R_max_LLS,
+            R_max,
             src_batch_size,
             num_tau,
             is_domain_periodic,
@@ -148,7 +148,7 @@ class DomainDecompositionHandler:
         src_pos: np.ndarray,
         src_flux: np.ndarray,
         N: int,
-        R_max_LLS: float,
+        R_max: float,
         src_batch_size: int,
         num_tau: int,
         is_domain_periodic: bool,
@@ -175,7 +175,7 @@ class DomainDecompositionHandler:
                 id=i,
                 pos=(np.array(src_pos[i, :], dtype=float) + 0.5) * cell_size,
                 strength=src_flux[i],
-                radius=R_max_LLS * cell_size,
+                radius=R_max * cell_size,
             )
             for i in range(num_src)
         ]
