@@ -246,12 +246,12 @@ namespace asora {
 
         for (int q = 1; q <= q_max; ++q) {
             // Each thread can process multiple cells.
-            size_t s = threadIdx.x;
+            int s = threadIdx.x;
             while (s < cells_in_shell(q)) {
-                auto info = use_lut ? lut[cells_to_shell(q - 1) + s]
-                                    : make_shortchar_interpolation_info(
-                                          shell2cart(q, s), bank_size
-                                      );
+                auto index = cells_to_shell(q - 1) + s;
+                auto info = use_lut
+                                ? lut.get(index)
+                                : make_shortchar_interpolation_info(q, s, bank_size);
                 raytrace(
                     info, q, s, {i0, j0, k0}, scale, data_HI, dr, R_max, bank_size,
                     densities, m1, ion_tables, logtau

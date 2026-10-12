@@ -113,11 +113,11 @@ namespace asora {
     }
 
     __device__ shortchar_info
-    make_shortchar_interpolation_info(const int3& pos, size_t bank_size) {
-        if (pos.x == 0 && pos.y == 0 && pos.z == 0)
-            return {pos, 0.f, 0.f, 0.5f, {0, 0, 0, 0}};
+    make_shortchar_interpolation_info(int q, int s, size_t bank_size) {
+        if (q == 0 && s == 0) return {{0, 0, 0}, 0.f, 0.f, 0.5f, {0, 0, 0, 0}};
 
-        auto&& [di, dj, dk] = pos;
+        auto pos = shell2cart(q, s);
+        const auto& [di, dj, dk] = pos;
 
         auto ai = std::abs(di);
         auto aj = std::abs(dj);
@@ -175,15 +175,29 @@ namespace asora {
         return {pos, dd.x, dd.y, dd.z, std::move(indices)};
     }
 
-    shortchar_lut::shortchar_lut(std::in_place_t) {
-        // LUT not setup.
-        if (!device::contains(buffer_tag::raylut_offsets)) return;
+    // This constructor if private.
+    shortchar_lut::shortchar_lut(size_t n_cells) {
+        // Check if a re-allocation is necessary.
+        if (device::contains(buffer_tag::raylut_offsets)) {
+            auto existing_size =
+                device::get(buffer_tag::raylut_offsets).size<uint32_t>();
+            if (existing_size >= n_cells) {
+                // We can re-use the existing buffer; ensure becomes a no-op.
+                set_assigned();
+            }
+        }
 
-        offsets = device::get(buffer_tag::raylut_offsets).data<uint32_t>();
-        dxs = device::get(buffer_tag::raylut_dx).data<float>();
-        dys = device::get(buffer_tag::raylut_dy).data<float>();
-        paths = device::get(buffer_tag::raylut_path).data<float>();
-        indices = device::get(buffer_tag::raylut_indices).data<index4>();
+        device::ensure<uint32_t>(buffer_tag::raylut_offsets, n_cells);
+        device::ensure<float>(buffer_tag::raylut_dx, n_cells);
+        device::ensure<float>(buffer_tag::raylut_dy, n_cells);
+        device::ensure<float>(buffer_tag::raylut_path, n_cells);
+        device::ensure<index4>(buffer_tag::raylut_indices, n_cells);
+
+        _offsets = device::get(buffer_tag::raylut_offsets).data<uint32_t>();
+        _dxs = device::get(buffer_tag::raylut_dx).data<float>();
+        _dys = device::get(buffer_tag::raylut_dy).data<float>();
+        _paths = device::get(buffer_tag::raylut_path).data<float>();
+        _indices = device::get(buffer_tag::raylut_indices).data<index4>();
     }
 
     // Performed by a single block for now
@@ -193,13 +207,8 @@ namespace asora {
             size_t s = threadIdx.x;
             while (s < cells_in_shell(q)) {
                 auto index = cells_to_shell(q - 1) + s;
-                auto info =
-                    make_shortchar_interpolation_info(shell2cart(q, s), bank_size);
-                sclut.offsets[index] = pack_offset(info.pos);
-                sclut.dxs[index] = info.dx;
-                sclut.dys[index] = info.dy;
-                sclut.paths[index] = info.path;
-                sclut.indices[index] = info.indices;
+                auto info = make_shortchar_interpolation_info(q, s, bank_size);
+                sclut.set(index, info);
 
                 s += blockDim.x;
             }
@@ -213,33 +222,23 @@ namespace asora {
         }
 
         auto n_cells = asora::cells_to_shell(q_max);
-
-        // Check first if the LUT already exists and has the correct size.
-        if (device::contains(buffer_tag::raylut_offsets)) {
-            auto existing_size =
-                device::get(buffer_tag::raylut_offsets).size<uint32_t>();
-            if (existing_size >= n_cells) return shortchar_lut{std::in_place};
+        shortchar_lut lut_d(n_cells);
+        if (lut_d.is_set()) {
+            return lut_d;
         }
-
-        // Allocate lut memory on device
-        device::ensure<uint32_t>(buffer_tag::raylut_offsets, n_cells);
-        device::ensure<float>(buffer_tag::raylut_dx, n_cells);
-        device::ensure<float>(buffer_tag::raylut_dy, n_cells);
-        device::ensure<float>(buffer_tag::raylut_path, n_cells);
-        device::ensure<index4>(buffer_tag::raylut_indices, n_cells);
-
-        // Launch kernel to fill lut
-        shortchar_lut lut_d{std::in_place};
 
 #ifdef NDEBUG
         constexpr int block_size = 1024;
 #else
         constexpr int block_size = 128;
 #endif
+        // Launch kernel to fill lut
         fill_lut_kernel<<<1, block_size>>>(lut_d, q_max);
         safe_cuda(cudaDeviceSynchronize());
         safe_cuda(cudaGetLastError());
 
+        // Mark the LUT as usable.
+        lut_d.set_assigned();
         return lut_d;
     }
 

@@ -68,28 +68,51 @@ namespace asora {
      * @return A shortchar_interp_data structure containing the cell's properties.
      */
     __device__ shortchar_info
-    make_shortchar_interpolation_info(const int3 &pos, size_t bank_size);
+    make_shortchar_interpolation_info(int q, int s, size_t bank_size);
 
     /// Structure of arrays for a short-characteristic interpolation LUT on device.
     struct shortchar_lut {
-        uint32_t *__restrict__ offsets = nullptr;
-        float *__restrict__ dxs = nullptr;
-        float *__restrict__ dys = nullptr;
-        float *__restrict__ paths = nullptr;
-        index4 *__restrict__ indices = nullptr;
-
         shortchar_lut() = default;
-        shortchar_lut(std::in_place_t);
         shortchar_lut(const shortchar_lut &) = default;
         shortchar_lut &operator=(const shortchar_lut &) = default;
 
-        __device__ bool is_set() const {
-            return offsets && dxs && dys && paths && indices;
+        /// Check if the LUT has been assigned and is ready for use.
+        __host__ __device__ bool is_set() const { return _assigned; }
+
+        /// Get the short-characteristic parameters.
+        __device__ shortchar_info get(size_t index) const {
+            return {
+                unpack_offset(_offsets[index]), _dxs[index], _dys[index], _paths[index],
+                _indices[index]
+            };
         }
 
-        __device__ shortchar_info operator[](size_t i) const {
-            return {unpack_offset(offsets[i]), dxs[i], dys[i], paths[i], indices[i]};
+        /// Set the short-characteristic parameters.
+        __device__ void set(size_t index, const shortchar_info &info) {
+            _offsets[index] = pack_offset(info.pos);
+            _dxs[index] = info.dx;
+            _dys[index] = info.dy;
+            _paths[index] = info.path;
+            _indices[index] = info.indices;
         }
+
+       private:
+        uint32_t *__restrict__ _offsets = nullptr;
+        float *__restrict__ _dxs = nullptr;
+        float *__restrict__ _dys = nullptr;
+        float *__restrict__ _paths = nullptr;
+        index4 *__restrict__ _indices = nullptr;
+
+        bool _assigned = false;
+
+        /// Construct a shortchar lut and allocate device memory if needed.
+        shortchar_lut(size_t n_cells);
+
+        /// Mark the LUT as ready to use.
+        void set_assigned() { _assigned = true; }
+
+        /// Helpfer function to create a shortchar_lut for a given q_max.
+        friend shortchar_lut create_shortchar_interp_lut(int q_max);
     };
 
     /* @brief Create a lookup table for all cells in the q-shells up to q_max.
