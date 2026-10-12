@@ -96,6 +96,8 @@ class TestShortCharacteristicsInterpolation:
     def test_shortchar_lut_check_items(self, init_device) -> None:
         assert libasora is not None
 
+        bank_size = libasora.cells_in_shell(50)
+
         libasora.create_shortchar_lut(50)
         lut = libasora.get_shortchar_lut()
 
@@ -109,12 +111,16 @@ class TestShortCharacteristicsInterpolation:
             weights = [(1 - dx) * (1 - dy), (1 - dy) * dx, (1 - dx) * dy, dx * dy]
 
             # Check that the interpolation indices are correct.
+            q = abs(item.di) + abs(item.dj) + abs(item.dk)
             for ws, index in zip(weights, item.indices):
-                if ws > 0:
-                    other_item = lut[index]
-                    assert abs(item.di - other_item.di) <= 1
-                    assert abs(item.dj - other_item.dj) <= 1
-                    assert abs(item.dk - other_item.dk) <= 1
+                if ws == 0:
+                    continue
+                n, s = divmod(index, bank_size)
+                other_q = q - (q - n) % 4
+                other_item = lut[libasora.cells_to_shell(other_q - 1) + s]
+                assert abs(item.di - other_item.di) <= 1
+                assert abs(item.dj - other_item.dj) <= 1
+                assert abs(item.dk - other_item.dk) <= 1
 
     def test_shortchar_lut_check_order(self, init_device) -> None:
         assert libasora is not None

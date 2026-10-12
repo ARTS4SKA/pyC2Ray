@@ -84,8 +84,7 @@ namespace {
         auto vol_ph = dist2 * info.path;
 
         // Get local ionization fraction & neutral hydrogen density in the cell
-        const auto bank = q % num_banks;
-        const auto cd_index = bank_size * bank + s;
+        const auto cd_index = bank_size * (q % num_banks) + s;
         const auto ph_index = ravel_index(pos.x + di, pos.y + dj, pos.z + dk, m1);
         auto nHI = densities.get(ph_index);
 
@@ -249,13 +248,13 @@ namespace asora {
             // Each thread can process multiple cells.
             size_t s = threadIdx.x;
             while (s < cells_in_shell(q)) {
-                auto cd_index = cells_to_shell(q - 1) + s;
-                auto info = use_lut
-                                ? lut[cd_index]
-                                : make_shortchar_interpolation_info(shell2cart(q, s));
+                auto info = use_lut ? lut[cells_to_shell(q - 1) + s]
+                                    : make_shortchar_interpolation_info(
+                                          shell2cart(q, s), bank_size
+                                      );
                 raytrace(
                     info, q, s, {i0, j0, k0}, scale, data_HI, dr, R_max, bank_size,
-                    densities, m1, ion_tables, logtau,
+                    densities, m1, ion_tables, logtau
                 );
 
                 s += blockDim.x;

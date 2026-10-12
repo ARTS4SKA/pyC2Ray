@@ -67,7 +67,8 @@ namespace asora {
      * @param pos Integer coordinates of the cell (di, dj, dk).
      * @return A shortchar_interp_data structure containing the cell's properties.
      */
-    __device__ shortchar_info make_shortchar_interpolation_info(const int3 &pos);
+    __device__ shortchar_info
+    make_shortchar_interpolation_info(const int3 &pos, size_t bank_size);
 
     /// Structure of arrays for a short-characteristic interpolation LUT on device.
     struct shortchar_lut {
