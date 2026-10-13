@@ -156,4 +156,4 @@ class C2Ray_Test(C2Ray):
 
     @property
     def avg_dens(self) -> float:
-        return self.material_params.avg_dens
+        return self.parameters.material.avg_dens

@@ -90,11 +90,13 @@ def test_assign_groups_to_ranks_handles_empty_groups() -> None:
 
 
 def _dd_params(max_num_sources_per_group: int = 4) -> DomainDecompositionParameters:
-    return DomainDecompositionParameters(
-        enabled=True,
-        grouping_algorithm="morton",
-        max_num_sources_per_group=max_num_sources_per_group,
-        morton_bits=10,
+    return DomainDecompositionParameters.from_dict(
+        {
+            "enabled": True,
+            "grouping_algorithm": "morton",
+            "max_num_sources_per_group": max_num_sources_per_group,
+            "morton_bits": 10,
+        }
     )
 
 
@@ -169,13 +171,15 @@ def test_build_groups_rejects_an_unknown_algorithm() -> None:
 
 def test_domain_decomposition_parameters_accept_both_morton_variants() -> None:
     for algorithm in ("morton", "morton_incremental"):
-        params = DomainDecompositionParameters(
-            enabled=True, grouping_algorithm=algorithm
+        params = DomainDecompositionParameters.from_dict(
+            {"enabled": True, "grouping_algorithm": algorithm}
         )
         assert params.grouping_algorithm == algorithm
 
-    with pytest.raises(ValueError, match="not implemented"):
-        DomainDecompositionParameters(enabled=True, grouping_algorithm="nope")
+    with pytest.raises(ValueError):
+        DomainDecompositionParameters.from_dict(
+            {"enabled": True, "grouping_algorithm": "nope"}
+        )
 
 
 def test_update_decomposition_rebuilds_if_inputs_change() -> None:
