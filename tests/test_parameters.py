@@ -2,6 +2,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import ClassVar
 
+import numpy as np
 import pytest
 
 import pyc2ray.constants as c
@@ -126,6 +127,28 @@ class TestYmlParameters:
     def test_domain_decomposition_rejects_non_positive_max_num_sources_per_group(self):
         with pytest.raises(ValueError):
             DomainDecompositionParameters.from_dict({"max_num_sources_per_group": -1})
+
+    @pytest.mark.parametrize("value", [2.5, 10.0, True])
+    def test_domain_decomposition_rejects_non_integer_max_num_sources_per_group(
+        self, value
+    ):
+        with pytest.raises(ValueError):
+            DomainDecompositionParameters.from_dict(
+                {"max_num_sources_per_group": value}
+            )
+
+    @pytest.mark.parametrize("value", [2.5, 10.0, True])
+    def test_domain_decomposition_rejects_non_integer_morton_bits(self, value):
+        with pytest.raises(ValueError):
+            DomainDecompositionParameters.from_dict({"morton_bits": value})
+
+    def test_domain_decomposition_accepts_numpy_integers(self):
+        obj = DomainDecompositionParameters.from_dict(
+            {"max_num_sources_per_group": np.int64(12), "morton_bits": np.int32(8)}
+        )
+
+        assert obj.max_num_sources_per_group == 12
+        assert obj.morton_bits == 8
 
     def test_domain_decomposition_rejects_non_positive_morton_bits(self):
         with pytest.raises(ValueError):
