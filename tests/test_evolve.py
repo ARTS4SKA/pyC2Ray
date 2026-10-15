@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import astropy.constants as cst
@@ -196,3 +197,69 @@ def test_evolve3D_yes_gpu_domain_decomposition_root_rank(
 
     mock_c2ray.chemistry.global_pass.assert_not_called()
     mock_c2ray.raytracing.do_all_sources.assert_not_called()
+
+
+class _RootBroadcastComm:
+    """Stand-in for MPI.COMM_WORLD as seen by a non-root rank.
+
+    In a single process a real broadcast from rank 0 would leave a non-root receive
+    buffer untouched, so this fake plays the part of rank 0: every Bcast fills the buffer
+    with `value`, and convergence is reached after two iterations.
+    """
+
+    def __init__(self, value: float) -> None:
+        self.value = value
+        self.num_iterations = 0
+
+    def Allreduce(self, sendbuf, recvbuf, op=None) -> None:
+        pass
+
+    def Bcast(self, buf, root: int = 0) -> None:
+        buf[0].fill(self.value)
+
+    def bcast(self, obj, root: int = 0) -> bool:
+        """Object broadcast, used by evolve only for rank 0's convergence flag."""
+        self.num_iterations += 1
+        return self.num_iterations == 2
+
+
+def test_evolve3D_yes_gpu_domain_decomposition_non_root_rank(
+    mock_asora_domain_decomposition,
+):
+    mock_asora = mock_asora_domain_decomposition
+
+    # Record the average fraction each raytracing call receives, copied because the
+    # buffers are reused across groups and iterations.
+    raytraced_local_xh_av: list[np.ndarray] = []
+    mock_asora.do_all_sources.side_effect = lambda *args: raytraced_local_xh_av.append(
+        np.array(args[3])
+    )
+
+    # Only the evolve module sees the fake: the decomposition handler keeps the real
+    # communicator, so in this single process it assigns every group to this rank.
+    fake_mpi = SimpleNamespace(
+        COMM_WORLD=_RootBroadcastComm(0.3),
+        DOUBLE=MPI.DOUBLE,
+        IN_PLACE=MPI.IN_PLACE,
+        SUM=MPI.SUM,
+    )
+    with patch("pyc2ray.evolve.MPI", fake_mpi):
+        call_evolve3D(
+            use_gpu=True,
+            rank=1,
+            domain_decomposition_params=DomainDecompositionParameters(
+                enabled=True, grouping_algorithm="morton", max_num_sources_per_group=4
+            ),
+        )
+
+    # Non-root ranks only allocate receive buffers for the average fraction, so they
+    # must never be read before rank 0's broadcast fills them: the first iteration
+    # raytraces the initial fraction, the second the broadcast one.
+    num_groups = len(raytraced_local_xh_av) // 2
+    assert num_groups > 0 and len(raytraced_local_xh_av) == 2 * num_groups
+    for local_xh_av in raytraced_local_xh_av[:num_groups]:
+        # The initial ionized fraction set in call_evolve3D.
+        np.testing.assert_array_equal(local_xh_av, 1.2e-3)
+    for local_xh_av in raytraced_local_xh_av[num_groups:]:
+        # The value broadcast by the fake rank 0.
+        np.testing.assert_array_equal(local_xh_av, 0.3)
