@@ -4,6 +4,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass, fields
+from numbers import Integral
 from typing import Any, ClassVar, TypeVar
 
 import yaml
@@ -28,6 +29,13 @@ yaml.SafeLoader.add_implicit_resolver(
 PathType = str | os.PathLike
 OptFloat = float | None
 OptStr = str | None
+
+
+def _is_integer(value: Any) -> bool:
+    """Whether value is an integer, NumPy integers included but booleans excluded."""
+    return isinstance(value, Integral) and not isinstance(value, bool)
+
+
 ParametersType = TypeVar("ParametersType", bound="YmlParameters")
 
 logger = logging.getLogger(__name__)
@@ -151,14 +159,20 @@ class DomainDecompositionParameters(YmlParameters):
                 f"Grouping algorithm {self.grouping_algorithm} not implemented. "
                 "The supported algorithms are 'morton' and 'morton_incremental'."
             )
-        if self.max_num_sources_per_group <= 0:
+        if (
+            not _is_integer(self.max_num_sources_per_group)
+            or self.max_num_sources_per_group <= 0
+        ):
             raise ValueError(
                 f"max_num_sources_per_group must be a positive integer. "
                 f"Provided value is {self.max_num_sources_per_group}."
             )
         from pyc2ray.domain.morton_grouping import MAX_MORTON_BITS
 
-        if not 0 < self.morton_bits <= MAX_MORTON_BITS:
+        if (
+            not _is_integer(self.morton_bits)
+            or not 0 < self.morton_bits <= MAX_MORTON_BITS
+        ):
             raise ValueError(
                 f"morton_bits must be an integer in [1, {MAX_MORTON_BITS}]. "
                 f"Provided value is {self.morton_bits}."
