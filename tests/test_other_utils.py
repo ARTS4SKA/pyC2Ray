@@ -3,7 +3,7 @@ import pytest
 from pyc2ray.utils.other_utils import display_seconds, distribute_jobs
 
 
-def test_display_seconds():
+def test_display_seconds() -> None:
     assert display_seconds(0) == "0:00:00"
     assert display_seconds(1) == "0:00:01"
     assert display_seconds(60) == "0:01:00"
@@ -13,7 +13,7 @@ def test_display_seconds():
 
 @pytest.mark.parametrize("jobs", [10, 100, 1000])
 @pytest.mark.parametrize("procs", [7, 13, 29])
-def test_distribute_jobs(jobs: int, procs: int):
+def test_distribute_jobs(jobs: int, procs: int) -> None:
     tot = 0
     prev = 0
     expected = jobs // procs
