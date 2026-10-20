@@ -6,10 +6,14 @@ for the constants. This can be changed to the
 astropy values once consistency between the two codes has been established
 """
 
+from pathlib import Path
 from typing import Final
 
 from astropy import constants as cst
 from astropy import units as u
+
+# Tables directory
+TABLES_DIR: Final[Path] = Path(__file__).parent / "tables"
 
 # Year in seconds
 year2s: Final[float] = (1 * u.yr).cgs.value
