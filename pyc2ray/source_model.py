@@ -12,7 +12,7 @@ from scipy.spatial import cKDTree
 from scipy.stats import binned_statistic_dd
 from sklearn.neighbors import KNeighborsRegressor
 
-import pyc2ray as pc2r
+import pyc2ray.constants as c
 
 FloatLike = float | npt.NDArray[np.float64]
 
@@ -210,12 +210,12 @@ class EscapeFraction:
             self.get = self.fesc_Muv
         elif self.model == "thesan":
             # path to the tables
-            path_tab = pc2r.__path__[0] + "/tables/fesc_thesan/"
+            path_tab = c.TABLES_DIR / "fesc_thesan"
 
             # get fesc tables and bins for interpolation
-            tabs = np.loadtxt(path_tab + "fesc_thesan_tables.txt")
-            self.redshift_tab = np.loadtxt(path_tab + "redshifts.txt")
-            mass_tab = np.loadtxt(path_tab + "mass_bin.txt")
+            tabs = np.loadtxt(path_tab / "fesc_thesan_tables.txt")
+            self.redshift_tab = np.loadtxt(path_tab / "redshifts.txt")
+            mass_tab = np.loadtxt(path_tab / "mass_bin.txt")
             self.mass_mid = 0.5 * (mass_tab[1:] + mass_tab[:-1])
 
             # use a 2D interpolation based on the redshift and mass bins
@@ -366,7 +366,7 @@ class SPICE_scatterSFR:
         - model: string of the model for the scatter in SFR
         """
         self.model = model
-        path_model = pc2r.__path__[0] + "/tables/SPICE_scatter_SFR/"
+        path_model = c.TABLES_DIR / "SPICE_scatter_SFR"
         self.redshift_fit, self.mass_fit = np.loadtxt(
             path_model + "mvir_z_bins.txt", unpack=True
         )

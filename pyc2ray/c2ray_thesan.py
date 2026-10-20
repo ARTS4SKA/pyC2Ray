@@ -5,7 +5,6 @@ import h5py
 import numpy as np
 import tools21cm as t2c
 
-import pyc2ray as pc2r
 import pyc2ray.constants as c
 from pyc2ray.utils.sourceutils import FloatArray, IntArray, PathType
 
@@ -46,7 +45,7 @@ class C2Ray_Thesan(C2Ray):
         logger.info('Running: "C2Ray for %d Mpc/h volume"', self.boxsize)
 
         # path to tables
-        path_data = pc2r.__path__[0] + "/tables/dotN_thesan/"
+        path_data = c.TABLES_DIR / "dotN_thesan"
 
         # init the tables
         self.pdf_data = np.load("%spdf_dotN_thesan.npy" % path_data)
