@@ -10,18 +10,17 @@ import numpy.typing as npt
 import scipy
 from scipy.integrate import quad, quad_vec
 
-import pyc2ray as pc2r
+import pyc2ray.constants as c
 
 # For detailed comparisons with C2Ray, we use the same exact value for the constants
 # This can be changed to the astropy values once consistency between
 # the two codes has been established
 h_over_k = (cst.h / cst.k_B).cgs.value
 pi = np.pi
-c = cst.c.cgs.value
-two_pi_over_c_square = 2.0 * pi / (c * c)
+c_ = cst.c.cgs.value
+two_pi_over_c_square = 2.0 * pi / (c_ * c_)
 hplanck = cst.h.cgs.value
 ion_freq_HI = (cst.Ryd * cst.c).cgs.value
-sigma_0 = 6.3e-18
 
 __all__ = ["BlackBodyBase", "BlackBodySource", "YggdrasilModel"]
 
@@ -299,7 +298,7 @@ class BlackBodySource_Multifreq(BlackBodyBase):
 
         self.freqs_tab, self.pl_index_HI, self.pl_index_HeI, self.pl_index_HeII = (
             np.loadtxt(
-                pc2r.__path__[0] + "/tables/multifreq/Verner1996_spectidx.txt",
+                c.TABLES_DIR / "multifreq" / "Verner1996_spectidx.txt",
                 unpack=True,
             )
         )
