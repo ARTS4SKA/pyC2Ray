@@ -162,7 +162,7 @@ def bin_sources(srcpos_mpc, mstar_msun, boxsize, meshsize):
     )
 
     # get a list of the source positon and mass
-    srcpos = np.argwhere(binned_mass > 0)
+    srcpos = np.argwhere(binned_mass > 0).astype(np.int32)
     srcmstar = binned_mass[binned_mass > 0]
 
     return srcpos, srcmstar

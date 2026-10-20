@@ -7,7 +7,7 @@ only the attributes used by the methods under test are set.
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, TypeAlias
+from typing import Any
 from unittest import mock
 
 import h5py
@@ -27,17 +27,12 @@ from pyc2ray.parameters import (
 from pyc2ray.utils import bin_sources
 from pyc2ray.utils.sourceutils import FloatArray
 
-TestCase: TypeAlias = tuple[str, str, str, str]
-Haloes: TypeAlias = tuple[FloatArray, FloatArray]
-FstarFactory: TypeAlias = Callable[..., C2Ray_fstar]
-
 H = 0.7
 S_STAR_REF = 1e48
 BOXSIZE = 10.0  # Mpc/h
 MESHSIZE = 8
 NUM_HALOES = 64
 REDSHIFT = 8.0
-MEAN_MOLECULAR = 1.22
 DT = 10.0 * 1e6 * c.year2s  # 10 Myr in s
 TS = 50.0 * 1e6 * c.year2s  # patched source lifetime
 
@@ -47,7 +42,7 @@ SOURCE_DEFAULTS: dict[str, Any] = {
     "fesc_model": "constant",
     "accretion_model": "constant",
     "bursty_sfr": "no",
-    "Nion": 2000.0,
+    "num_ion": 2000,
     "f0": 0.02,
     "Mt": 1e8,
     "Mp": 1e10,
@@ -70,74 +65,39 @@ SOURCE_DEFAULTS: dict[str, Any] = {
     "seed": 918273645,
 }
 
-# =======
-# Helpers
-# =======
+
+FstarFactory = Callable[..., C2Ray_fstar]
 
 
-def make_haloes() -> Haloes:
-    """Synthetic halo catalogue: positions [Mpc] inside the box and masses [Msun]"""
-    rng = np.random.default_rng(1234)
-    pos = rng.uniform(0.0, BOXSIZE / H, size=(NUM_HALOES, 3))
-    mass = 10 ** rng.uniform(8.0, 12.0, size=NUM_HALOES)
-    return pos, mass
-
-
-def build_fstar(path: Path = Path("."), **overrides: Any) -> C2Ray_fstar:
+@pytest.fixture(scope="module")
+def make_fstar() -> FstarFactory:
     """Create a C2Ray_fstar without running the C2Ray constructor"""
-    sim: Any = C2Ray_fstar.__new__(C2Ray_fstar)
-    sim.parameters = SimpleNamespace(
-        sources=SourcesParameters.from_dict(SOURCE_DEFAULTS | overrides),
-        grid=GridParameters.from_dict(
-            {
-                "boxsize": BOXSIZE,
-                "meshsize": MESHSIZE,
-                "gpu": False,
-                "mpi": False,
-                "resume": False,
-            }
-        ),
-        io=InputOutputParameters.from_dict(
-            {
-                "results_dir": path,
-                "sources_dir": path,
-                "density_dir": path,
-            }
-        ),
-        material=MaterialParameters.from_dict({}),
-        cosmology=CosmologyParameters.from_dict({"h": H}),
-    )
-    sim._cosmology_init()
-    return sim
 
-
-# TODO: refactor once this is not needed outside
-def run_test_case(case: TestCase) -> dict[str, Any]:
-    fstar_model, fesc_model, accretion_model, bursty_sfr = case
-    sim = build_fstar(
-        fstar_model=fstar_model,
-        fesc_model=fesc_model.lower(),
-        accretion_model=accretion_model.lower(),
-        bursty_sfr=bursty_sfr.lower(),
-    )
-    haloes = make_haloes()
-    sim.read_haloes = lambda *_: haloes  # type: ignore[method-assign,assignment]
-
-    sim._sources_init()
-    srcpos, normflux = sim.ionizing_flux("haloes.txt", z=REDSHIFT, dt=DT)
-
-    return {
-        "srcpos": srcpos,
-        "normflux": normflux,
-        "tot_phots": np.float64(sim.tot_phots),
-        "perc_switchon": np.float64(sim.perc_switchon),
-    }
-
-
-@pytest.fixture
-def make_fstar(tmp_path: Path) -> FstarFactory:
-    def factory(**overrides: Any) -> C2Ray_fstar:
-        return build_fstar(tmp_path, **overrides)
+    def factory(path: Path = Path("."), **overrides: Any) -> C2Ray_fstar:
+        sim: Any = C2Ray_fstar.__new__(C2Ray_fstar)
+        sim.parameters = SimpleNamespace(
+            sources=SourcesParameters.from_dict(SOURCE_DEFAULTS | overrides),
+            grid=GridParameters.from_dict(
+                {
+                    "boxsize": BOXSIZE,
+                    "meshsize": MESHSIZE,
+                    "gpu": False,
+                    "mpi": False,
+                    "resume": False,
+                }
+            ),
+            io=InputOutputParameters.from_dict(
+                {
+                    "results_dir": path,
+                    "sources_dir": path,
+                    "density_dir": path,
+                }
+            ),
+            material=MaterialParameters.from_dict({}),
+            cosmology=CosmologyParameters.from_dict({"h": H}),
+        )
+        sim._cosmology_init()
+        return sim
 
     return factory
 
@@ -170,9 +130,7 @@ class TestSourcesInit:
         sim._sources_init()
 
         patched_models.fstar.assert_called_once_with(
-            sim.parameters.sources.fstar,
-            cosmo=sim.cosmology,
-            rng=mock.ANY,
+            sim.sp.fstar, cosmo=sim.cosmology, rng=mock.ANY
         )
         assert sim.fstar_relation is patched_models.fstar.return_value
 
@@ -186,7 +144,7 @@ class TestSourcesInit:
         sim = make_fstar(fesc_model=fesc_model)
         sim._sources_init()
 
-        patched_models.fesc.assert_called_once_with(sim.parameters.sources.fesc)
+        patched_models.fesc.assert_called_once_with(sim.sp.fesc)
         assert sim.fesc_relation is patched_models.fesc.return_value
 
     @pytest.mark.parametrize("bursty_sfr", ["instant", "integrate"])
@@ -200,9 +158,7 @@ class TestSourcesInit:
         sim._sources_init()
 
         patched_models.bursty.assert_called_once_with(
-            sim.parameters.sources.accretion,
-            cosmo=sim.cosmology,
-            rng=mock.ANY,
+            sim.sp.accretion, cosmo=sim.cosmology, rng=mock.ANY
         )
         assert sim.bursty_relation is patched_models.bursty.return_value
 
@@ -217,14 +173,23 @@ class TestSourcesInit:
         expected = np.random.default_rng(SOURCE_DEFAULTS["seed"])
         assert rng.random() == expected.random()
 
+    @pytest.mark.parametrize("accretion_model", ["constant", "exp"])
     def test_no_bursty_model(
-        self, make_fstar: FstarFactory, patched_models: SimpleNamespace
+        self,
+        make_fstar: FstarFactory,
+        patched_models: SimpleNamespace,
+        accretion_model: str,
     ) -> None:
-        sim = make_fstar(bursty_sfr="no")
+        sim = make_fstar(accretion_model=accretion_model, bursty_sfr="no")
         sim._sources_init()
 
         patched_models.bursty.assert_not_called()
         assert not hasattr(sim, "bursty_relation")
+
+    def test_bursty_integrate_not_implemented(self, make_fstar: FstarFactory) -> None:
+        sim = make_fstar(accretion_model="exp", bursty_sfr="integrate")
+        with pytest.raises(ValueError, match="not yet implemented"):
+            sim._sources_init()
 
 
 # ======================================================================
@@ -232,9 +197,16 @@ class TestSourcesInit:
 # ======================================================================
 
 
-@pytest.fixture(scope="class")
+Haloes = tuple[FloatArray, FloatArray]
+
+
+@pytest.fixture(scope="module")
 def haloes() -> Haloes:
-    return make_haloes()
+    """Synthetic halo catalogue: positions [Mpc] inside the box and masses [Msun]"""
+    rng = np.random.default_rng(1234)
+    pos = rng.uniform(0.0, BOXSIZE / H, size=(NUM_HALOES, 3))
+    mass = 10 ** rng.uniform(8.0, 12.0, size=NUM_HALOES)
+    return pos, mass
 
 
 @pytest.fixture
@@ -261,7 +233,7 @@ def mock_bin_sources(monkeypatch: pytest.MonkeyPatch) -> mock.MagicMock:
 
 
 def expected_normflux(srcmstar: FloatArray, ts: float) -> FloatArray:
-    return c.msun2g * SOURCE_DEFAULTS["Nion"] * srcmstar / (c.m_p * ts * S_STAR_REF)
+    return c.msun2g * SOURCE_DEFAULTS["num_ion"] * srcmstar / (c.m_p * ts * S_STAR_REF)
 
 
 class TestLifetime:
@@ -317,8 +289,16 @@ class TestFstarDispatch:
         assert kwargs.keys() == {"Mhalo", "z", "alpha_h", "a_s", "b_s"}
         np.testing.assert_array_equal(kwargs["Mhalo"], haloes[1])
         assert kwargs["z"] == REDSHIFT
+        assert kwargs["alpha_h"] == SOURCE_DEFAULTS["alpha_h"]
         assert kwargs["a_s"] == SOURCE_DEFAULTS["a_s"]
         assert kwargs["b_s"] == SOURCE_DEFAULTS["b_s"]
+
+    def test_muv_requires_exp_accretion(
+        self, make_fstar_with_haloes: FstarFactory
+    ) -> None:
+        sim = make_fstar_with_haloes(fstar_model="Muv", accretion_model="constant")
+        with pytest.raises(AssertionError):
+            sim.ionizing_flux("haloes.txt", z=REDSHIFT, dt=DT)
 
     @pytest.mark.parametrize("fstar_model", ["fgamma", "dpl"])
     def test_non_muv_model(
@@ -338,30 +318,17 @@ class TestFstarDispatch:
 
 # Default is fstar_model="fgamma"
 class TestFescDispatch:
-    def test_fesc_constant(
-        self,
-        make_fstar_with_haloes: FstarFactory,
-        haloes: Haloes,
-        mock_bin_sources: mock.MagicMock,
+    @pytest.mark.parametrize("fesc_model", ["constant", "power"])
+    def test_fesc_halo_mass(
+        self, make_fstar_with_haloes: FstarFactory, haloes: Haloes, fesc_model: str
     ) -> None:
-        sim = make_fstar_with_haloes(fesc_model="constant")
-        with mock.patch.object(sim.fesc_relation, "get") as get:
-            sim.ionizing_flux("haloes.txt", z=REDSHIFT, dt=DT)
-
-        get.assert_not_called()
-        fstar = sim.fstar_relation.get(Mhalo=haloes[1])
-        mstar = mock_bin_sources.call_args.kwargs["mstar_msun"]
-        np.testing.assert_allclose(mstar, sim.fesc_relation.f0_esc * fstar * haloes[1])
-
-    def test_fesc_power(
-        self, make_fstar_with_haloes: FstarFactory, haloes: Haloes
-    ) -> None:
-        sim = make_fstar_with_haloes(fesc_model="power")
+        sim = make_fstar_with_haloes(fesc_model=fesc_model)
         with mock.patch.object(
             sim.fesc_relation, "get", wraps=sim.fesc_relation.get
         ) as get:
             sim.ionizing_flux("haloes.txt", z=REDSHIFT, dt=DT)
 
+        get.assert_called_once()
         kwargs = get.call_args.kwargs
         assert kwargs.keys() == {"Mhalo"}
         np.testing.assert_array_equal(kwargs["Mhalo"], haloes[1])
@@ -410,11 +377,11 @@ class TestBurstySFR:
             bursty_sfr="instant", fesc_model="power", accretion_model="exp"
         )
         with mock.patch.object(
-            sim.bursty_relation, "get_bursty", return_value=self.MASK
-        ) as get_bursty:
+            sim.bursty_relation, "get", return_value=self.MASK
+        ) as get:
             sim.ionizing_flux("haloes.txt", z=REDSHIFT, dt=DT)
 
-        kwargs = get_bursty.call_args.kwargs
+        kwargs = get.call_args.kwargs
         np.testing.assert_array_equal(kwargs["mass"], haloes[1])
         assert kwargs["z"] == REDSHIFT
         assert sim.perc_switchon == pytest.approx(100 * self.MASK.mean())
@@ -437,9 +404,7 @@ class TestBurstySFR:
         sim = make_fstar_with_haloes(
             bursty_sfr="instant", fesc_model="constant", accretion_model="exp"
         )
-        with mock.patch.object(
-            sim.bursty_relation, "get_bursty", return_value=self.MASK
-        ):
+        with mock.patch.object(sim.bursty_relation, "get", return_value=self.MASK):
             sim.ionizing_flux("haloes.txt", z=REDSHIFT, dt=DT)
 
         fstar = sim.fstar_relation.get(Mhalo=haloes[1])
@@ -453,7 +418,7 @@ class TestBurstySFR:
     ) -> None:
         sim = make_fstar_with_haloes(bursty_sfr="instant", accretion_model="exp")
         with mock.patch.object(
-            sim.bursty_relation, "get_bursty", return_value=np.zeros(NUM_HALOES, bool)
+            sim.bursty_relation, "get", return_value=np.zeros(NUM_HALOES, bool)
         ):
             srcpos, normflux = sim.ionizing_flux("haloes.txt", z=REDSHIFT, dt=DT)
 
@@ -465,13 +430,15 @@ class TestBurstySFR:
         assert sim.tot_phots == 0
         assert sim.perc_switchon == 0.0
 
+    @pytest.mark.parametrize("accretion_model", ["constant", "exp"])
     def test_bursty_no(
         self,
         make_fstar_with_haloes: FstarFactory,
         haloes: Haloes,
         mock_bin_sources: mock.MagicMock,
+        accretion_model: str,
     ) -> None:
-        sim = make_fstar_with_haloes(bursty_sfr="no", accretion_model="exp")
+        sim = make_fstar_with_haloes(bursty_sfr="no", accretion_model=accretion_model)
         sim.ionizing_flux("haloes.txt", z=REDSHIFT, dt=DT)
 
         assert sim.perc_switchon == 100.0
@@ -520,10 +487,74 @@ class TestFlux:
 
         assert sim.tot_phots == pytest.approx(np.sum(normflux * DT * S_STAR_REF))
 
+    def test_srcpos_dtype(self, make_fstar_with_haloes: FstarFactory) -> None:
+        sim = make_fstar_with_haloes()
+        srcpos, _ = sim.ionizing_flux("haloes.txt", z=REDSHIFT, dt=DT)
+
+        assert srcpos.dtype == np.int32
+
+
+class TestSeed:
+    def run(self, make_fstar_with_haloes: FstarFactory, seed: int | None) -> FloatArray:
+        sim = make_fstar_with_haloes(
+            fstar_model="Muv", accretion_model="exp", seed=seed
+        )
+        _, normflux = sim.ionizing_flux("haloes.txt", z=REDSHIFT, dt=DT)
+        return normflux
+
+    def test_same_seed_same_sources(self, make_fstar_with_haloes: FstarFactory) -> None:
+        a = self.run(make_fstar_with_haloes, SOURCE_DEFAULTS["seed"])
+        b = self.run(make_fstar_with_haloes, SOURCE_DEFAULTS["seed"])
+        np.testing.assert_array_equal(a, b)
+
+    def test_no_seed_different_sources(
+        self, make_fstar_with_haloes: FstarFactory
+    ) -> None:
+        a = self.run(make_fstar_with_haloes, None)
+        b = self.run(make_fstar_with_haloes, None)
+        assert not np.array_equal(a, b)
+
+
+EMPTY_HALOES: Haloes = (np.empty((0, 3)), np.empty((0,)))
+
+
+class TestNoHaloes:
+    @pytest.fixture
+    def make_fstar_no_haloes(
+        self, make_fstar: FstarFactory, monkeypatch: pytest.MonkeyPatch
+    ) -> FstarFactory:
+        def factory(**overrides: Any) -> C2Ray_fstar:
+            sim = make_fstar(**overrides)
+            monkeypatch.setattr(sim, "read_haloes", lambda *_: EMPTY_HALOES)
+            sim._sources_init()
+            return sim
+
+        return factory
+
+    def test_no_bursty(self, make_fstar_no_haloes: FstarFactory) -> None:
+        sim = make_fstar_no_haloes()
+        srcpos, normflux = sim.ionizing_flux("haloes.txt", z=REDSHIFT, dt=DT)
+
+        assert srcpos.shape == (0, 3)
+        assert normflux.shape == (0,)
+        assert sim.tot_phots == 0
+        assert sim.perc_switchon == 0.0
+
+    def test_bursty(self, make_fstar_no_haloes: FstarFactory) -> None:
+        sim = make_fstar_no_haloes(accretion_model="exp", bursty_sfr="instant")
+        srcpos, normflux = sim.ionizing_flux("haloes.txt", z=REDSHIFT, dt=DT)
+
+        assert srcpos.shape == (0, 3)
+        assert normflux.shape == (0,)
+        assert sim.tot_phots == 0
+        assert sim.perc_switchon == 0.0
+
 
 # ======================================================================
 # ionizing_flux: expected values with the real source models
 # ======================================================================
+
+TestCase = tuple[str, str, str, str]
 
 # (fstar_model, fesc_model, accretion_model, bursty_sfr)
 TEST_CASES: list[TestCase] = [
@@ -534,6 +565,11 @@ TEST_CASES: list[TestCase] = [
     ("Muv", "power", "EXP", "no"),
     ("dpl", "constant", "EXP", "instant"),
     ("dpl", "power", "EXP", "instant"),
+    ("fgamma", "constant", "EXP", "no"),
+    ("dpl", "constant", "constant", "no"),
+    ("Muv", "constant", "EXP", "instant"),
+    ("dpl", "power_obs", "EXP", "instant"),
+    ("dpl", "thesan", "EXP", "instant"),
 ]
 
 
@@ -549,16 +585,42 @@ def case_id(case: tuple[str, ...]) -> str:
 
 @pytest.mark.parametrize("case", TEST_CASES, ids=case_id)
 def test_expected_ionizing_flux(
-    expected_ionizing_flux: dict[str, np.ndarray], case: TestCase
+    make_fstar: FstarFactory,
+    expected_ionizing_flux: dict[str, np.ndarray],
+    haloes: Haloes,
+    monkeypatch: pytest.MonkeyPatch,
+    case: TestCase,
 ) -> None:
-    result = run_test_case(case)
 
-    for key, value in result.items():
-        expected = expected_ionizing_flux[f"{case_id(case)}/{key}"]
-        if key == "srcpos":
-            np.testing.assert_array_equal(value, expected)
-        else:
-            np.testing.assert_allclose(value, expected, rtol=1e-12)
+    fstar_model, fesc_model, accretion_model, bursty_sfr = case
+    sim = make_fstar(
+        fstar_model=fstar_model,
+        fesc_model=fesc_model,
+        accretion_model=accretion_model.lower(),
+        bursty_sfr=bursty_sfr,
+    )
+    monkeypatch.setattr(sim, "read_haloes", lambda *_: haloes)
+    sim._sources_init()
+
+    srcpos, normflux = sim.ionizing_flux("haloes.txt", z=REDSHIFT, dt=DT)
+
+    cid = case_id(case)
+
+    # Source positions
+    expected_srcpos = expected_ionizing_flux[f"{cid}/srcpos"]
+    np.testing.assert_array_equal(srcpos, expected_srcpos)
+
+    # Normalized flux
+    expected_normflux = expected_ionizing_flux[f"{cid}/normflux"]
+    np.testing.assert_allclose(normflux, expected_normflux, rtol=1e-12)
+
+    # Total photons
+    expected_tot_phots = expected_ionizing_flux[f"{cid}/tot_phots"]
+    assert sim.tot_phots == pytest.approx(expected_tot_phots, rel=1e-12)
+
+    # Percentage of sources switched on
+    expected_perc_switchon = expected_ionizing_flux[f"{cid}/perc_switchon"]
+    assert sim.perc_switchon == pytest.approx(expected_perc_switchon, rel=1e-12)
 
 
 # ======================================================================
@@ -670,9 +732,9 @@ def expected_ndens(sim: C2Ray_fstar, overd: FloatArray) -> FloatArray:
 
 class TestReadDensity:
     def test_npy(self, make_fstar: FstarFactory, tmp_path: Path) -> None:
-        sim = make_fstar()
+        sim = make_fstar(tmp_path)
         rho = np.random.default_rng(0).uniform(0.5, 2.0, size=sim.shape)
-        np.save(tmp_path / "dens.npy", rho)
+        np.save(sim.parameters.io.results_dir / "dens.npy", rho)
 
         sim.read_density("dens.npy", z=REDSHIFT)
 
@@ -696,10 +758,10 @@ class TestReadDensity:
         np.testing.assert_allclose(sim.ndens, expected_ndens(sim, overd))
 
     def test_density_floor(self, make_fstar: FstarFactory, tmp_path: Path) -> None:
-        sim = make_fstar()
+        sim = make_fstar(tmp_path)
         rho = np.ones(sim.shape)
         rho[0, 0, 0] = 0.0
-        np.save(tmp_path / "dens.npy", rho)
+        np.save(sim.parameters.io.results_dir / "dens.npy", rho)
 
         sim.read_density("dens.npy", z=REDSHIFT)
 
