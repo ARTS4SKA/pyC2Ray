@@ -27,9 +27,6 @@ test/debug/*png
 .ipynb_checkpoints/
 **/__pycache__/
 
-# Ignore SPICE tables (TODO: ask autorization)
-pyc2ray/tables/SPICE_scatter_SFR/*txt
-
 # Ignore docs test results folder
 **/test_results/
 

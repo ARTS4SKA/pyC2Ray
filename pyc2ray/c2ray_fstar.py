@@ -7,12 +7,11 @@ import numpy as np
 import tools21cm as t2c
 
 import pyc2ray.constants as c
-
-from .c2ray_base import C2Ray
-from .source_model import BurstySFR, EscapeFraction, StellarToHaloRelation
-from .utils import bin_sources
-from .utils.other_utils import find_bins, get_redshifts_from_output
-from .utils.sourceutils import FloatArray, IntArray, PathType
+from pyc2ray.c2ray_base import C2Ray
+from pyc2ray.source_model import BurstySFR, EscapeFraction, StellarToHaloRelation
+from pyc2ray.utils import bin_sources
+from pyc2ray.utils.other_utils import find_bins, get_redshifts_from_output
+from pyc2ray.utils.sourceutils import FloatArray, IntArray, PathType
 
 __all__ = ["C2Ray_fstar"]
 logger = logging.getLogger(__name__)
@@ -99,18 +98,6 @@ class C2Ray_fstar(C2Ray):
         elif self.fesc_kind == "power_obs":
             # here the escaping fraction is fitted to data that uses stellar mass
             fesc = self.fesc_model.get(Mhalo=fstar * srcmass_msun)
-        elif self.fesc_kind == "Gelli2024":
-            # mean quantities
-            mean_fstar = self.fstar_model.stellar_to_halo_fraction(Mhalo=srcmass_msun)
-            mean_Muv = self.fstar_model.UV_magnitude(
-                fstar=mean_fstar, mdot=srcmass_msun / ts
-            )
-
-            # absolute magnitude with scatter
-            Muv = self.fstar_model.UV_magnitude(fstar=fstar, mdot=srcmass_msun / ts)
-
-            # magnitude dependent escaping fraction
-            fesc = self.fesc_model.get(delta_Muv=mean_Muv - Muv)
         elif self.fesc_kind == "thesan":
             fesc = self.fesc_model.get(Mhalo=srcmass_msun, z=z)
 
@@ -142,43 +129,25 @@ class C2Ray_fstar(C2Ray):
 
         # if there are sources shitched on then calculate flux
         if nr_switchon > 0:
-            if "spice" in self.fstar_kind:
-                # get star formation rate from SPICE tables
-                sfr_spice = self.fstar_model.sfr_SPICE(Mhalo=srcmass_msun, z=z)
+            # get stellar mass
+            mstar_msun = fesc * fstar * srcmass_msun
 
-                # sum together masses into a mesh grid and get a list of the source positon and mass
-                srcpos, sfr = bin_sources(
-                    srcpos_mpc=srcpos_mpc,
-                    mstar_msun=sfr_spice * fesc,
-                    boxsize=self.boxsize / self.cosmology.h,
-                    meshsize=self.N,
-                )
+            # sum together masses into a mesh grid and get a list of the source positon and mass
+            srcpos, srcmstar = bin_sources(
+                srcpos_mpc=srcpos_mpc,
+                mstar_msun=mstar_msun,
+                boxsize=self.boxsize / self.cosmology.h,
+                meshsize=self.N,
+            )
 
-                # normalize flux
-                assert self.sources_params.Nion is not None
-                normflux = (
-                    c.msun2g * self.sources_params.Nion * sfr / (c.m_p * S_star_ref)
-                )
-            else:
-                # get stellar mass
-                mstar_msun = fesc * fstar * srcmass_msun
-
-                # sum together masses into a mesh grid and get a list of the source positon and mass
-                srcpos, srcmstar = bin_sources(
-                    srcpos_mpc=srcpos_mpc,
-                    mstar_msun=mstar_msun,
-                    boxsize=self.boxsize / self.cosmology.h,
-                    meshsize=self.N,
-                )
-
-                # normalize flux
-                assert self.sources_params.Nion is not None
-                normflux = (
-                    c.msun2g
-                    * self.sources_params.Nion
-                    * srcmstar
-                    / (c.m_p * ts * S_star_ref)
-                )
+            # normalize flux
+            assert self.sources_params.Nion is not None
+            normflux = (
+                c.msun2g
+                * self.sources_params.Nion
+                * srcmstar
+                / (c.m_p * ts * S_star_ref)
+            )
 
             # calculate total number of ionizing photons
             self.tot_phots = np.sum(normflux * dt * S_star_ref)
@@ -196,26 +165,15 @@ class C2Ray_fstar(C2Ray):
                 self.tot_phots,
                 ts / (1e6 * c.year2s),
             )
-            if "spice" in self.fstar_kind:
-                logger.info(
-                    " min, max SFR (grid) : %.3e  %.3e [Msun/yr] and"
-                    " min, mean, max number of ionising sources : %.3e  %.3e  %.3e [1/s]",
-                    sfr.min() / c.year2s,
-                    sfr.max() / c.year2s,
-                    normflux.min() * S_star_ref,
-                    normflux.mean() * S_star_ref,
-                    normflux.max() * S_star_ref,
-                )
-            else:
-                logger.info(
-                    " min, max stellar (grid) mass : %.3e  %.3e [Msun] and"
-                    " min, mean, max number of ionising sources : %.3e  %.3e  %.3e [1/s]",
-                    srcmstar.min(),
-                    srcmstar.max(),
-                    normflux.min() * S_star_ref,
-                    normflux.mean() * S_star_ref,
-                    normflux.max() * S_star_ref,
-                )
+            logger.info(
+                " min, max stellar (grid) mass : %.3e  %.3e [Msun] and"
+                " min, mean, max number of ionising sources : %.3e  %.3e  %.3e [1/s]",
+                srcmstar.min(),
+                srcmstar.max(),
+                normflux.min() * S_star_ref,
+                normflux.mean() * S_star_ref,
+                normflux.max() * S_star_ref,
+            )
 
             return srcpos, normflux
 
@@ -230,7 +188,7 @@ class C2Ray_fstar(C2Ray):
             )
 
             self.tot_phots = 0
-            return np.array((3, 0), dtype=np.int32), np.array((0,), dtype=np.float64)
+            return np.empty((0, 3), dtype=np.int32), np.empty((0,), dtype=np.float64)
 
     def read_haloes(
         self, halo_file: PathType, box_len: float
@@ -456,15 +414,13 @@ class C2Ray_fstar(C2Ray):
                 f"Using {self.fstar_kind} to model the stellar-to-halo relation with scatter "
                 "and average value with parameters: {fstar_pars}."
             )
-        elif self.fstar_kind == "spice":
-            logger.info(
-                f"Using {self.fstar_kind} to model the star formation rate with scatter (Basu+ 2025). "
-                "We use a 'dpl' model to define the mean SFR."
-            )
 
         # define the f_star model class (to call self.fstar_model.get_fstar(Mhalo) when reading the sources)
+        # same seed on every rank, so that all ranks build the same source field
+        rng = np.random.default_rng(self.sources_params.seed)
+
         self.fstar_model = StellarToHaloRelation(
-            model=self.fstar_kind, pars=fstar_pars, cosmo=self.cosmology
+            model=self.fstar_kind, pars=fstar_pars, cosmo=self.cosmology, rng=rng
         )
 
         # --- Halo Accretion Model ---
@@ -479,6 +435,7 @@ class C2Ray_fstar(C2Ray):
                 "tB0": self.sources_params.tB0,
                 "tQ_frac": self.sources_params.tQ_frac,
                 "z0": self.sources_params.z0,
+                "t_rnd": self.sources_params.t_rnd,
             }
 
             logger.info(
@@ -491,6 +448,7 @@ class C2Ray_fstar(C2Ray):
                 pars=bursty_pars,
                 alpha_h=self.sources_params.alpha_h,
                 cosmo=self.cosmology,
+                rng=rng,
             )
         else:
             logger.info("No bustiness model for the star formation history.")
@@ -509,10 +467,6 @@ class C2Ray_fstar(C2Ray):
         elif self.fesc_kind == "power":
             logger.info(
                 f"Using mass-dependent power law model for the escaping fraction with parameters: {fesc_pars}"
-            )
-        elif self.fesc_kind == "Gelli2024":
-            logger.info(
-                f"Using UV magnitude-dependent power law model for the escaping fraction with parameters: {fesc_pars}"
             )
 
         self.fesc_model = EscapeFraction(model=self.fesc_kind, pars=fesc_pars)
