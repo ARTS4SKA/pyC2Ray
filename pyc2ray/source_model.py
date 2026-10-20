@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from functools import partial
+from pathlib import Path
 
 import numpy as np
 import numpy.typing as npt
@@ -9,9 +10,7 @@ from scipy.interpolate import RegularGridInterpolator
 from scipy.spatial import cKDTree
 from scipy.stats import binned_statistic_dd
 
-import pyc2ray.constants as c
 from pyc2ray.parameters import (
-    AccretionParameters,
     ConstantFescParameters,
     DplSourceParameters,
     ExpAccretionParameters,
@@ -51,43 +50,31 @@ class StellarToHaloRelation:
         self.rng = rng if rng is not None else np.random.default_rng()
         self.model = params.MODEL
 
-        self.get: Callable
-        match self.model:
-            case "fgamma":
-                assert isinstance(params, FgammaSourceParameters)
-                self.f0 = params.f0
-                # TODO: there is something wrong with this, The photoionization gets super high like 1e-5?????? to check
-                self.get = (
-                    lambda Mhalo: self.cosmo.Ob0 / self.cosmo.Om0 * Mhalo * self.f0  # type: ignore
-                )
-            case "dpl":
-                assert isinstance(params, DplSourceParameters)
-                self.f0 = params.f0
-                self.Mt = params.Mt
-                self.Mp = params.Mp
-                self.g1 = params.g1
-                self.g2 = params.g2
-                self.g3 = params.g3
-                self.g4 = params.g4
+        self.get: Callable[..., FloatLike]
+        if isinstance(params, FgammaSourceParameters):
+            self.f0 = params.f0
+            # TODO: there is something wrong with this, The photoionization gets super high like 1e-5?????? to check
+            self.get = (
+                lambda Mhalo: self.cosmo.Ob0 / self.cosmo.Om0 * Mhalo * self.f0  # type: ignore
+            )
+        elif isinstance(params, (DplSourceParameters, MuvSourceParameters)):
+            self.f0 = params.f0
+            self.Mt = params.Mt
+            self.Mp = params.Mp
+            self.g1 = params.g1
+            self.g2 = params.g2
+            self.g3 = params.g3
+            self.g4 = params.g4
+            if isinstance(params, DplSourceParameters):
                 self.get = self.deterministic
-            case "Muv":
-                assert isinstance(params, MuvSourceParameters)
-                self.f0 = params.f0
-                self.Mt = params.Mt
-                self.Mp = params.Mp
-                self.g1 = params.g1
-                self.g2 = params.g2
-                self.g3 = params.g3
-                self.g4 = params.g4
+            else:
                 self.get = self.fstar_from_Muv
-            case _:
-                raise ValueError(
-                    " Selected stellar-to-halo relation model that does not exist : %s"
-                    % self.model
-                )
+        else:
+            raise TypeError(
+                f"Selected stellar-to-halo relation model that does not exist : {self.model}"
+            )
 
     def source_lifetime(self, z: float, alpha_h: float) -> float:
-        assert self.cosmo is not None
         ts = 1.0 / (alpha_h * (1 + z) * self.cosmo.H(z).cgs.value)
         return ts
 
@@ -132,7 +119,6 @@ class StellarToHaloRelation:
         # absolute magnitude with scatter
         Muv = self.rng.normal(loc=mean_Muv, scale=std_Muv)
 
-        assert self.cosmo is not None
         # calibrated for 1500 Å dust-corrected rest-frame UV luminosity
         M0, k_val = 51.6, 3.64413e-36  # in [Msun/s * Hz / (s erg)]
         fstar = (
@@ -148,7 +134,6 @@ class StellarToHaloRelation:
         """
         A parameterised stellar to halo relation (2011.12308, 2201.02210, 2302.06626).
         """
-        assert self.cosmo is not None
         # Double power law, motivated by UVLFs
         dpl = (
             2
@@ -173,7 +158,6 @@ class StellarToHaloRelation:
         # k_val = 1.15e-28 # in [Msun/yr * Hz / (s erg)]
         k_val = 3.64413e-36  # in [Msun/s * Hz / (s erg)]
 
-        assert self.cosmo is not None
         M_UV = M0 - 2.5 * (
             np.log10(fstar)
             + np.log10(self.cosmo.Ob0 / self.cosmo.Om0)
@@ -188,22 +172,18 @@ class EscapeFraction:
     def __init__(self, params: FescParameters) -> None:
         self.model = params.MODEL
 
-        self.get: Callable
-        if self.model == "constant":
-            assert isinstance(params, ConstantFescParameters)
+        self.get: Callable[..., FloatLike]
+        if isinstance(params, ConstantFescParameters):
             self.f0_esc = params.f0_esc
-            # self.get = lambda Mhalo: np.full_like(Mhalo, self.f0_esc)
-            self.get = lambda Mhalo: self.f0_esc
-        elif self.model == "power" or self.model == "power_obs":
-            assert isinstance(params, (PowerFescParameters, PowerObsFescParameters))
+            self.get = lambda Mhalo: np.full_like(Mhalo, self.f0_esc)
+        elif isinstance(params, (PowerFescParameters, PowerObsFescParameters)):
             self.f0_esc = params.f0_esc
             self.Mp_esc = params.Mp_esc
             self.al_esc = params.al_esc
             self.get = self.deterministic
-        elif self.model == "thesan":
-            assert isinstance(params, ThesanFescParameters)
+        elif isinstance(params, ThesanFescParameters):
             # path to the tables
-            tables_dir = c.TABLES_DIR / "fesc_thesan"
+            tables_dir = Path(params.tables_dir)
 
             # get fesc tables and bins for interpolation
             tabs = np.loadtxt(tables_dir / "fesc_thesan_tables.txt")
@@ -218,20 +198,19 @@ class EscapeFraction:
 
             self.get = self.fesc_Thesan
         else:
-            raise ValueError(
-                " Selected escaping fraction model that does not exist : %s"
-                % self.model
+            raise TypeError(
+                f"Selected escaping fraction model that does not exist : {self.model}"
             )
 
-    def deterministic(self, Mhalo):
+    def deterministic(self, Mhalo) -> FloatLike:
         fesc_mean = self.f0_esc * (Mhalo / self.Mp_esc) ** self.al_esc
         return np.clip(fesc_mean, 0, 1)
 
-    def deterministic_redshift(self, z):
+    def deterministic_redshift(self, z: float) -> float:
         fesc_mean = self.f0_esc * (1 + z) ** self.al_esc
         return np.clip(fesc_mean, 0, 1)
 
-    def fesc_Thesan(self, Mhalo, z):
+    def fesc_Thesan(self, Mhalo, z) -> FloatLike:
         if z > self.redshift_tab.max():
             fesc = self.interp_func(
                 np.array([np.full_like(Mhalo, self.redshift_tab.max()), Mhalo]).T
@@ -251,11 +230,10 @@ class BurstySFR:
 
     def __init__(
         self,
-        params: AccretionParameters,
+        params: ExpAccretionParameters,
         cosmo: FlatLambdaCDM,
         rng: np.random.Generator | None = None,
     ) -> None:
-        assert isinstance(params, ExpAccretionParameters)
         self.model = params.bursty_sfr
         self.beta1 = params.beta1
         self.beta2 = params.beta2
@@ -269,9 +247,9 @@ class BurstySFR:
 
         self.t0 = cosmo.age(self.z0).to("Myr").value
 
-        self.get_bursty: Callable[[FloatLike, float], npt.NDArray[np.bool_]]
+        self.get: Callable[[FloatLike, float], npt.NDArray[np.bool_]]
         if self.model == "instant":
-            self.get_bursty = self.instant_burst_or_quiescent_galaxies
+            self.get = self.instant_burst_or_quiescent_galaxies
         elif self.model == "integrate":
             raise ValueError(" Sorry, model not yet implemented : %s" % self.model)
         elif self.model == "no":
