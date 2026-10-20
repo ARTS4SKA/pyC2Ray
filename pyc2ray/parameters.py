@@ -751,7 +751,8 @@ class ThesanFescParameters(FescParameters):
 
     # TODO: path to Thesan escape fraction model file
     tables_dir: Path = _field(
-        "Path to directory with the Thesan escape fraction tables", Path("")
+        "Path to directory with the Thesan escape fraction tables",
+        c.TABLES_DIR / "fesc_thesan",
     )
 
 
