@@ -364,7 +364,6 @@ class SourcesParameters(YmlParameters):
     # Photons escaping fraction:
     #  'constant' for mass independent model,
     #  'power' for a power law mass dependent factor
-    #  'Gelli2024' for a UV dependent model (Gelli+ 2024)
     fesc_model: str = "constant"
     f0_esc: OptFloat = None
     Mp_esc: OptFloat = None
@@ -390,6 +389,8 @@ class SourcesParameters(YmlParameters):
     z0: OptFloat = None
     # Randomize the time-scale of the bursty star-formation model (std for N~(t_start, t_rnd))
     t_rnd: OptFloat = None
+    # seed for the stochastic source models (None: different on every run)
+    seed: int | None = None
     # TODO: add description
     ts: OptFloat = None
 
@@ -399,10 +400,10 @@ class SourcesParameters(YmlParameters):
                 f"fstar_kind {self.fstar_kind} not implemented. "
                 "Choose from 'fgamma', 'dpl', 'lognorm' or 'Muv'."
             )
-        if self.fesc_model not in ("constant", "power", "Gelli2024"):
+        if self.fesc_model not in ("constant", "power"):
             raise ValueError(
                 f"fesc_model {self.fesc_model} not implemented. "
-                "Choose from 'constant', 'power' or 'Gelli2024'."
+                "Choose from 'constant' or 'power'."
             )
         if self.accretion_model not in ("constant", "EXP"):
             raise ValueError(

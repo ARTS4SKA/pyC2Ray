@@ -2,7 +2,6 @@ from collections.abc import Callable
 from functools import partial
 from typing import Any
 
-import astropy.units as u
 import numpy as np
 import numpy.typing as npt
 from astropy.cosmology import FlatLambdaCDM
@@ -10,7 +9,6 @@ from scipy.integrate import quad_vec
 from scipy.interpolate import RegularGridInterpolator
 from scipy.spatial import cKDTree
 from scipy.stats import binned_statistic_dd
-from sklearn.neighbors import KNeighborsRegressor
 
 import pyc2ray.constants as c
 
@@ -32,9 +30,14 @@ class StellarToHaloRelation:
     """Modelling the mass relation between dark matter halo and the residing stars/galaxies."""
 
     def __init__(
-        self, model: str, pars: dict[str, Any], cosmo: FlatLambdaCDM | None = None
+        self,
+        model: str,
+        pars: dict[str, Any],
+        cosmo: FlatLambdaCDM | None = None,
+        rng: np.random.Generator | None = None,
     ):
         self.cosmo = cosmo
+        self.rng = rng if rng is not None else np.random.default_rng()
         self.model = model
         self.Nion = pars["Nion"]
         self.f0 = pars["f0"]
@@ -59,9 +62,6 @@ class StellarToHaloRelation:
                 self.get = self.stochastic_lognormal
             case "Muv":
                 self.get = self.fstar_from_Muv
-            case mod if "spice" in mod:
-                self.get = self.deterministic
-                self.spice_model = SPICE_scatterSFR(self.model)
             case _:
                 raise ValueError(
                     " Selected stellar-to-halo relation model that does not exist : %s"
@@ -85,8 +85,11 @@ class StellarToHaloRelation:
         else:
             fstar_std = sigma
 
-        rng = np.random.default_rng()
-        fstar = np.clip(fstar_mean * (1 + rng.normal(0, fstar_std)), a_min=0, a_max=1)  # type: ignore
+        fstar = np.clip(
+            fstar_mean * (1 + self.rng.normal(0, fstar_std)),
+            a_min=0,
+            a_max=1,
+        )
 
         return fstar
 
@@ -102,7 +105,7 @@ class StellarToHaloRelation:
         elif sigma is None:
             log_fstar_std = np.power(Mhalo / self.Mp, -1.0 / 3)
 
-        log_fstar = np.log(fstar_mean) + np.random.normal(0, log_fstar_std)
+        log_fstar = np.log(fstar_mean) + self.rng.normal(0, log_fstar_std)
         fstar = np.clip(a=np.exp(log_fstar), a_min=0, a_max=1)
         return fstar
 
@@ -120,7 +123,7 @@ class StellarToHaloRelation:
         std_Muv = a_s * np.log10(Mhalo) + b_s
 
         # absolute magnitude with scatter
-        Muv = np.random.normal(loc=mean_Muv, scale=std_Muv)
+        Muv = self.rng.normal(loc=mean_Muv, scale=std_Muv)
 
         assert self.cosmo is not None
         # calibrated for 1500 Å dust-corrected rest-frame UV luminosity
@@ -171,26 +174,6 @@ class StellarToHaloRelation:
         )
         return M_UV
 
-    def sfr_SPICE(self, Mhalo: FloatLike, z: float) -> FloatLike:
-        # source life-time (for accreation mass) in yr units
-        ts = (self.source_lifetime(z=z) * u.s).to("yr").value
-
-        # mean fstar
-        mean_fstar = self.stellar_to_halo_fraction(Mhalo=Mhalo)
-
-        # mean star formation rate in Msun/yr units
-        mean_sfr = mean_fstar * Mhalo / ts
-
-        # get scatter from SPICE tables
-        scatter_sfr = self.spice_model.get_scatter(Mhalo=np.log10(Mhalo), z=z)
-
-        # get sfr with scatter in Msun/s units
-        sfr_spice = (
-            (np.random.normal(mean_sfr, scatter_sfr) * u.Msun / u.yr).to("Msun/s").value
-        )
-
-        return sfr_spice
-
 
 class EscapeFraction:
     """Modelling the escape of photons from the stars/galaxies inside dark matter haloes."""
@@ -206,8 +189,6 @@ class EscapeFraction:
             self.get = lambda Mhalo: self.f0_esc
         elif self.model == "power" or self.model == "power_obs":
             self.get = self.deterministic
-        elif self.model == "Gelli2024":
-            self.get = self.fesc_Muv
         elif self.model == "thesan":
             # path to the tables
             path_tab = c.TABLES_DIR / "fesc_thesan"
@@ -238,12 +219,6 @@ class EscapeFraction:
         fesc_mean = self.f0_esc * (1 + z) ** self.al_esc
         return np.clip(fesc_mean, 0, 1)
 
-    def fesc_Muv(self, delta_Muv):
-        # Similar to Gelli+ (2024) model
-        fesc = np.exp(delta_Muv - 5)  # self.f0_esc * (delta_Muv**self.al_esc + 1.)
-        # fesc[delta_Muv < 0] = self.f0_esc
-        return np.clip(fesc, 0, 1)
-
     def fesc_Thesan(self, Mhalo, z):
         if z > self.redshift_tab.max():
             fesc = self.interp_func(
@@ -262,7 +237,14 @@ class EscapeFraction:
 class BurstySFR:
     """Modelling bursty star formation"""
 
-    def __init__(self, model, pars, alpha_h, cosmo):
+    def __init__(
+        self,
+        model: str,
+        pars: dict[str, Any],
+        alpha_h: float,
+        cosmo: FlatLambdaCDM,
+        rng: np.random.Generator | None = None,
+    ) -> None:
         self.model = model
         self.beta1 = pars["beta1"]
         self.beta2 = pars["beta2"]
@@ -272,9 +254,11 @@ class BurstySFR:
         self.t_rnd = pars["t_rnd"]
         self.alpha_h = alpha_h
         self.cosmo = cosmo
+        self.rng = rng if rng is not None else np.random.default_rng()
 
         self.t0 = cosmo.age(self.z0).to("Myr").value
 
+        self.get_bursty: Callable[[FloatLike, float], npt.NDArray[np.bool_]]
         if self.model == "instant":
             self.get_bursty = self.instant_burst_or_quiescent_galaxies
         elif self.model == "integrate":
@@ -289,12 +273,11 @@ class BurstySFR:
                 " Selected burstiness model that does not exist : %s" % self.model
             )
 
-    def time_burstiness(self, mass: float, z: float) -> float:
-        rng = np.random.default_rng()
-        M0: npt.NDArray[np.float64]
+    def time_burstiness(self, mass: FloatLike, z: float) -> FloatLike:
+        M0: FloatLike
         if self.t_rnd:
             # FIXME: M0 used in lhs and rhs, this is a bug
-            M0 = 10 ** rng.normal(np.log10(M0), self.t_rnd)  # noqa: F821
+            M0 = 10 ** self.rng.normal(np.log10(M0), self.t_rnd)  # noqa: F821
         else:
             M0 = mass / np.exp(-self.alpha_h * (z - self.z0))
 
@@ -316,8 +299,13 @@ class BurstySFR:
 
         return int(t_age <= i_time * (tB + tQ) + tB)
 
-    def integrated_burst_or_quiescent_galaxies(self, mass, z, zi, zf, cosmo):
-        """This case integrate the burst or quench time withing the time-step. It return a factor between 0 and 1 for quenched (value 0) or bursting (value 1). In bewteen values indicate that the sources are quencing for a period of time withing the time-step."""
+    def integrated_burst_or_quiescent_galaxies(
+        self, mass: FloatLike, z: float, zi: float, zf: float, cosmo: FlatLambdaCDM
+    ) -> FloatLike:
+        """This case integrate the burst or quench time withing the time-step.
+        It return a factor between 0 and 1 for quenched (value 0) or bursting (value 1).
+        In bewteen values indicate that the sources are quencing for a period of time withing the time-step.
+        """
         # TODO: It is computationally expensive, for some reason, due to the quad_vec method.... to investiage
 
         # get burstiness and quencing time
@@ -334,7 +322,9 @@ class BurstySFR:
 
         return timefrac_on
 
-    def instant_burst_or_quiescent_galaxies(self, mass, z):
+    def instant_burst_or_quiescent_galaxies(
+        self, mass: FloatLike, z: float
+    ) -> npt.NDArray[np.bool_]:
         """This case is for instanteneous bursting or quenching. Do not account for the time integration. Mask the halo True (bursting) or False (quiescent)."""
         # get burstiness and quencing time
         tB = self.time_burstiness(mass, z)
@@ -355,64 +345,6 @@ class BurstySFR:
 
         # print(' A total of %.2f %% of galaxies have bursty star-formation.' %(100*np.count_nonzero(burst_mask)/burst_mask.size))
         return burst_or_quench
-
-
-class SPICE_scatterSFR:
-    def __init__(self, model):
-        """
-        Initialize the KNN interpolator.
-
-        Parameters:
-        - model: string of the model for the scatter in SFR
-        """
-        self.model = model
-        path_model = c.TABLES_DIR / "SPICE_scatter_SFR"
-        self.redshift_fit, self.mass_fit = np.loadtxt(
-            path_model + "mvir_z_bins.txt", unpack=True
-        )
-        if "bu" in self.model:
-            self.tab = np.loadtxt(path_model + "sigma_SFR_bursty.txt", unpack=True)
-        elif "hn" in self.model:
-            self.tab = np.loadtxt(path_model + "sigma_SFR_hyper.txt", unpack=True)
-        elif "sm" in self.model:
-            self.tab = np.loadtxt(path_model + "sigma_SFR_smooth.txt", unpack=True)
-        else:
-            raise ValueError(
-                " Selected SPICE star formation rate model that does not exist : %s"
-                % self.model
-            )
-
-        # Create the feature matrix (m, z) and the corresponding target values
-        M, Z = np.meshgrid(self.mass_fit, self.redshift_fit, indexing="ij")
-        self.X_train = np.column_stack([M.ravel(), Z.ravel()])
-        self.y_train = self.tab.ravel()
-
-        # Train KNN regressor
-        self.interp = KNeighborsRegressor(n_neighbors=2, weights="distance")
-        self.interp.fit(self.X_train, self.y_train)
-
-    def get_scatter(self, Mhalo, z):
-        """
-        Interpolates values given a mass and redshift.
-
-        Parameters:
-        - m: A single value for virial mass or 1D array
-        - z: A single redshift value or 1D array
-        """
-        # For larger mass we assume the same scatter as the tables limit, i.e M > 10^11.325
-        Mhalo = np.clip(a=Mhalo, a_min=self.mass_fit.min(), a_max=self.mass_fit.max())
-
-        # REMARKS: strangely the K-neighbours regressor works just fine for redshift beyond the tables limits
-
-        # allowing to pass and array an a value
-        if (np.ndim(Mhalo) == 0) and (np.ndim(z) == 0):
-            query_points = np.array([[Mhalo, z]])
-        elif (np.ndim(Mhalo) == 1) and (np.ndim(z) == 0):
-            query_points = np.vstack((Mhalo, [z] * len(Mhalo))).T
-        elif (np.ndim(Mhalo) == 0) and (np.ndim(z) == 1):
-            query_points = np.vstack(([Mhalo] * len(z), z)).T
-
-        return self.interp.predict(query_points)
 
 
 class Halo2Grid:
