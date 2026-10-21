@@ -84,7 +84,7 @@ class C2Ray_Thesan(C2Ray):
 
         # read halo list
         srcpos_mpc, srcmass_msun = self.read_haloes(
-            self.sources_basename / file, self.boxsize
+            self.sources_dir / file, self.boxsize
         )
 
         # select table based on the closest redshift
@@ -233,7 +233,7 @@ class C2Ray_Thesan(C2Ray):
         z : redshift
 
         """
-        file = self.density_basename / fbase
+        file = self.density_dir / fbase
         rdr = t2c.Pkdgrav3data(self.boxsize, self.N, Omega_m=self.cosmology.Om0)
         self.ndens = (
             self.cosmology.critical_density0.cgs.value
@@ -259,11 +259,11 @@ class C2Ray_Thesan(C2Ray):
 
     def _redshift_init(self) -> None:
         """Initialize time and redshift counter"""
-        self.zred_density = np.loadtxt(self.density_basename / "redshift_density.txt")
-        self.zred_sources = np.loadtxt(self.sources_basename / "redshift_sources.txt")
+        self.zred_density = np.loadtxt(self.density_dir / "redshift_density.txt")
+        self.zred_sources = np.loadtxt(self.sources_dir / "redshift_sources.txt")
         if self.resume:
             # get the resuming redshift
-            self.zred = np.min(get_redshifts_from_output(self.results_basename))
+            self.zred = np.min(get_redshifts_from_output(self.results_dir))
             _, self.prev_zdens = find_bins(self.zred, self.zred_density)
             _, self.prev_zsourc = find_bins(self.zred, self.zred_sources)
         else:
@@ -282,26 +282,25 @@ class C2Ray_Thesan(C2Ray):
             )
 
             # get extension of the output file
-            ext = get_extension_in_folder(path=self.results_basename)
+            ext = get_extension_in_folder(path=self.results_dir)
             if ext == ".dat":
-                fname = "%sxfrac_z%.3f.dat" % (self.results_basename, self.zred)
+                fname = "%sxfrac_z%.3f.dat" % (self.results_dir, self.zred)
                 self.xh = t2c.read_cbin(filename=fname, bits=64, order="F")
                 self.phi_ion = t2c.read_cbin(
-                    filename="%sIonRates_z%.3f.dat"
-                    % (self.results_basename, self.zred),
+                    filename="%sIonRates_z%.3f.dat" % (self.results_dir, self.zred),
                     bits=32,
                     order="F",
                 )
             elif ext == ".npy":
-                fname = "%sxfrac_z%.3f.npy" % (self.results_basename, self.zred)
+                fname = "%sxfrac_z%.3f.npy" % (self.results_dir, self.zred)
                 self.xh = np.load(fname)
                 self.phi_ion = np.load(
-                    "%sIonRates_z%.3f.npy" % (self.results_basename, self.zred)
+                    "%sIonRates_z%.3f.npy" % (self.results_dir, self.zred)
                 )
             else:
                 raise FileNotFoundError(
                     " Resume file not found: %sxfrac_%.3f.npy"
-                    % (self.results_basename, self.zred)
+                    % (self.results_dir, self.zred)
                 )
 
             logger.info(
@@ -316,7 +315,7 @@ class C2Ray_Thesan(C2Ray):
             )
 
             # TODO: implement heating
-            self.temp = np.full(self.shape, self.material_params.temp0, order="F")
+            self.temp = np.full(self.shape, self.parameters.material.temp0, order="F")
         else:
             super()._material_init()
 

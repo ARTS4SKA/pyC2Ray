@@ -4,8 +4,16 @@ from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 
-from .parameters import SinksParameters
-from .utils.other_utils import find_bins
+from pyc2ray.parameters import (
+    ConstantClumpingParameters,
+    ConstantMfpParameters,
+    DensityClumpingParameters,
+    RedshiftClumpingParameters,
+    SinksParameters,
+    StochasticClumpingParameters,
+    Worseck14MfpParameters,
+)
+from pyc2ray.utils.other_utils import find_bins
 
 FloatArray = npt.NDArray[np.float64]
 IntArray = npt.NDArray[np.int32]
@@ -22,24 +30,22 @@ class SinksPhysics:
         res = boxsize / self.N
 
         # MFP parameters
-        if self.mfp_model == "constant":
+        if isinstance(sinks_params.mfp, ConstantMfpParameters):
             # Set R_max (LLS 3) in cell units
-            assert sinks_params.R_max_cMpc is not None
-            self.R_mfp_cell_unit = sinks_params.R_max_cMpc / res
-        elif self.mfp_model == "Worseck2014":
-            self.A_mfp = sinks_params.A_mfp
-            self.etha_mfp = sinks_params.eta_mfp
-            self.z1_mfp = sinks_params.z1_mfp
-            self.eta1_mfp = sinks_params.eta1_mfp
+            self.R_mfp_cell_unit = sinks_params.mfp.R_max_cMpc / res
+        elif isinstance(sinks_params.mfp, Worseck14MfpParameters):
+            self.A_mfp = sinks_params.mfp.A_mfp
+            self.etha_mfp = sinks_params.mfp.eta_mfp
+            self.z1_mfp = sinks_params.mfp.z1_mfp
+            self.eta1_mfp = sinks_params.mfp.eta1_mfp
         else:
-            raise ValueError(" MFP model not implemented : %s" % self.mfp_model)
+            raise TypeError(f"MFP model not implemented: {self.mfp_model}")
 
         self.clumping_factor: FloatArray
         # Clumping factor parameters
-        if self.clumping_model == "constant":
-            assert sinks_params.clumping is not None
+        if isinstance(sinks_params.clumping, ConstantClumpingParameters):
             self.clumping_factor = np.full(
-                (self.N, self.N, self.N), sinks_params.clumping, dtype=np.float64
+                (self.N, self.N, self.N), sinks_params.clumping.value, dtype=np.float64
             )
         else:
             clump_dir = Path(__file__).parent / "tables" / "clumping"
@@ -55,19 +61,19 @@ class SinksPhysics:
                 clump_dir / f"par_{self.clumping_model}_{tab_res:.3f}Mpc.txt"
             )
             self.calculate_clumping: Callable[..., np.ndarray]
-            if self.clumping_model == "redshift":
+            if isinstance(sinks_params.clumping, RedshiftClumpingParameters):
                 self.c2, self.c1, self.C0 = self.clumping_params[:3]
                 self.calculate_clumping = self.biashomogeneous_clumping
-            elif self.clumping_model == "density":
+            elif isinstance(sinks_params.clumping, DensityClumpingParameters):
                 self.calculate_clumping = self.inhomogeneous_clumping
-            elif self.clumping_model == "stochastic":
+            elif isinstance(sinks_params.clumping, StochasticClumpingParameters):
                 self.calculate_clumping = self.stochastic_clumping
             else:
-                raise ValueError(
-                    " Cluming factor model not implemented : %s" % self.clumping_model
+                raise TypeError(
+                    " Clumping factor model not implemented : %s" % self.clumping_model
                 )
 
-    def mfp_Worseck2014(self, z: float) -> float:
+    def mfp_Worseck14(self, z: float) -> float:
         assert self.A_mfp is not None
         assert self.etha_mfp is not None
         assert self.eta1_mfp is not None
@@ -96,7 +102,7 @@ class SinksPhysics:
             + self.clumping_params[i_high, 1:4] * w_h
         )
 
-        # MB (22.10.24): In the original paper, Bianco+ (2021), we used to do the fit in log-space log10(1+<delta>) VS log10(C). Later, and in the current parameters files we did the fit in the linear-space.
+        # MB (22.10.24): In the original paper, Bianco+ ('21), we used to do the fit in log-space log10(1+<delta>) VS log10(C). Later, and in the current parameters files we did the fit in the linear-space.
         x = 1 + ndens / ndens.mean()
         clump_fact = a * x**2 + b * x + c
 
