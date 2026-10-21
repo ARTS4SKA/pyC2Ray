@@ -447,7 +447,7 @@ class TestPhotoParameters:
         assert isinstance(obj.source_type, Zackrisson11SourceParameters)
         assert obj.source_type.Teff == pytest.approx(5e4)
         assert obj.source_type.cross_section_pl_index == pytest.approx(2.8)
-        assert obj.source_type.sed_table_file == Path("")
+        assert str(obj.source_type.sed_table_file) == "."
 
 
 class TestSinksParameters:
