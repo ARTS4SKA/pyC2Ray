@@ -7,10 +7,9 @@ import tools21cm as t2c
 from astropy import units as u
 
 import pyc2ray.constants as c
-
-from .c2ray_base import C2Ray
-from .utils.other_utils import find_bins, get_redshifts_from_output
-from .utils.sourceutils import FloatArray, IntArray, PathType
+from pyc2ray.c2ray_base import C2Ray
+from pyc2ray.utils.other_utils import find_closest_redshift_index
+from pyc2ray.utils.sourceutils import FloatArray, IntArray, PathType
 
 __all__ = ["C2Ray_CubeP3M"]
 
@@ -35,7 +34,7 @@ class C2Ray_CubeP3M(C2Ray):
         super().__init__(paramfile)
         logger.info('Running: "C2Ray CubeP3M"')
 
-        self.prev_zdens: float
+        self.prev_zdens: float = -1.0
 
     def read_sources(
         self, file: PathType, mass: str = "hm"
@@ -125,20 +124,10 @@ class C2Ray_CubeP3M(C2Ray):
         normflux : array
             density mesh-grid in csg units
         """
-        if self.cosmological:
-            redshift = z
-        else:
-            redshift = self.zred_0
+        assert self.cosmological
+        redshift = z
 
-        # TODO: redshift bin for the current redshift based on the density redshift for interpolation (discussed with Garrelt and he's okish)
-        # TODO: low_z, high_z = find_bins(redshift, self.zred_density)
-        # get the strictly larger and closest redshift density file
-        high_z = self.zred_density[
-            np.argmin(
-                np.abs(self.zred_density[self.zred_density >= redshift] - redshift)
-            )
-        ]
-
+        high_z = self.zred_array[find_closest_redshift_index(self.zred_array, redshift)]
         if high_z != self.prev_zdens:
             file = self.inputs_basename / f"coarser_densities/{high_z:.3f}n_all.dat"
             self.ndens = (
@@ -146,8 +135,6 @@ class C2Ray_CubeP3M(C2Ray):
                 / (self.mean_molecular * c.m_p)
                 * (1 + redshift) ** 3
             )
-            self.prev_zdens = high_z
-
             logger.info(
                 """
 ---- Reading density file:
@@ -158,10 +145,10 @@ class C2Ray_CubeP3M(C2Ray):
                 self.ndens.mean(),
                 self.ndens.max(),
             )
-        else:
-            # no need to re-read the same file again
-            # TODO: in the future use this values for a 3D interpolation for the density (can be extended to sources too)
-            pass
+            self.prev_zdens = high_z
+
+        # TODO: in the future use this values for a 3D interpolation
+        # for the density (can be extended to sources too)
 
     def write_output(self, z: float, ext: str = ".dat") -> None:
         """Write ionization fraction & ionization rates as C2Ray binary files
@@ -205,29 +192,6 @@ class C2Ray_CubeP3M(C2Ray):
     # Below are the overridden initialization routines specific to the CubeP3M case
     # =====================================================================================================
 
-    def _redshift_init(self) -> None:
-        """Initialize time and redshift counter"""
-        self.zred_density = t2c.get_dens_redshifts(
-            self.inputs_basename / "coarser_densities/"
-        )[::-1]
-        # self.zred_sources = get_source_redshifts(self.inputs_basename/'sources/')[::-1]
-        # TODO: waiting for next tools21cm release
-        self.zred_sources = t2c.get_source_redshifts(self.inputs_basename / "sources/")[
-            ::-1
-        ]
-        if self.resume:
-            # get the resuming redshift
-            self.zred_0 = np.min(get_redshifts_from_output(self.results_basename))
-            self.age_0 = self.zred2time(self.zred_0)
-            _, self.prev_zdens = find_bins(self.zred_0, self.zred_density)
-            _, self.prev_zsourc = find_bins(self.zred_0, self.zred_sources)
-        else:
-            self.prev_zdens = -1
-            self.prev_zsourc = -1
-
-        self.time = self.age_0
-        self.zred = self.zred_0
-
     def _material_init(self) -> None:
         """Initialize material properties of the grid"""
         if self.resume:
@@ -242,14 +206,14 @@ class C2Ray_CubeP3M(C2Ray):
             )
             # self.ndens = self.read_density(z=self.zred)
             self.xh = t2c.read_cbin(
-                filename="%sxfrac_%.3f.dat" % (self.results_basename, self.zred),
+                filename="%sxfrac_z%.3f.dat" % (self.results_basename, self.zred),
                 bits=64,
                 order="F",
             )
             # TODO: implement heating
             self.temp = np.full(self.shape, self.material_params.temp0, order="F")
             self.phi_ion = t2c.read_cbin(
-                filename="%sIonRates_%.3f.dat" % (self.results_basename, self.zred),
+                filename="%sIonRates_z%.3f.dat" % (self.results_basename, self.zred),
                 bits=32,
                 order="F",
             )

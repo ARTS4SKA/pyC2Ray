@@ -1,12 +1,10 @@
 # FIXME: don't use import * to avoid namespace pollution
 # Import and Initialization functions for the ASORA library
 from .asora_core import *  # noqa: F403
-from .c2ray_244paper import *  # noqa: F403
 from .c2ray_base import *  # noqa: F403
 from .c2ray_cubep3m import *  # noqa: F403
 from .c2ray_fstar import *  # noqa: F403
 from .c2ray_test import *  # noqa: F403
-from .c2ray_thesan import *  # noqa: F403
 
 # Domain decomposition and source grouping
 from .domain import *  # noqa: F403

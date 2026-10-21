@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class C2Ray_Test(C2Ray):
-    def __init__(self, paramfile: PathType) -> None:
+    def __init__(self, paramfile: PathType, zred_0: float) -> None:
         """A C2Ray Test-case simulation
 
         Parameters
@@ -31,6 +31,7 @@ class C2Ray_Test(C2Ray):
         paramfile : str
             Name of a YAML file containing parameters for the C2Ray simulation
         """
+        self.zred_0 = zred_0
         super().__init__(paramfile)
         if self.rank == 0:
             logger.info('Running: "C2Ray Test"')
@@ -77,8 +78,8 @@ class C2Ray_Test(C2Ray):
         if self.rank != 0:
             return
 
-        np.save(f"{self.results_basename}/xfrac_{z:.3f}.npy", self.xh)
-        np.save(f"{self.results_basename}/IonRates_{z:.3f}.npy", self.phi_ion)
+        np.save(f"{self.results_basename}/xfrac_z{z:.3f}.npy", self.xh)
+        np.save(f"{self.results_basename}/IonRates_z{z:.3f}.npy", self.phi_ion)
         # suffix = f"_{z:.3f}.pkl"
         # with open(self.results_basename + "xfrac" + suffix,"wb") as f:
         #     pkl.dump(self.xh,f)
@@ -109,8 +110,7 @@ class C2Ray_Test(C2Ray):
         ----------
         ndens : float
             Value of the hydrogen density in cm^-3. When in a cosmological
-            run, this is the comoving density, or the proper density at
-            z = 0.
+            run, this is the comoving density, or the proper density at z = 0.
         z : float
             Redshift to scale the density. When cosmological is false,
             this parameter has no effect and the initial redshift specified
@@ -142,7 +142,7 @@ class C2Ray_Test(C2Ray):
         step = delta_t * c.year2s
         zred_array = np.empty(num_zred)
         for i in range(num_zred):
-            zred_array[i] = self.time2zred(self.age_0 + i * step)
+            zred_array[i] = self.time2zred(self.time + i * step)
         return zred_array
 
     # =====================================================================================================
@@ -151,7 +151,6 @@ class C2Ray_Test(C2Ray):
 
     def _redshift_init(self) -> None:
         """Initialize time and redshift counter"""
-        self.time = self.age_0
         self.zred = self.zred_0
 
     @property
