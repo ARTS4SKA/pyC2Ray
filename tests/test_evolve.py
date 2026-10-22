@@ -105,7 +105,6 @@ def call_evolve3D(
         dr=dr,
         src_flux=src_flux,
         src_pos=src_pos,
-        src_batch_size=8,
         use_gpu=use_gpu,
         max_subbox=1000,
         subboxsize=128,
