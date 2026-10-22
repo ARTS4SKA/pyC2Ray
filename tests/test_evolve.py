@@ -319,7 +319,7 @@ def test_evolve3D_yes_gpu_domain_decomposition_uneven_slabs(
     first_plane_of_rank = [0, 5, 10, 15, 20, 26]
     my_planes = slice(20, 26)
 
-    # Input fields: very cell gets a different value, so the code sees different numbers
+    # Input fields: every cell gets a different value, so the code sees different numbers
     # whenever it looks at the wrong cells. The fields are stored in Fortran order, as in the
     # simulation.
     cell_number = np.arange(N**3, dtype=np.float64).reshape(N, N, N)
