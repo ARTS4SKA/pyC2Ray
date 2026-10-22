@@ -101,5 +101,5 @@ def test_benchmark_do_all_sources(benchmark, init_device, mesh_size, block_size)
 @pytest.mark.benchmark(warmup=True, warmup_iterations=1)
 def test_benchmark_do_all_sources_vary_sources(benchmark, init_device, log_ns):
     sources = int(10**log_ns)
-    with setup_do_all_sources(sources, 200, 64, 256, 10.0) as args:
+    with setup_do_all_sources(sources, 200, 256, 10.0) as args:
         benchmark(libasora.do_all_sources, *args)

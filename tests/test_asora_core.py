@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from pyc2ray.asora_core import (
+    available_memory,
     average_fraction_to_device,
     average_fraction_to_host,
     check_libasora,
@@ -14,6 +15,8 @@ from pyc2ray.asora_core import (
     flat_contiguous,
     is_device_init,
     is_periodic_mode_active,
+    max_q_shells,
+    max_resident_blocks,
     photo_table_to_device,
     source_data_to_device,
     timestep_data_to_device,
@@ -48,6 +51,23 @@ def test_device() -> None:
 
 def test_is_periodic_mode_active() -> None:
     assert isinstance(is_periodic_mode_active(), bool)
+
+
+def test_max_q_shells() -> None:
+    assert max_q_shells(1.0, 10) >= 0
+
+
+def test_available_memory(init_device) -> None:
+    assert available_memory() > 0
+
+
+def test_max_resident_blocks(init_device) -> None:
+    assert max_resident_blocks() > 0
+
+
+def test_max_resident_blocks_requires_device() -> None:
+    with pytest.raises(RuntimeError):
+        max_resident_blocks()
 
 
 def test_flat_contiguous_aliases_c_contiguous_input() -> None:

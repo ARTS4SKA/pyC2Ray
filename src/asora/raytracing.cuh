@@ -17,6 +17,9 @@ namespace asora {
 
     }  // namespace resident_tag
 
+    /// Threads per block of the raytracing kernel when the caller does not set it.
+    inline constexpr size_t default_block_size = 256;
+
     /* @brief Raytrace all sources and compute photoionization rates
      *
      * Performs GPU-accelerated raytracing for all radiation sources to calculate
@@ -31,18 +34,31 @@ namespace asora {
      * @param minlogtau Minimum log10(optical depth)
      * @param dlogtau Step size in log10(optical depth)
      * @param num_tau Number of optical depth bins
-     * @param block_size GPU block size for kernel launch (default: 256)
+     * @param block_size GPU block size for kernel launch (default: default_block_size)
      *
      * @note The number of blocks is not a parameter: it is resolved from the
      * device occupancy of the kernel, the memory the per-block column density
-     * buffers need, and the number of sources. Every block then works through the
-     * source list in strides, so a block that finishes early picks up the next
-     * source instead of waiting for the rest of the grid.
+     * buffers need, and the number of sources. Every block then takes the next
+     * source from a shared counter, so a block that finishes early picks up the
+     * next source instead of waiting for the rest of the grid.
      */
     void do_all_sources_gpu(
         double R, double sig, double dr, double *phi_ion, size_t num_src, size_t m1,
-        double minlogtau, double dlogtau, size_t num_tau, size_t block_size = 256
+        double minlogtau, double dlogtau, size_t num_tau,
+        size_t block_size = default_block_size
     );
+
+    /* @brief Number of raytracing blocks the device can keep resident
+     *
+     * Each resident block raytraces one source at a time, so this is the maximum
+     * number of sources raytraced concurrently, however many blocks are launched.
+     *
+     * @param block_size Threads per block, as passed to do_all_sources_gpu
+     * @return Resident blocks over the whole device, never zero
+     * @throw std::runtime_error if the device is not initialized, or if no block of
+     * block_size threads fits on a multiprocessor
+     */
+    size_t max_resident_blocks(size_t block_size = default_block_size);
 
     /* @brief Data structure for chemical element properties used in raytracing
      */

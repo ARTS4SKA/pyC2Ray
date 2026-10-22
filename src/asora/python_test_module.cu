@@ -180,6 +180,7 @@ static struct PyModuleDef asoramodule = {
 
 PyMODINIT_FUNC PyInit_libasoratest(void) {
     PyObject *module = PyModule_Create(&asoramodule);
+    PyModule_AddIntConstant(module, "num_banks", asora::num_banks);
     import_array();
     return module;
 }
