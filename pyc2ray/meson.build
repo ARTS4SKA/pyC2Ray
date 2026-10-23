@@ -33,7 +33,6 @@ pyc2ray_sources = [
     'solver/__init__.py',
     'solver/chemistry.py',
     'solver/hydrogen.py',
-    'tables/multifreq/cross_section_index.py',
     'utils/__init__.py',
     'utils/check_source_formalism.py',
     'utils/logutils.py',
@@ -50,4 +49,9 @@ py.install_sources(
     subdir: 'pyc2ray',
     pure: false,
     preserve_path: true,
+)
+
+install_subdir(
+    'tables',
+    install_dir: py.get_install_dir(pure: false) / 'pyc2ray',
 )

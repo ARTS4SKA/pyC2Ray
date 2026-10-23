@@ -5,7 +5,7 @@ import astropy.units as u
 import numpy as np
 from scipy.integrate import quad, quad_vec
 
-import pyc2ray as pc2r
+import pyc2ray.constants as c
 
 # For detailed comparisons with C2Ray, we use the same exact value for the constants. This can be changed to the astropy values once consistency between the two codes has been established
 
@@ -106,7 +106,7 @@ class Source_Multifreq:
         self.R_star = 1.0
         self.S_star_ref = S_star_ref
         self.freqs_tab, self.crossect_HI, self.crossect_HeI, self.crossect_HeII = (
-            np.loadtxt(pc2r.__path__[0] + "/tables/Verner1996_spectidx.txt")
+            np.loadtxt(c.TABLES_DIR / "Verner1996_spectidx.txt")
         )
 
         self.NumBndin1 = np.count_nonzero(self.crossect_HI) - np.count_nonzero(
