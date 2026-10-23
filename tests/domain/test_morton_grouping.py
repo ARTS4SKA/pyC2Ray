@@ -437,6 +437,7 @@ def test_build_groups_incremental_stored_costs_match_stored_geometry() -> None:
         source_batch_size=4,
         is_periodic_mode_active=True,
         photo_ion_table_size=16,
+        num_column_density_banks=4,
     )
 
     groups = grouping.build_groups_incremental(sources, grid, params, cost_model)
