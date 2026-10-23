@@ -109,6 +109,7 @@ def _grouping_inputs() -> tuple[RegularGrid, list[Source], pyC2RayCostModel]:
         source_batch_size=1,
         is_periodic_mode_active=True,
         photo_ion_table_size=2000,
+        num_column_density_banks=4,
     )
     return grid, sources, cost_model
 

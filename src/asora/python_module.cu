@@ -152,6 +152,15 @@ PyObject *asora_is_periodic_mode_active(
 #endif
 }
 
+/// Expose the number of q-shells kept in the column density ring buffer.
+PyObject *asora_num_column_density_banks(
+    [[maybe_unused]] PyObject *self, [[maybe_unused]] PyObject *args
+) {
+    if (!PyArg_ParseTuple(args, "")) return nullptr;
+
+    return PyLong_FromSize_t(asora::num_banks);
+}
+
 /// Allocate and copy density grid to the device.
 PyObject *asora_density_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
     PyArrayObject *ndens;
@@ -273,6 +282,8 @@ static PyMethodDef asoraMethods[] = {
      "Check if the device is initialized"},
     {"is_periodic_mode_active", asora_is_periodic_mode_active, METH_VARARGS,
      "Check if libasora was compiled with PERIODIC"},
+    {"num_column_density_banks", asora_num_column_density_banks, METH_VARARGS,
+     "Number of q-shells kept in the column density ring buffer"},
     {"density_to_device", asora_density_to_device, METH_VARARGS,
      "Copy density field to the device"},
     {"photo_table_to_device", asora_photo_table_to_device, METH_VARARGS,

@@ -10,6 +10,7 @@ __all__ = [
     "device_init",
     "is_device_init",
     "is_periodic_mode_active",
+    "num_column_density_banks",
     "photo_table_to_device",
     "prepare_grid_buffers",
 ]
@@ -39,6 +40,13 @@ def is_periodic_mode_active() -> bool:
     """Return whether libasora was compiled with periodic boundary conditions"""
     assert libasora is not None
     return libasora.is_periodic_mode_active()
+
+
+@check_libasora
+def num_column_density_banks() -> int:
+    """Return the number of q-shells kept in the libasora column density ring buffer"""
+    assert libasora is not None
+    return libasora.num_column_density_banks()
 
 
 @check_libasora

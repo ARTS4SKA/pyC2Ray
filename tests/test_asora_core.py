@@ -8,6 +8,7 @@ from pyc2ray.asora_core import (
     device_init,
     is_device_init,
     is_periodic_mode_active,
+    num_column_density_banks,
 )
 from pyc2ray.load_extensions import libasora
 
@@ -40,3 +41,9 @@ def test_device():
 
 def test_is_periodic_mode_active():
     assert isinstance(is_periodic_mode_active(), bool)
+
+
+def test_num_column_density_banks():
+    num_banks = num_column_density_banks()
+    assert isinstance(num_banks, int)
+    assert num_banks > 0
