@@ -1,3 +1,4 @@
+from collections.abc import Generator
 from unittest.mock import Mock, patch
 
 import astropy.constants as cst
@@ -14,48 +15,40 @@ from pyc2ray.radiation.common import make_tau_table
 
 
 @pytest.fixture
-def mock_c2ray():
-    with patch("pyc2ray.evolve.libc2ray") as mock:
-        mock.configure_mock(
-            **{
-                "chemistry.global_pass": Mock(return_value=1),
-                "raytracing.do_all_sources": Mock(return_value=(10, 0.1)),
-            }
-        )
+def mock_c2ray() -> Generator[Mock]:
+    mock = Mock()
+    mock.chemistry.global_pass.return_value = 1
+    mock.raytracing.do_all_sources.return_value = (10, 0.1)
+    with patch("pyc2ray.evolve.libc2ray", mock):
         yield mock
 
 
 @pytest.fixture
-def mock_asora():
+def mock_asora() -> Generator[Mock]:
+    # check_device_init decorates the evolve entry points at import time, so patching
+    # the decorator is too late. It looks libasora up in the asora_core globals on
+    # every call, so replacing that is what disarms the guard. The same mock goes into
+    # the evolve namespace as well, since some calls reach the extension module
+    # directly and others go through the asora_core wrappers; one mock means one place
+    # to assert on, and the wrappers themselves stay unmocked.
+    mock = Mock()
+    mock.is_device_init.return_value = True
+    mock.chemistry_global_pass.return_value = 1
+    mock.num_column_density_banks.return_value = 4
     with (
-        patch("pyc2ray.evolve.is_device_init", return_value=True),
-        patch("pyc2ray.evolve.libasora") as mock,
+        patch("pyc2ray.evolve.libasora", mock),
+        patch("pyc2ray.evolve.libasora", mock),
+        patch("pyc2ray.asora_core.libasora", mock),
     ):
-        mock.configure_mock(chemistry_global_pass=Mock(return_value=1))
-        yield mock
-
-
-@pytest.fixture
-def mock_asora_domain_decomposition():
-    """Mock the GPU-side helpers used by the domain decomposition path.
-
-    The domain decomposition module itself (grid, source grouping, subdomain
-    mapping) runs for real on the CPU; only the ASORA/GPU calls are mocked.
-    """
-    with (
-        patch("pyc2ray.evolve.is_device_init", return_value=True),
-        patch("pyc2ray.evolve.prepare_grid_buffers"),
-        patch("pyc2ray.evolve.libasora") as mock,
-    ):
-        mock.configure_mock(chemistry_global_pass=Mock(return_value=1))
         yield mock
 
 
 def call_evolve3D(
     use_gpu: bool = False,
+    use_mpi: bool = False,
     rank: int = 0,
     domain_decomposition_params: DomainDecompositionParameters | None = None,
-):
+) -> tuple[np.ndarray, np.ndarray]:
     N = 32
 
     rng = np.random.default_rng(918)
@@ -64,13 +57,13 @@ def call_evolve3D(
     src_flux *= 1e-46
 
     # The domain decomposition path builds a per-group local grid sized by the
-    # sources' radius of influence (R_max_LLS cells). On this small test grid a
+    # sources' radius of influence (R_max cells). On this small test grid a
     # radius of 15 cells would make local grids larger than the global grid,
     # which the periodic mapping forbids. Use a smaller radius in that case.
     if domain_decomposition_params is not None:
-        R_max_LLS = 2.0
+        R_max = 2.0
     else:
-        R_max_LLS = 15.0
+        R_max = 15.0
 
     shape = (N, N, N)
     ndens = np.empty(shape, order="F")
@@ -104,7 +97,7 @@ def call_evolve3D(
             src_pos=src_pos.T,
             src_flux=src_flux,
             N=N,
-            R_max_LLS=R_max_LLS,
+            R_max=R_max,
             src_batch_size=8,
             num_tau=num_tau,
             is_domain_periodic=True,
@@ -121,7 +114,7 @@ def call_evolve3D(
         max_subbox=1000,
         subboxsize=128,
         loss_fraction=1e-2,
-        use_mpi=False,
+        use_mpi=use_mpi,
         rank=rank,
         nprocs=8,
         temp=temp,
@@ -132,7 +125,7 @@ def call_evolve3D(
         photo_thick_table=photo_thick_table,
         minlogtau=minlogtau,
         dlogtau=dlogtau,
-        R_max_LLS=R_max_LLS,
+        R_max=R_max,
         convergence_fraction=1e-4,
         sigma=sigma,
         chems=ChemistryParams(2.59e-13, -0.7, colh0, temph0, 7.1e-7),
@@ -140,7 +133,7 @@ def call_evolve3D(
     )
 
 
-def test_evolve3D_no_gpu_root_rank(mock_c2ray, mock_asora):
+def test_evolve3D_no_gpu_root_rank(mock_c2ray: Mock, mock_asora: Mock) -> None:
     call_evolve3D(use_gpu=False, rank=0)
 
     mock_asora.source_data_to_device.assert_not_called()
@@ -152,7 +145,7 @@ def test_evolve3D_no_gpu_root_rank(mock_c2ray, mock_asora):
     mock_c2ray.raytracing.do_all_sources.assert_called()
 
 
-def test_evolve3D_yes_gpu_root_rank(mock_c2ray, mock_asora):
+def test_evolve3D_yes_gpu_root_rank(mock_c2ray: Mock, mock_asora: Mock) -> None:
     call_evolve3D(use_gpu=True, rank=0)
 
     mock_asora.source_data_to_device.assert_called()
@@ -165,9 +158,8 @@ def test_evolve3D_yes_gpu_root_rank(mock_c2ray, mock_asora):
 
 
 def test_evolve3D_yes_gpu_domain_decomposition_root_rank(
-    mock_c2ray, mock_asora_domain_decomposition
-):
-    mock_asora = mock_asora_domain_decomposition
+    mock_c2ray: Mock, mock_asora: Mock
+) -> None:
 
     domain_decomposition_params = DomainDecompositionParameters(
         enabled=True,
@@ -192,46 +184,48 @@ def test_evolve3D_yes_gpu_domain_decomposition_root_rank(
     mock_asora.density_to_device.assert_called()
     mock_asora.do_all_sources.assert_called()
     mock_asora.chemistry_global_pass.assert_called()
-    mock_asora.prepare_grid_buffers.assert_called()
 
     mock_c2ray.chemistry.global_pass.assert_not_called()
     mock_c2ray.raytracing.do_all_sources.assert_not_called()
 
 
-def test_evolve3D_yes_gpu_domain_decomposition_non_root_rank(
-    mock_asora_domain_decomposition,
-):
-    mock_asora = mock_asora_domain_decomposition
+def test_evolve3D_yes_gpu_domain_decomposition_non_root_rank(mock_asora: Mock) -> None:
+    # mock_asora = mock_asora_domain_decomposition
 
     # Record the average fraction each raytracing call receives, copied because the
     # buffers are reused across groups and iterations.
     raytraced_local_xh_av: list[np.ndarray] = []
-    mock_asora.do_all_sources.side_effect = lambda *args: raytraced_local_xh_av.append(
-        np.array(args[3])
-    )
+    with patch("pyc2ray.evolve.average_fraction_to_device") as mock_xh_av:
+        mock_xh_av.side_effect = lambda xh_av: raytraced_local_xh_av.append(xh_av)
 
-    with patch("pyc2ray.evolve.MPI") as mock_mpi:
-        mock_mpi.COMM_WORLD.Bcast.side_effect = lambda buf, root=0: buf[0].fill(0.3)
-        mock_mpi.COMM_WORLD.bcast.side_effect = [False, True]
-        call_evolve3D(
-            use_gpu=True,
-            rank=1,
-            domain_decomposition_params=DomainDecompositionParameters(
-                enabled=True, grouping_algorithm="morton", max_num_sources_per_group=4
-            ),
-        )
+        with patch("pyc2ray.evolve.comm") as mock_mpi:
+            mock_mpi.Allreduce.return_value = None
+            mock_mpi.Bcast.side_effect = lambda buf, root=0: buf[0].fill(0.3)
+            mock_mpi.bcast.side_effect = [False, True]
+            call_evolve3D(
+                use_gpu=True,
+                use_mpi=True,
+                rank=1,
+                domain_decomposition_params=DomainDecompositionParameters(
+                    enabled=True,
+                    grouping_algorithm="morton",
+                    max_num_sources_per_group=4,
+                ),
+            )
 
     # Rank 0's convergence decision ended the loop after two iterations.
-    assert mock_mpi.COMM_WORLD.bcast.call_count == 2
+    assert mock_mpi.bcast.call_count == 2
 
     # Non-root ranks only allocate receive buffers for the average fraction, so they
     # must never be read before rank 0's broadcast fills them: the first iteration
     # raytraces the initial fraction, the second the broadcast one.
     num_groups = len(raytraced_local_xh_av) // 2
     assert num_groups > 0 and len(raytraced_local_xh_av) == 2 * num_groups
+
+    # The initial ionized fraction set in call_evolve3D.
     for local_xh_av in raytraced_local_xh_av[:num_groups]:
-        # The initial ionized fraction set in call_evolve3D.
         np.testing.assert_array_equal(local_xh_av, 1.2e-3)
+
+    # The value broadcast by the mocked rank 0.
     for local_xh_av in raytraced_local_xh_av[num_groups:]:
-        # The value broadcast by the mocked rank 0.
         np.testing.assert_array_equal(local_xh_av, 0.3)
