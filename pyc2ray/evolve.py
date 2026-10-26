@@ -197,24 +197,22 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             logger.info(f"{rank_prefix}{num_src} sources.")
 
     # Copy positions & fluxes of sources to the GPU
-    assert libasora is not None
     source_data_to_device(src_pos, src_flux)
 
     # Copy density field to GPU once at the beginning of timestep (!! do_all_sources assumes this !!)
-    assert libasora is not None
     density_to_device(ndens)
-
-    # These fields do not change over the timestep. This also seeds the average ionized fraction
-    # on the device, which then stays there for the whole timestep.
-    xh = flat_contiguous(xh)
-    timestep_data_to_device(xh, temp, clump)
 
     # Intermediate storage on host to allow communication between ranks.
     xh_av = flat_contiguous(xh).copy()
     xh_int = flat_contiguous(xh).copy()
 
+    # These global fields are needed only by chemistry (on rank 0 only) and do not change over the timestep.
+    # The average fraction is seeded directly on the device.
+    if rank == 0:
+        timestep_data_to_device(xh, temp, clump)
+
     # Initialize ionization rate array.
-    phi_ion = np.zeros_like(xh)
+    phi_ion = np.zeros(mesh_shape, dtype=np.float64)
 
     with allow_rank_logging(rank):
         logger.info(f"{rank_prefix}Copied source data to device.")
@@ -509,8 +507,6 @@ Convergence Criterion (Number of points): {conv_criterion: n}
 Domain decomposition is active
 """)
 
-    assert libasora is not None
-
     # The average fraction is needed in two shapes:
     #  - flat for the device transfers
     #  - 3D for the subdomain mapping
@@ -519,8 +515,9 @@ Domain decomposition is active
     xh_av_grid = xh_av.reshape(mesh_shape)
     xh_int = xh_av.copy()
 
+    # These global fields are needed only by chemistry (on rank 0 only) and do not change over the timestep.
+    # The average fraction is seeded directly on the device.
     if rank == 0:
-        # These global fields are needed only by chemistry (run on rank 0 only) and do not change over the timestep.
         timestep_data_to_device(xh, temp, clump)
 
     # Initialize ionization rate array.
@@ -604,6 +601,7 @@ Domain decomposition is active
 
             # Apply the global rates to compute the updated ionization fraction.
             # This function updates the resident average fraction and xh_int.
+            assert libasora is not None
             conv_flag = libasora.chemistry_global_pass(
                 dt,
                 xh_int,

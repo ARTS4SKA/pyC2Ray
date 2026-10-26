@@ -1,3 +1,4 @@
+from collections.abc import Generator
 from unittest.mock import Mock, patch
 
 import astropy.constants as cst
@@ -14,7 +15,7 @@ from pyc2ray.radiation.common import make_tau_table
 
 
 @pytest.fixture
-def mock_c2ray():
+def mock_c2ray() -> Generator[Mock]:
     mock = Mock()
     mock.chemistry.global_pass.return_value = 1
     mock.raytracing.do_all_sources.return_value = (10, 0.1)
@@ -23,7 +24,7 @@ def mock_c2ray():
 
 
 @pytest.fixture
-def mock_asora():
+def mock_asora() -> Generator[Mock]:
     # check_device_init decorates the evolve entry points at import time, so patching
     # the decorator is too late. It looks libasora up in the asora_core globals on
     # every call, so replacing that is what disarms the guard. The same mock goes into
@@ -47,7 +48,7 @@ def call_evolve3D(
     use_mpi: bool = False,
     rank: int = 0,
     domain_decomposition_params: DomainDecompositionParameters | None = None,
-):
+) -> tuple[np.ndarray, np.ndarray]:
     N = 32
 
     rng = np.random.default_rng(918)
@@ -132,7 +133,7 @@ def call_evolve3D(
     )
 
 
-def test_evolve3D_no_gpu_root_rank(mock_c2ray, mock_asora):
+def test_evolve3D_no_gpu_root_rank(mock_c2ray: Mock, mock_asora: Mock) -> None:
     call_evolve3D(use_gpu=False, rank=0)
 
     mock_asora.source_data_to_device.assert_not_called()
@@ -144,7 +145,7 @@ def test_evolve3D_no_gpu_root_rank(mock_c2ray, mock_asora):
     mock_c2ray.raytracing.do_all_sources.assert_called()
 
 
-def test_evolve3D_yes_gpu_root_rank(mock_c2ray, mock_asora):
+def test_evolve3D_yes_gpu_root_rank(mock_c2ray: Mock, mock_asora: Mock) -> None:
     call_evolve3D(use_gpu=True, rank=0)
 
     mock_asora.source_data_to_device.assert_called()
@@ -156,7 +157,9 @@ def test_evolve3D_yes_gpu_root_rank(mock_c2ray, mock_asora):
     mock_c2ray.raytracing.do_all_sources.assert_not_called()
 
 
-def test_evolve3D_yes_gpu_domain_decomposition_root_rank(mock_c2ray, mock_asora):
+def test_evolve3D_yes_gpu_domain_decomposition_root_rank(
+    mock_c2ray: Mock, mock_asora: Mock
+) -> None:
 
     domain_decomposition_params = DomainDecompositionParameters(
         enabled=True,
@@ -186,9 +189,7 @@ def test_evolve3D_yes_gpu_domain_decomposition_root_rank(mock_c2ray, mock_asora)
     mock_c2ray.raytracing.do_all_sources.assert_not_called()
 
 
-def test_evolve3D_yes_gpu_domain_decomposition_non_root_rank(
-    mock_asora,
-):
+def test_evolve3D_yes_gpu_domain_decomposition_non_root_rank(mock_asora: Mock) -> None:
     # mock_asora = mock_asora_domain_decomposition
 
     # Record the average fraction each raytracing call receives, copied because the
