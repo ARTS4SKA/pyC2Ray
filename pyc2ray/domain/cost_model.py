@@ -1,14 +1,13 @@
 """
-This file contains the implementation of the abstract and pyC2Ray memory
-and computational cost models associated to the processing of a group of
-sources.
+This file contains the implementation of the abstract and ASORA raytracing memory
+and computational cost models associated to the processing of a group of sources.
 """
 
 from abc import ABC, abstractmethod
-from math import sqrt
+from math import ceil, floor
 from typing import Any
 
-import numpy as np
+from pyc2ray import asora_core
 
 
 class CostModel(ABC):
@@ -42,65 +41,63 @@ class CostModel(ABC):
         """
 
 
-class pyC2RayCostModel(CostModel):
+class ASORACostModel(CostModel):
     """Class providing the implementation of the cost model associated to
-    the pyC2Ray raytracing algorithm in GPU mode.
+    the ASORA raytracing algorithm in GPU mode.
+
+    The memory budget of a group is a fraction of the device memory available when the
+    model is built, and it also sets max_memory_cost_per_group: a group is valid as long
+    as at least one column density buffer fits in the budget next to its local fields.
 
     Attributes
     ----------
     max_memory_cost_per_group : float
-        Maximum allowed memory cost for a source group, used as a threshold in grouping algorithms.
-    source_batch_size : int
-        Number of sources to be processed in parallel.
+        Memory budget in bytes for a source group, budget * available_memory.
+    max_resident_blocks : int
+        Raytracing blocks the device can keep resident, which caps the number of
+        sources raytraced concurrently.
     is_periodic_mode_active : bool
         Whether the periodic mode is active in the grid.
-    photo_ion_table_size : int
-        Size of the phi_ion table.
     num_column_density_banks : int
         Number of q-shells kept in the ASORA column density ring buffer. If not specified,
         it is retrieved from the ASORA library.
+    budget : float
+        Fraction of the available device memory to be used for source group processing.
     """
 
     def __init__(
         self,
-        max_memory_cost_per_group: float,
-        source_batch_size: int,
+        available_memory: int,
+        max_resident_blocks: int,
         is_periodic_mode_active: bool,
-        photo_ion_table_size: int,
         num_column_density_banks: int | None = None,
+        budget: float = 0.9,
     ) -> None:
-        super().__init__(max_memory_cost_per_group)
-        self.source_batch_size = source_batch_size
-        self.photo_ion_table_size = photo_ion_table_size
-        self.is_periodic_mode_active = is_periodic_mode_active
-        if num_column_density_banks is None:
-            # Imported here to keep this module importable without the compiled extensions
-            from pyc2ray import asora_core
+        """
+        Parameters
+        ----------
+        available_memory : Available device memory in bytes, queried once by the caller.
+        max_resident_blocks : Raytracing blocks the device can keep resident, i.e. the
+            maximum number of sources raytraced concurrently, queried once by the caller.
+        is_periodic_mode_active : Whether the periodic mode is active in the grid.
+        budget : Fraction of the available device memory to be used, in (0, 1].
+        """
+        super().__init__(budget * available_memory)
 
+        if num_column_density_banks is None:
             num_column_density_banks = asora_core.num_column_density_banks()
         self.num_column_density_banks = num_column_density_banks
 
-    def _compute_q_max(self, R: float, n_cells_per_side: int) -> int:
-        """Compute the index of the outermost q-shell raytraced around a source.
+        self.max_resident_blocks = max_resident_blocks
+        self.is_periodic_mode_active = is_periodic_mode_active
+        self.budget = budget
 
-        Parameters
-        ----------
-        R : Maximum radius of source influence in grid units.
-        n_cells_per_side : Number of grid cells per side in the local grid.
-
-        Returns
-        -------
-        The outermost q-shell index q_max.
-        """
-
-        if n_cells_per_side <= 0:
-            raise ValueError("n_cells_per_side must be > 0")
-        if R < 0:
-            raise ValueError("R must be >= 0")
-
-        # TODO: these calculations are already present in multiple places,
-        # refactoring is needed
-        return int(np.ceil(sqrt(3) * min(R, sqrt(3) * n_cells_per_side / 2)))
+        if not 0.0 < budget <= 1.0:
+            raise ValueError(f"budget must be in (0, 1], got {budget}")
+        if max_resident_blocks < 1:
+            raise ValueError(
+                f"max_resident_blocks must be >= 1, got {max_resident_blocks}"
+            )
 
     def _compute_cells_to_shell(self, R: float, n_cells_per_side: int) -> int:
         """Compute the total number of cells in the octahedron of q-shells up to q_max
@@ -117,7 +114,7 @@ class pyC2RayCostModel(CostModel):
         The estimated number of cells influenced by the source in periodic mode.
         """
 
-        q_max = self._compute_q_max(R, n_cells_per_side)
+        q_max = asora_core.max_q_shells(R, n_cells_per_side)
         cells_to_shell = (1 + 2 * q_max) * (3 + 2 * q_max * (1 + q_max)) // 3
         return cells_to_shell
 
@@ -135,7 +132,7 @@ class pyC2RayCostModel(CostModel):
         The number of cells in the q_max shell.
         """
 
-        q_max = self._compute_q_max(R, n_cells_per_side)
+        q_max = asora_core.max_q_shells(R, n_cells_per_side)
         if q_max == 0:
             return 1
         return 4 * q_max * q_max + 2
@@ -145,34 +142,46 @@ class pyC2RayCostModel(CostModel):
     ) -> tuple[float, float]:
         """Compute both memory and computational costs of processing a source group.
 
-        The GPU memory footprint for a single source group of n_src sources, to be processed in batches of size batch_size,
-        is given by:
+        The raytracing of a group needs its local fields and one column density buffer per
+        source processed in parallel. The number of sources processed in parallel is
+        maximized within the memory budget:
 
-            M_GPU[bytes] =
-                8 * (3 * n_cells + batch_size * num_banks * cells_in_shell(q_max) + 2 * photo_ion_table_size + n_src)
-                + 12 * n_src
+            baseline[bytes] = 8 * 3 * n_cells + 20 * n_src
+            coldens[bytes] = 8 * num_banks * cells_in_shell(q_max)
+            num_batches = max(
+                min(
+                    floor((budget - baseline) / coldens),
+                    max_resident_blocks,
+                    n_src,
+                ),
+                1,
+            )
+            M_GPU[bytes] = baseline + num_batches * coldens
 
             where
+                budget = max_memory_cost_per_group
                 n_cells = n_cell_per_side^3
-                q_max = ceil(sqrt(3) * min(R, sqrt(3) * n_cell_per_side / 2))
+                q_max = ceil(min(sqrt(3) * R, n_cell_per_side * 1.5))
                 R = maximum radius of source influence in grid units
                 num_banks = num_column_density_banks, q-shells kept in the column density ring buffer
                 cells_in_shell(q) = 4*q^2 + 2 (1 for q = 0)
-                photo_ion_table_size = number of entries in each photoionization table
+                cells_to_shell(q) = (1 + 2*q) * (3 + 2*q*(1 + q)) / 3
                 n_src = number of sources in the group
 
             Terms correspond to:
                 - 3 * n_cells doubles: number_density, fraction_HII, photo_ionization_HI
-                - batch_size * num_banks * cells_in_shell(q_max) doubles: column_density_HI
-                  ring buffer (each source in a batch keeps only the last num_banks q-shells)
-                - 2 * photo_ion_table_size doubles: thin/thick photoionization tables
                 - n_src doubles + 3*n_src int32: source flux and source positions
+                - num_batches * num_banks * cells_in_shell(q_max) doubles: column_density_HI
+                  ring buffers (each source processed in parallel keeps only the last
+                  num_banks q-shells)
 
+            The photoionization tables are resident on the device before the available
+            memory is queried, so they are not part of the group footprint.
 
-        # TODO: define a more accurate computational cost model for the pyC2Ray raytracing algorithm.
-        Concerning the computational cost, for the pyC2Ray raytracing algorithm, we can temporarily use a simple cost model
-        where the cost is proportional to the number of sources in the group and the number of cells influenced by the
-        sources at least in periodic mode.
+        # TODO: define a more accurate computational cost model for the ASORA raytracing algorithm.
+        The computational cost is the number of waves of parallel sources needed to process
+        the group, ceil(n_src / num_batches), times the number of cells raytraced per source,
+        cells_to_shell(q_max), at least in periodic mode.
         # TODO: add the data transfer cost to the computational cost model, which is currently ignored.
 
         It is assumed that all the sources in the group have the same radius of influence R and that the
@@ -189,27 +198,38 @@ class pyC2RayCostModel(CostModel):
         -------
         The estimated memory and computational costs of processing the group.
         """
-        if n_src < 0:
-            raise ValueError("n_src must be >= 0")
+        if n_src <= 0:
+            raise ValueError("At least one source is needed")
+
+        tot_mem = self.max_memory_cost_per_group
 
         cells_to_shell = self._compute_cells_to_shell(R, n_cells_per_side)
         cells_in_shell = self._compute_cells_in_shell(R, n_cells_per_side)
         n_cells = n_cells_per_side**3
-        mem_cost = (
-            8
-            * (
-                3 * n_cells
-                + self.source_batch_size
-                * self.num_column_density_banks
-                * cells_in_shell
-                + 2 * self.photo_ion_table_size
-                + n_src
-            )
-            + 12 * n_src
+        baseline = (
+            # number density
+            8 * n_cells
+            # average fraction
+            + 8 * n_cells
+            # photo ionization
+            + 8 * n_cells
+            # sources (flux and positions)
+            + 20 * n_src
         )
 
+        coldens = 8 * self.num_column_density_banks * cells_in_shell
+        blocks = floor((tot_mem - baseline) / coldens)
+
+        # At least one batch: when not even one buffer fits in the budget, the memory
+        # cost is the minimum footprint, which exceeds the budget, so the grouping
+        # rejects the merge. A single-source group is not checked by the grouping, and
+        # if it does not fit, ASORA fails when it allocates the buffer.
+        n_batches = max(min(blocks, self.max_resident_blocks, n_src), 1)
+
+        mem_cost = baseline + n_batches * coldens
+
         if self.is_periodic_mode_active:
-            comp_cost = n_src * min(n_cells, cells_to_shell)
+            comp_cost = cells_to_shell * ceil(n_src / n_batches)
             return mem_cost, comp_cost
 
         raise NotImplementedError(

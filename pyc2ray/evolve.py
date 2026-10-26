@@ -470,7 +470,8 @@ def _evolve3D_asora_domain_decomposition(
         Parameters used by the chemistry solver.
     decomposition
         Domain decomposition handler holding the subdomains assigned to this rank, owned and
-        reused across timesteps by the caller.
+        reused across timesteps by the caller. It is updated here, and only rebuilds its
+        decomposition when the sources or R_max have changed.
 
     Returns
     -------
@@ -517,6 +518,16 @@ Domain decomposition is active
 
     # Initialize ionization rate array.
     phi_ion = np.zeros(mesh_shape, dtype=np.float64)
+
+    # Update decomposition is called after the resident device memory has been occupied,
+    # so as to correctly query the available memory.
+    decomposition.update_decomposition(
+        cell_size=dr,
+        src_pos=src_pos.T,
+        src_flux=src_flux,
+        N=mesh_shape[0],
+        R_max=R_max,
+    )
 
     # Iteration counter
     n_count = 0
