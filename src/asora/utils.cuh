@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 #include <cuda/std/array>
 
+#include <cmath>
 #include <concepts>
 #include <source_location>
 
@@ -127,6 +128,19 @@ namespace asora {
 
     /// Get cumulative number of cells up to and including shell q.
     __host__ __device__ size_t cells_to_shell(int q);
+
+    /* @brief Compute maximum number of q-shells required for a given radius.
+     *
+     * Determines how many octahedral shells are needed to cover a sphere of radius
+     * R_max, limited by the grid size N.
+     *
+     * @param[in] R_max Maximum radius to cover
+     * @param[in] N Grid size
+     * @return Maximum q-shell index
+     */
+    inline int max_q_shells(double R_max, size_t N) {
+        return std::ceil(std::min(c::sqrt3<> * R_max, N * 1.5));
+    }
 
     /* @brief Calculate geometric path length of a ray through a cell.
      *
