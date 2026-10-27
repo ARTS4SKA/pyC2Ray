@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from pyc2ray.load_extensions import libasora
@@ -15,6 +16,11 @@ def test_dir() -> Path:
 def data_dir(test_dir: Path) -> Path:
     """Return the path to the data folder for tests"""
     return test_dir / "data"
+
+
+@pytest.fixture(scope="module")
+def zred_array() -> np.ndarray:
+    return np.geomspace(20, 1, num=10)
 
 
 @pytest.fixture
