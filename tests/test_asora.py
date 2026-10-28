@@ -28,13 +28,10 @@ def geometric_factors(di: int, dj: int, dk: int) -> tuple[float, float, float]:
         di, dk = dk, di
         di, dj = dj, di
 
-    xi = di / abs(dk)
-    xj = dj / abs(dk)
-
-    dx = 1 - abs(xi)
-    dy = 1 - abs(xj)
+    xi = abs(di / dk)
+    xj = abs(dj / dk)
     path = math.sqrt(1 + xi**2 + xj**2)
-    return dx, dy, path
+    return xi, xj, path
 
 
 class TestShortCharacteristicsInterpolation:
@@ -108,7 +105,7 @@ class TestShortCharacteristicsInterpolation:
             assert item.dy == pytest.approx(dy)
             assert item.path == pytest.approx(path)
 
-            weights = [(1 - dx) * (1 - dy), (1 - dy) * dx, (1 - dx) * dy, dx * dy]
+            weights = [dx * dy, (1 - dx) * dy, (1 - dy) * dx, (1 - dx) * (1 - dy)]
 
             # Check that the interpolation indices are correct.
             q = abs(item.di) + abs(item.dj) + abs(item.dk)

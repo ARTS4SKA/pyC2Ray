@@ -26,7 +26,7 @@ namespace {
 
     __device__ cuda::std::array<float, 4> make_weights(float dx, float dy) {
         auto dxdy = dx * dy;
-        return {1.f - dx - dy + dxdy, dx - dxdy, dy - dxdy, dxdy};
+        return {dxdy, dy - dxdy, dx - dxdy, 1.f - dx - dy + dxdy};
     }
 
 }  // namespace
@@ -104,12 +104,10 @@ namespace asora {
             "Invalid short-characteristic offsets: |dk| must be the largest and "
             "non-zero"
         );
-        auto inv_dk = 1.f / std::abs(dk);
-        auto xi = di * inv_dk;
-        auto xj = dj * inv_dk;
-        return {
-            1.f - std::abs(xi), 1.f - std::abs(xj), std::sqrt(1.f + xi * xi + xj * xj)
-        };
+        auto inv_dk = 1.f / dk;
+        auto xi = std::abs(di * inv_dk);
+        auto xj = std::abs(dj * inv_dk);
+        return {xi, xj, std::sqrt(1.f + xi * xi + xj * xj)};
     }
 
     __device__ shortchar_info
