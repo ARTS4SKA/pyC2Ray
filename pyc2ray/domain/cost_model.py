@@ -10,6 +10,8 @@ from typing import Any
 
 import numpy as np
 
+from pyc2ray.load_extensions import libasora
+
 
 class CostModel(ABC):
     """Abstract class providing a common interface for memory/computational cost models associated
@@ -102,44 +104,6 @@ class pyC2RayCostModel(CostModel):
         # refactoring is needed
         return int(np.ceil(sqrt(3) * min(R, sqrt(3) * n_cells_per_side / 2)))
 
-    def _compute_cells_to_shell(self, R: float, n_cells_per_side: int) -> int:
-        """Compute the total number of cells in the octahedron of q-shells up to q_max
-        centered on a source, which is an estimate of the number of cells influenced
-        by the source in periodic mode.
-
-        Parameters
-        ----------
-        R : Maximum radius of source influence in grid units.
-        n_cells_per_side : Number of grid cells per side in the local grid.
-
-        Returns
-        -------
-        The estimated number of cells influenced by the source in periodic mode.
-        """
-
-        q_max = self._compute_q_max(R, n_cells_per_side)
-        cells_to_shell = (1 + 2 * q_max) * (3 + 2 * q_max * (1 + q_max)) // 3
-        return cells_to_shell
-
-    def _compute_cells_in_shell(self, R: float, n_cells_per_side: int) -> int:
-        """Compute the number of cells in the outermost q-shell (q_max) around a source,
-        which is the size of one bank of the column density ring buffer.
-
-        Parameters
-        ----------
-        R : Maximum radius of source influence in grid units.
-        n_cells_per_side : Number of grid cells per side in the local grid.
-
-        Returns
-        -------
-        The number of cells in the q_max shell.
-        """
-
-        q_max = self._compute_q_max(R, n_cells_per_side)
-        if q_max == 0:
-            return 1
-        return 4 * q_max * q_max + 2
-
     def compute_group_costs(
         self, R: float, n_cells_per_side: int, n_src: int
     ) -> tuple[float, float]:
@@ -192,8 +156,10 @@ class pyC2RayCostModel(CostModel):
         if n_src < 0:
             raise ValueError("n_src must be >= 0")
 
-        cells_to_shell = self._compute_cells_to_shell(R, n_cells_per_side)
-        cells_in_shell = self._compute_cells_in_shell(R, n_cells_per_side)
+        q_max = self._compute_q_max(R, n_cells_per_side)
+        assert libasora is not None
+        cells_to_shell = libasora.cells_to_shell(q_max)
+        cells_in_shell = libasora.cells_in_shell(q_max)
         n_cells = n_cells_per_side**3
         mem_cost = (
             8
