@@ -53,6 +53,7 @@ def setup_do_all_sources(
     # The average ionized fraction is resident: seed it along with the other
     # per-timestep fields, which this test does not otherwise exercise.
     libasora.timestep_data_to_device(xHII, np.full(size, 1e4), np.ones(size))
+    libasora.average_fraction_to_device(xHII)
 
     # Define some random sources
     rng = np.random.default_rng(918)

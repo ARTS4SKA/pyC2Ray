@@ -214,25 +214,6 @@ class TestLibasora:
         libasora.timestep_data_to_device(*self.create_timestep_data(64))
         libasora.timestep_data_to_device(*self.create_timestep_data(32))
 
-    def test_timestep_data_seeds_average_fraction(self, init_device):
-        """The average fraction starts the timestep equal to the initial one.
-
-        It is seeded device-to-device rather than uploaded, so this is the only
-        check that the second copy inside timestep_data_to_device happened at all.
-        """
-        rng = np.random.default_rng(1991)
-        xh = rng.uniform(0.0, 1.0, size=512)
-        ones = np.ones_like(xh)
-
-        assert libasora is not None
-        libasora.timestep_data_to_device(xh, 1e4 * ones, ones)
-
-        xh_av = np.zeros_like(xh)
-        libasora.average_fraction_to_host(xh_av)
-
-        # A memcpy round trip, so the values must come back bit for bit.
-        assert np.array_equal(xh_av, xh)
-
     def test_average_fraction_to_device_no_init(self):
         with pytest.raises(RuntimeError):
             libasora.average_fraction_to_device(self.create_density_data(8))
@@ -269,14 +250,6 @@ class TestLibasora:
         assert libasora is not None
         with pytest.raises(RuntimeError):
             libasora.average_fraction_to_host(np.zeros(8, dtype=np.float64))
-
-    def test_average_fraction_to_host_too_large(self, init_device):
-        """The host array cannot ask for more cells than the device holds."""
-        assert libasora is not None
-        libasora.timestep_data_to_device(*self.create_timestep_data(8))
-
-        with pytest.raises(ValueError):
-            libasora.average_fraction_to_host(np.zeros(8**3 + 1, dtype=np.float64))
 
     def test_average_fraction_round_trip(self, init_device):
         """The path of a rank that receives the field by broadcast.

@@ -27,7 +27,7 @@ namespace asora {
      * @param n_cells Number of cells in the simulation
      * @param block_size CUDA block size
      *
-     * @return Number of converged cells
+     * @return Number of non-converged cells
      */
     size_t global_pass(
         double* xh_int, const double* phi_ion, double dt, double bh00, double albpow,

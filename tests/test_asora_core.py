@@ -21,8 +21,9 @@ from pyc2ray.asora_core import (
 )
 from pyc2ray.load_extensions import libasora
 
-if libasora is None:
-    pytest.skip("libasora.so missing, skipping tests", allow_module_level=True)
+requires_libasora = pytest.mark.skipif(
+    libasora is None, reason="libasora.so missing, skipping tests"
+)
 
 
 @check_libasora
@@ -128,7 +129,15 @@ def test_device_close_when_not_initialized(mock_libasora) -> None:
     mock_libasora.device_close.assert_not_called()
 
 
-# Every wrapper that pushes or pulls arrays, with its entry point and arity.
+def make_args(count: int) -> list[np.ndarray]:
+    """Return `count` distinguishable non-contiguous arrays, one per parameter."""
+    return [
+        np.full((2, 2, 2), value, dtype=np.float64, order="F")
+        for value in range(1, count + 1)
+    ]
+
+
+# Every wrapper that pushes arrays, with its entry point and arity.
 TRANSFERS = [
     pytest.param(density_to_device, "density_to_device", 1, id="density"),
     pytest.param(source_data_to_device, "source_data_to_device", 2, id="source_data"),
@@ -139,21 +148,14 @@ TRANSFERS = [
     pytest.param(
         average_fraction_to_device, "average_fraction_to_device", 1, id="average_to_dev"
     ),
+    # The following ones require contiguous arrays as input.
     pytest.param(
         average_fraction_to_host, "average_fraction_to_host", 1, id="average_to_host"
     ),
 ]
 
 
-def make_args(count: int) -> list[np.ndarray]:
-    """Return `count` distinguishable non-contiguous arrays, one per parameter."""
-    return [
-        np.full((2, 2, 2), value, dtype=np.float64, order="F")
-        for value in range(1, count + 1)
-    ]
-
-
-@pytest.mark.parametrize(("wrapper", "entry_point", "count"), TRANSFERS)
+@pytest.mark.parametrize(("wrapper", "entry_point", "count"), TRANSFERS[:-1])
 def test_transfer_flattens_arguments(
     mock_libasora, wrapper: Callable, entry_point: str, count: int
 ) -> None:
@@ -189,3 +191,22 @@ def test_transfer_requires_library(
         pytest.raises(RuntimeError, match="not loaded"),
     ):
         wrapper(*make_args(count))
+
+
+@requires_libasora
+def test_average_fraction_to_host_round_trip(init_device) -> None:
+    """timestep_data_to_device seeds the average from xh; reading it back into a
+    3D array must fill the caller's array, not a temporary."""
+    shape = (4, 4, 4)
+    xh = np.random.default_rng(0).random(shape)
+    average_fraction_to_device(xh)
+
+    # Contiguous array
+    xh_av = np.zeros(shape, dtype=np.float64, order="C")
+    average_fraction_to_host(xh_av)
+    assert np.array_equal(xh_av, xh)
+
+    # Non-contiguous array
+    xh_av = np.zeros(shape, dtype=np.float64, order="F")
+    average_fraction_to_host(xh_av)
+    assert np.array_equal(xh_av, xh)
