@@ -207,9 +207,10 @@ Convergence Criterion (Number of points): {conv_criterion: n}
     xh_int = flat_contiguous(xh).copy()
 
     # These global fields are needed only by chemistry (on rank 0 only) and do not change over the timestep.
-    # The average fraction is seeded directly on the device.
     if rank == 0:
         timestep_data_to_device(xh, temp, clump)
+    # The average fraction is seeded from xh.
+    average_fraction_to_device(xh)
 
     # Initialize ionization rate array.
     phi_ion = np.zeros(mesh_shape, dtype=np.float64)
@@ -516,7 +517,7 @@ Domain decomposition is active
     xh_int = xh_av.copy()
 
     # These global fields are needed only by chemistry (on rank 0 only) and do not change over the timestep.
-    # The average fraction is seeded directly on the device.
+    # The average fraction is copied by the subdomain raytracing step.
     if rank == 0:
         timestep_data_to_device(xh, temp, clump)
 

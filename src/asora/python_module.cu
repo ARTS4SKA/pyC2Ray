@@ -172,47 +172,47 @@ PyObject *asora_num_column_density_banks(
 PyObject *asora_density_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
     SAFE_CHECK_INITIALIZED();
 
+    PyArrayObject *ndens;
+    if (!PyArg_ParseTuple(args, "O", &ndens)) return nullptr;
+
     using namespace asora;
     namespace tag = resident_tag;
-    PyArrayObject *ndens;
-    return PyArg_ParseTuple(args, "O", &ndens) &&  //
-                   load_array_to_device(ndens, device::resident<tag::number_density>())
-               ? Py_NewRef(Py_None)
-               : nullptr;
+    if (!load_array_to_device(ndens, device::resident<tag::number_density>()))
+        return nullptr;
+
+    Py_RETURN_NONE;
 }
 
 /// Allocate and copy radiation tables to the device.
 PyObject *asora_photo_table_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
     SAFE_CHECK_INITIALIZED();
 
+    PyArrayObject *thin_table, *thick_table;
+    if (!PyArg_ParseTuple(args, "OO", &thin_table, &thick_table)) return nullptr;
+
     using namespace asora;
     namespace tag = resident_tag;
-    PyArrayObject *thin_table, *thick_table;
-    return PyArg_ParseTuple(args, "OO", &thin_table, &thick_table) &&
-                   load_array_to_device(
-                       thin_table, device::resident<tag::photo_ion_thin>()
-                   ) &&
-                   load_array_to_device(
-                       thick_table, device::resident<tag::photo_ion_thick>()
-                   )
-               ? Py_NewRef(Py_None)
-               : nullptr;
+    if (!load_array_to_device(thin_table, device::resident<tag::photo_ion_thin>()) ||
+        !load_array_to_device(thick_table, device::resident<tag::photo_ion_thick>()))
+        return nullptr;
+
+    Py_RETURN_NONE;
 }
 
 /// Allocate and copy source properties to the device.
 PyObject *asora_source_data_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
     SAFE_CHECK_INITIALIZED();
 
+    PyArrayObject *src_pos, *src_flux;
+    if (!PyArg_ParseTuple(args, "OO", &src_pos, &src_flux)) return nullptr;
+
     using namespace asora;
     namespace tag = resident_tag;
-    PyArrayObject *src_pos, *src_flux;
-    return PyArg_ParseTuple(args, "OO", &src_pos, &src_flux) &&
-                   load_array_to_device(
-                       src_pos, device::resident<tag::source_position>()
-                   ) &&
-                   load_array_to_device(src_flux, device::resident<tag::source_flux>())
-               ? Py_NewRef(Py_None)
-               : nullptr;
+    if (!load_array_to_device(src_pos, device::resident<tag::source_position>()) ||
+        !load_array_to_device(src_flux, device::resident<tag::source_flux>()))
+        return nullptr;
+
+    Py_RETURN_NONE;
 }
 
 /// Allocate and copy the fields that stay constant for one timestep.
@@ -230,19 +230,7 @@ PyObject *asora_timestep_data_to_device(
         !load_array_to_device(clump, device::resident<tag::clumping>()))
         return nullptr;
 
-    // The average fraction starts the timestep equal to the initial one, so it is
-    // seeded device-to-device rather than uploaded a second time. From here on it
-    // is updated in place by the chemistry pass and never leaves the device,
-    // except where a rank has to broadcast it.
-    try {
-        device::resident<tag::fraction_HII_avg>().assign(
-            device::resident<tag::fraction_HII>()
-        );
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_ValueError, e.what());
-        return nullptr;
-    }
-    return Py_None;
+    Py_RETURN_NONE;
 }
 
 /// Copy the average ionized fraction to the device, for ranks that receive it.
@@ -250,15 +238,15 @@ PyObject *asora_average_fraction_to_device(
     [[maybe_unused]] PyObject *self, PyObject *args
 ) {
     SAFE_CHECK_INITIALIZED();
+    PyArrayObject *xh_av;
+    if (!PyArg_ParseTuple(args, "O", &xh_av)) return nullptr;
 
     using namespace asora;
     namespace tag = resident_tag;
-    PyArrayObject *xh_av;
-    return PyArg_ParseTuple(
-               args, "O", &xh_av
-           ) && load_array_to_device(xh_av, device::resident<tag::fraction_HII_avg>())
-               ? Py_None
-               : nullptr;
+    if (!load_array_to_device(xh_av, device::resident<tag::fraction_HII_avg>()))
+        return nullptr;
+
+    Py_RETURN_NONE;
 }
 
 /// Copy the average ionized fraction back to the host, for ranks that broadcast it.
@@ -277,8 +265,7 @@ PyObject *asora_average_fraction_to_host(
     if (!frac_HII_avg) {
         PyErr_SetString(
             PyExc_RuntimeError,
-            "average ionized fraction is not allocated on the device; call "
-            "timestep_data_to_device first"
+            "average ionized fraction is not allocated on the device"
         );
         return nullptr;
     }
@@ -292,6 +279,7 @@ PyObject *asora_average_fraction_to_host(
         PyErr_SetString(PyExc_ValueError, e.what());
         return nullptr;
     }
+
     Py_RETURN_NONE;
 }
 

@@ -169,4 +169,9 @@ def average_fraction_to_host(xh_av: np.ndarray) -> None:
     it never has to leave the device.
     """
     assert libasora is not None
-    libasora.average_fraction_to_host(flat_contiguous(xh_av))
+    xh_av_flat = flat_contiguous(xh_av)
+    libasora.average_fraction_to_host(xh_av_flat)
+
+    # If input was not a view, copy to original array.
+    if xh_av_flat.base is not xh_av:
+        xh_av.flat[:] = xh_av_flat

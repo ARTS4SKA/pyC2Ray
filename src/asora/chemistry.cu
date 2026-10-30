@@ -160,7 +160,7 @@ namespace asora {
         // Check for errors.
         safe_cuda(cudaPeekAtLastError());
 
-        // Reduction kernel to count non-zero elements.
+        // Reduction kernel to count non-zero elements, i.e. non-converged cells.
         // TODO: set thrust to the correct stream
         auto convergence = thrust::count(
             thrust::device, conv_flag.data(), conv_flag.data() + n_cells, true

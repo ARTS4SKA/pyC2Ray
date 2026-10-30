@@ -286,8 +286,6 @@ namespace asora {
         size_t _items = 0;
     };
 
-    namespace resident_tag {}  // namespace resident_tag
-
     /* @brief Singleton managing only one GPU device and its memory pool.
      *
      * The singleton pattern ensures thread-safe initialization of the class and
