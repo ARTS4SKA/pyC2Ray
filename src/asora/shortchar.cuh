@@ -38,9 +38,6 @@ namespace asora {
     };
 
     struct shortchar_info {
-        /// Cell offsets (di, dj, dk)
-        int3 pos;
-
         /// Geometric factors.
         float dx;
         float dy;
@@ -62,13 +59,16 @@ namespace asora {
      */
     __host__ __device__ float3 compute_shortchar_factors(int di, int dj, int dk);
 
-    /* @brief Create a shortchar_info structure from cell coordinates.
+    /* @brief Create a shortchar_info structure from cell offsets already in hand.
      *
-     * @param pos Integer coordinates of the cell (di, dj, dk).
+     * The caller must handle the source cell (pos = {0, 0, 0}) separately.
+     *
+     * @param pos Integer offsets of the cell (di, dj, dk) from the source.
+     * @param bank_size Number of cells in the largest q-shell.
      * @return A shortchar_interp_data structure containing the cell's properties.
      */
     __device__ shortchar_info
-    make_shortchar_interpolation_info(int q, int s, size_t bank_size);
+    make_shortchar_interpolation_info(const int3 &pos, size_t bank_size);
 
     /// Structure of arrays for a short-characteristic interpolation LUT on device.
     struct shortchar_lut {
@@ -79,17 +79,20 @@ namespace asora {
         /// Check if the LUT has been assigned and is ready for use.
         __host__ __device__ bool is_set() const { return _assigned; }
 
-        /// Get the short-characteristic parameters.
-        __device__ shortchar_info get(size_t index) const {
-            return {
-                unpack_offset(_offsets[index]), _dxs[index], _dys[index], _paths[index],
-                _indices[index]
-            };
+        /// Get the cell offsets alone. Enough to reject a cell before paying for
+        /// the remaining 28 bytes of the entry.
+        __device__ int3 offset(size_t index) const {
+            return unpack_offset(_offsets[index]);
+        }
+
+        /// Get the interpolation parameters for a cell whose offsets are in hand.
+        __device__ shortchar_info params(size_t index) const {
+            return {_dxs[index], _dys[index], _paths[index], _indices[index]};
         }
 
         /// Set the short-characteristic parameters.
-        __device__ void set(size_t index, const shortchar_info &info) {
-            _offsets[index] = pack_offset(info.pos);
+        __device__ void set(size_t index, const int3 &pos, const shortchar_info &info) {
+            _offsets[index] = pack_offset(pos);
             _dxs[index] = info.dx;
             _dys[index] = info.dy;
             _paths[index] = info.path;
@@ -123,7 +126,12 @@ namespace asora {
     shortchar_lut create_shortchar_interp_lut(int q_max);
 
     // Array of structure for a short-characteristic interpolation LUT on host.
-    using shortchar_entries = std::vector<shortchar_info>;
+    struct shortchar_entry {
+        int3 pos;
+        shortchar_info info;
+    };
+
+    using shortchar_entries = std::vector<shortchar_entry>;
 
     /* @brief Copy the short-characteristic interpolation LUT from device to host.
      *
