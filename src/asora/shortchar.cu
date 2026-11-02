@@ -111,11 +111,9 @@ namespace asora {
     }
 
     __device__ shortchar_info
-    make_shortchar_interpolation_info(int q, int s, size_t bank_size) {
-        if (q == 0 && s == 0) return {{0, 0, 0}, 0.f, 0.f, 0.5f, {0, 0, 0, 0}};
-
-        auto pos = shell2cart(q, s);
+    make_shortchar_interpolation_info(const int3& pos, size_t bank_size) {
         const auto& [di, dj, dk] = pos;
+        if (di == 0 && dj == 0 && dk == 0) return {0.f, 0.f, 0.5f, {0, 0, 0, 0}};
 
         auto ai = std::abs(di);
         auto aj = std::abs(dj);
@@ -170,7 +168,7 @@ namespace asora {
             sx += 3;
         }
 
-        return {pos, dd.x, dd.y, dd.z, std::move(indices)};
+        return {dd.x, dd.y, dd.z, std::move(indices)};
     }
 
     // This constructor if private.
@@ -205,8 +203,9 @@ namespace asora {
             size_t s = threadIdx.x;
             while (s < cells_in_shell(q)) {
                 auto index = cells_to_shell(q - 1) + s;
-                auto info = make_shortchar_interpolation_info(q, s, bank_size);
-                sclut.set(index, info);
+                auto pos = shell2cart(q, s);
+                auto info = make_shortchar_interpolation_info(pos, bank_size);
+                sclut.set(index, pos, info);
 
                 s += blockDim.x;
             }
@@ -271,7 +270,9 @@ namespace asora {
         lut.reserve(n_cells);
         for (size_t i = 0; i < n_cells; ++i) {
             auto&& [di, dj, dk] = unpack_offset(offsets_h[i]);
-            lut.push_back({di, dj, dk, dxs_h[i], dys_h[i], paths_h[i], indices_h[i]});
+            lut.push_back(
+                {{di, dj, dk}, {dxs_h[i], dys_h[i], paths_h[i], indices_h[i]}}
+            );
         }
 
         return lut;

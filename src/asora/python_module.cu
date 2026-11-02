@@ -38,24 +38,25 @@ namespace {
     };
 
     /// Convert a asora lut_entry to a LutEntry python object.
-    PyObject *build_lut_entry(const asora::shortchar_info &info) {
+    PyObject *build_lut_entry(const asora::shortchar_entry &entry) {
         PyObject *obj = PyStructSequence_New(LutEntryType);
         if (!obj) return nullptr;
 
         PyObject *indices = Py_BuildValue(
-            "IIII", info.indices[0], info.indices[1], info.indices[2], info.indices[3]
+            "IIII", entry.info.indices[0], entry.info.indices[1], entry.info.indices[2],
+            entry.info.indices[3]
         );
         if (!indices) {
             Py_DECREF(obj);
             return nullptr;
         }
 
-        PyStructSequence_SetItem(obj, 0, PyLong_FromLong(info.pos.x));
-        PyStructSequence_SetItem(obj, 1, PyLong_FromLong(info.pos.y));
-        PyStructSequence_SetItem(obj, 2, PyLong_FromLong(info.pos.z));
-        PyStructSequence_SetItem(obj, 3, PyFloat_FromDouble(info.dx));
-        PyStructSequence_SetItem(obj, 4, PyFloat_FromDouble(info.dy));
-        PyStructSequence_SetItem(obj, 5, PyFloat_FromDouble(info.path));
+        PyStructSequence_SetItem(obj, 0, PyLong_FromLong(entry.pos.x));
+        PyStructSequence_SetItem(obj, 1, PyLong_FromLong(entry.pos.y));
+        PyStructSequence_SetItem(obj, 2, PyLong_FromLong(entry.pos.z));
+        PyStructSequence_SetItem(obj, 3, PyFloat_FromDouble(entry.info.dx));
+        PyStructSequence_SetItem(obj, 4, PyFloat_FromDouble(entry.info.dy));
+        PyStructSequence_SetItem(obj, 5, PyFloat_FromDouble(entry.info.path));
         PyStructSequence_SetItem(obj, 6, indices);
 
         return obj;

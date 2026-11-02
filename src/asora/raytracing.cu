@@ -55,19 +55,26 @@ namespace {
     // a single thread. Threads may call this function multiple times if required to
     // cover the full q-shell.
     __device__ void raytrace(
-        const shortchar_info &info, int q, int s, const int3 &pos, double scale,
-        element_data &data_HI, double dr, double R_max, size_t bank_size,
+        const shortchar_lut &lut, size_t index, int q, int s, const int3 &pos,
+        double scale, element_data &data_HI, double dr, double R_max, size_t bank_size,
         const density_maps &densities, size_t m1, const photo_tables<> &ion_tables,
         const linspace<double> &logtau
     ) {
-        // Check if the cell is within the simulated box.
-        if (!in_domain(pos, info.pos, m1)) return;
+        // Early return conditions only need the cell offsets.
+        auto offset = lut.is_set() ? lut.offset(index) : shell2cart(q, s);
 
-        const auto &[di, dj, dk] = info.pos;
+        // Check if the cell is within the simulated box.
+        if (!in_domain(pos, offset, m1)) return;
+
+        const auto &[di, dj, dk] = offset;
 
         // Using integers for threshold check as it is more consistent.
         auto dist2 = di * di + dj * dj + dk * dk;
         if (dist2 > static_cast<int>(R_max * R_max)) return;
+
+        // Get the short-characteristic interpolation information.
+        auto info = lut.is_set() ? lut.params(index)
+                                 : make_shortchar_interpolation_info(offset, bank_size);
 
         auto coldens_in = shortchar_interpolation(
             info, data_HI.column_density, data_HI.cross_section
@@ -242,19 +249,14 @@ namespace asora {
         // Cell-independent part of the photon volume 4*pi * dist2 * path * dr^2.
         scale /= 4 * c::pi<>;
 
-        const auto use_lut = lut.is_set();
-
         for (int q = 1; q <= q_max; ++q) {
             // Each thread can process multiple cells.
             int s = threadIdx.x;
             while (s < cells_in_shell(q)) {
                 auto index = cells_to_shell(q - 1) + s;
-                auto info = use_lut
-                                ? lut.get(index)
-                                : make_shortchar_interpolation_info(q, s, bank_size);
                 raytrace(
-                    info, q, s, {i0, j0, k0}, scale, data_HI, dr, R_max, bank_size,
-                    densities, m1, ion_tables, logtau
+                    lut, index, q, s, {i0, j0, k0}, scale, data_HI, dr, R_max,
+                    bank_size, densities, m1, ion_tables, logtau
                 );
 
                 s += blockDim.x;
