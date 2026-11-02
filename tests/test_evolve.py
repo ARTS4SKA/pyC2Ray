@@ -140,6 +140,7 @@ def test_evolve3D_no_gpu_root_rank(mock_c2ray: Mock, mock_asora: Mock) -> None:
     mock_asora.density_to_device.assert_not_called()
     mock_asora.do_all_sources.assert_not_called()
     mock_asora.chemistry_global_pass.assert_not_called()
+    mock_asora.device_trim.assert_not_called()
 
     mock_c2ray.chemistry.global_pass.assert_called()
     mock_c2ray.raytracing.do_all_sources.assert_called()
@@ -152,6 +153,7 @@ def test_evolve3D_yes_gpu_root_rank(mock_c2ray: Mock, mock_asora: Mock) -> None:
     mock_asora.density_to_device.assert_called()
     mock_asora.do_all_sources.assert_called()
     mock_asora.chemistry_global_pass.assert_called()
+    mock_asora.device_trim.assert_called()
 
     mock_c2ray.chemistry.global_pass.assert_not_called()
     mock_c2ray.raytracing.do_all_sources.assert_not_called()
@@ -184,6 +186,7 @@ def test_evolve3D_yes_gpu_domain_decomposition_root_rank(
     mock_asora.density_to_device.assert_called()
     mock_asora.do_all_sources.assert_called()
     mock_asora.chemistry_global_pass.assert_called()
+    mock_asora.device_trim.assert_called()
 
     mock_c2ray.chemistry.global_pass.assert_not_called()
     mock_c2ray.raytracing.do_all_sources.assert_not_called()

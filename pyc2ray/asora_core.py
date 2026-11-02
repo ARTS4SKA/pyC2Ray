@@ -14,6 +14,7 @@ __all__ = [
     "density_to_device",
     "device_close",
     "device_init",
+    "device_trim",
     "flat_contiguous",
     "is_device_init",
     "is_periodic_mode_active",
@@ -88,6 +89,13 @@ def device_close() -> None:
     assert libasora is not None
     if libasora.is_device_init():
         libasora.device_close()
+
+
+@check_device_init
+def device_trim() -> None:
+    """Return the memory cached by the GPU scratch pool to the device"""
+    assert libasora is not None
+    libasora.device_trim()
 
 
 def flat_contiguous(arr: np.ndarray, dtype: type | None = None) -> np.ndarray:

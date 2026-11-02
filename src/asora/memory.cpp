@@ -57,6 +57,26 @@ namespace asora {
 
     void device::close() { instance().release(); }
 
+    void device::trim() {
+        auto pool = instance()._pool;
+        if (!pool) return;
+        safe_cuda(cudaDeviceSynchronize());
+        safe_cuda(cudaMemPoolTrimTo(pool, 0));
+    }
+
+    void *device_malloc(size_t nbytes) {
+        void *ptr = nullptr;
+        auto err = cudaMalloc(&ptr, nbytes);
+        if (err == cudaErrorMemoryAllocation) {
+            // The error is not sticky, but clear it so the retry starts clean.
+            cudaGetLastError();
+            device::trim();
+            err = cudaMalloc(&ptr, nbytes);
+        }
+        safe_cuda(err);
+        return ptr;
+    }
+
     // Run on the explicit close() path and when the singleton is destroyed
     void device::release() noexcept {
         // Release the resident arrays and wait for any pending stream-ordered
