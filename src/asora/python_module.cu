@@ -139,6 +139,21 @@ PyObject *asora_device_close([[maybe_unused]] PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+/// Expose asora::device::trim.
+PyObject *asora_device_trim([[maybe_unused]] PyObject *self, PyObject *args) {
+    SAFE_CHECK_INITIALIZED();
+
+    if (!PyArg_ParseTuple(args, "")) return nullptr;
+
+    try {
+        asora::device::trim();
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return nullptr;
+    }
+    Py_RETURN_NONE;
+}
+
 /// Expose asora::device::is_initialized.
 PyObject *asora_is_device_init([[maybe_unused]] PyObject *self, PyObject *args) {
     if (!PyArg_ParseTuple(args, "")) return nullptr;
@@ -328,6 +343,8 @@ static PyMethodDef asoraMethods[] = {
     {"device_init", asora_device_init, METH_VARARGS,
      "Initialize device and allocate memory"},
     {"device_close", asora_device_close, METH_VARARGS, "Close device and free memory"},
+    {"device_trim", asora_device_trim, METH_VARARGS,
+     "Return the memory cached by the scratch pool to the device"},
     {"is_device_init", asora_is_device_init, METH_VARARGS,
      "Check if the device is initialized"},
     {"is_periodic_mode_active", asora_is_periodic_mode_active, METH_VARARGS,

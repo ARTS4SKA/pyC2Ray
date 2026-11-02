@@ -45,6 +45,18 @@ namespace asora {
         pooled,  ///< cudaMallocAsync / cudaFreeAsync, stream-ordered
     };
 
+    /* @brief Allocate `nbytes` with cudaMalloc, trimming the memory pool and
+     * retrying once if the device is out of memory.
+     *
+     * Plain allocations and the pool draw from the same device memory, but the
+     * pool does not hand back what it caches when cudaMalloc runs out.
+     *
+     * @param[in] nbytes Number of bytes to allocate
+     * @return Pointer to device memory
+     * @throw std::runtime_error if the allocation fails after the retry
+     */
+    void *device_malloc(size_t nbytes);
+
     /* @brief RAII-managed typed array in device memory.
      *
      * The array is the unique owner of its allocation, which is released when
@@ -89,7 +101,9 @@ namespace asora {
          * @param[in] items Number of elements
          */
         explicit device_array(size_t items)
-            : _ptr(nullptr, deleter{allocation::device, nullptr}), _items(items) {
+            : _ptr(nullptr, deleter{allocation::device, nullptr}),
+              _items(items),
+              _capacity(items) {
             if (_items == 0) return;
             allocate();
         }
@@ -99,7 +113,9 @@ namespace asora {
          * @param[in] stream Stream the allocation and its release are ordered on
          */
         device_array(size_t items, cudaStream_t stream)
-            : _ptr(nullptr, deleter{allocation::pooled, stream}), _items(items) {
+            : _ptr(nullptr, deleter{allocation::pooled, stream}),
+              _items(items),
+              _capacity(items) {
             if (_items == 0) return;
             allocate();
         }
@@ -113,12 +129,15 @@ namespace asora {
          * report a size it no longer backs.
          */
         device_array(device_array &&other) noexcept
-            : _ptr(std::move(other._ptr)), _items(std::exchange(other._items, 0)) {}
+            : _ptr(std::move(other._ptr)),
+              _items(std::exchange(other._items, 0)),
+              _capacity(std::exchange(other._capacity, 0)) {}
 
         device_array &operator=(device_array &&other) noexcept {
             if (this != &other) {
                 _ptr = std::move(other._ptr);
                 _items = std::exchange(other._items, 0);
+                _capacity = std::exchange(other._capacity, 0);
             }
             return *this;
         }
@@ -149,6 +168,9 @@ namespace asora {
         /// Get the number of elements in the array
         size_t size() const noexcept { return _items; }
 
+        /// Get the number of elements the allocation can hold
+        size_t capacity() const noexcept { return _capacity; }
+
         /// Get the size of the array in bytes
         size_t bytes() const noexcept { return _items * sizeof(T); }
 
@@ -158,24 +180,26 @@ namespace asora {
         /// Get the backing allocator of this array
         allocation allocator() const noexcept { return _ptr.get_deleter().alloc; }
 
-        /* @brief Ensure the array can hold `items` elements.
+        /* @brief Resize the array to `items` elements.
          *
-         * Reallocation keeps the backing allocator and stream of the current
+         * The allocation is reused when it is large enough, otherwise it is
+         * replaced, keeping the backing allocator and stream of the current
          * array. A default-constructed array therefore grows into a plain
-         * device allocation.
+         * device allocation. The capacity never shrinks.
          *
-         * @param[in] items Required number of elements
-         * @param[in] exact If true the size must match exactly, otherwise a
-         * larger existing array is left untouched.
+         * @param[in] items New number of elements
          * @warning Reallocation does not preserve the existing contents.
          */
-        void ensure(size_t items, bool exact = false) {
-            if (exact ? (_items == items) : (_items >= items)) return;
-            // Read the allocator out before assigning: the replacement is built
-            // from the deleter of the array it is about to replace.
-            auto [alloc, stream] = _ptr.get_deleter();
-            *this = (alloc == allocation::pooled) ? device_array(items, stream)
-                                                  : device_array(items);
+        void resize(size_t items) {
+            if (items > _capacity) {
+                // Release first: contents are not preserved, and this avoids
+                // holding the old and new allocations at the same time.
+                _ptr.reset();
+                _items = items;
+                _capacity = items;
+                allocate();
+            }
+            _items = items;
         }
 
         /* @brief Copy data from host to device.
@@ -227,19 +251,17 @@ namespace asora {
         /* @brief Resize if needed, then copy data from host to device.
          * @param[in] src Host memory source pointer
          * @param[in] items Number of elements to copy
-         * @param[in] exact Forwarded to ensure()
          */
-        void assign(const T *src, size_t items, bool exact = false) {
-            ensure(items, exact);
+        void assign(const T *src, size_t items) {
+            resize(items);
             copy_from_host(src, items);
         }
 
         /* @brief Resize if needed, then copy data from another device array.
          * @param[in] src Device array to copy from
-         * @param[in] exact Forwarded to ensure()
          */
-        void assign(const device_array &src, bool exact = false) {
-            ensure(src.size(), exact);
+        void assign(const device_array &src) {
+            resize(src.size());
             copy_from_device(src);
         }
 
@@ -250,6 +272,7 @@ namespace asora {
         void reset() noexcept {
             _ptr.reset();
             _items = 0;
+            _capacity = 0;
         }
 
        private:
@@ -262,7 +285,7 @@ namespace asora {
             if (alloc == allocation::pooled)
                 safe_cuda(cudaMallocAsync(&ptr, nbytes, stream));
             else
-                safe_cuda(cudaMalloc(&ptr, nbytes));
+                ptr = static_cast<T *>(device_malloc(nbytes));
 
             // reset() keeps the deleter installed by the constructor.
             _ptr.reset(ptr);
@@ -284,6 +307,9 @@ namespace asora {
 
         /// Number of elements
         size_t _items = 0;
+
+        /// Number of elements the allocation can hold
+        size_t _capacity = 0;
     };
 
     /* @brief Singleton managing only one GPU device and its memory pool.
@@ -324,6 +350,17 @@ namespace asora {
          */
         static void close();
 
+        /* @brief Return the memory cached by the scratch pool to the device.
+         *
+         * The pool retains everything it has reserved, and plain allocations of
+         * resident arrays cannot draw from it. Pending work is waited for first,
+         * so that in-flight stream-ordered frees are trimmed too. No-op on
+         * platforms without a memory pool.
+         *
+         * @throw std::runtime_error if any CUDA call fails
+         */
+        static void trim();
+
         /* @brief Access the arrays that outlive a single library call.
          *
          * @return Reference to the resident data
@@ -332,10 +369,9 @@ namespace asora {
          */
         template <typename Tag>
             requires std::derived_from<Tag, resident_tag::base<typename Tag::type>>
-        static device_array<typename Tag::type> &resident(size_t items = 0) {
+        static device_array<typename Tag::type> &resident() {
             check_initialized();
             static auto &array = make_resident<Tag>();
-            array.ensure(items);
             return array;
         }
 

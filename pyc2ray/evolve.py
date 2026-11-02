@@ -32,6 +32,7 @@ from pyc2ray.asora_core import (
     average_fraction_to_host,
     check_device_init,
     density_to_device,
+    device_trim,
     flat_contiguous,
     source_data_to_device,
     timestep_data_to_device,
@@ -916,15 +917,21 @@ def evolve3D(**kwargs) -> tuple[FloatArray, FloatArray]:
     decomposition = kwargs.pop("decomposition", None)
     # TODO: factorize common code between the two versions
     if use_gpu:
-        if libasora is not None:
+        if libasora is None:
+            logger.warning(
+                "Required GPU computation in evolve but ASORA library is not available. "
+                "Falling back to CPU computation."
+            )
+        else:
             if decomposition is not None:
-                return _evolve3D_asora_domain_decomposition(
+                result = _evolve3D_asora_domain_decomposition(
                     **kwargs,
                     decomposition=decomposition,
                 )
             else:
-                return _evolve3D_asora(**kwargs)
-        logger.warning(
-            "Required GPU computation in evolve but ASORA library is not available. Falling back to CPU computation."
-        )
+                result = _evolve3D_asora(**kwargs)
+            # Release pool memory so that resident arrays can grow into it at the next iteration.
+            device_trim()
+            return result
+
     return _evolve3D_c2ray(**kwargs)
