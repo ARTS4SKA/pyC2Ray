@@ -175,6 +175,37 @@ class TestOctahedron:
             # Check inverse function
             assert (q, s) == libasora.cart2shell(*ijk)
 
+    @pytest.mark.parametrize("q", range(Q_MAX))
+    def test_index2shell(self, q: int) -> None:
+        """Every cumulative index is split back into the shell that holds it."""
+        assert libasora is not None
+
+        base = libasora.cells_to_shell(q - 1)
+        for s in range(libasora.cells_in_shell(q)):
+            assert libasora.index2shell(base + s) == (q, s)
+
+    def test_index2shell_shell_edges(self) -> None:
+        """The first and last index of a shell are the ones a cube-root estimate is
+        most likely to misplace, so pin them down across the whole range."""
+        assert libasora is not None
+
+        assert libasora.index2shell(0) == (0, 0)
+        for q in range(Q_MAX):
+            first = libasora.cells_to_shell(q - 1)
+            last = libasora.cells_to_shell(q) - 1
+
+            assert libasora.index2shell(first) == (q, 0)
+            assert libasora.index2shell(last) == (q, libasora.cells_in_shell(q) - 1)
+
+    def test_index2shell_rejects_negative(self) -> None:
+        assert libasora is not None
+
+        with pytest.raises(ValueError):
+            libasora.index2shell(-1)
+
+        with pytest.raises(TypeError):
+            libasora.index2shell(1.5)
+
 
 class TestModuleInterface:
     assert libasora is not None
