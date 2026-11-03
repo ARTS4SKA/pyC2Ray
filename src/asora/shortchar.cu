@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cuda/std/array>
 #include <format>
+#include <optional>
 
 #ifdef __CUDA_ARCH__
 #define assert_or_throw(condition, msg) assert(condition)
@@ -28,6 +29,45 @@ namespace {
         auto dxdy = dx * dy;
         return {dxdy, dy - dxdy, dx - dxdy, 1.f - dx - dy + dxdy};
     }
+
+    /* @brief Host-side memo of the last look-up table built.
+     *
+     * The LUT is a pure function of q_max, so repeating a q_max hands the same one
+     * back. This memo holds the LUT and decides whether rebuilding is necessary:
+     * closing the device, or a different q_max, makes the pool hand out a different
+     * offsets buffer, so comparing that pointer invalidates the memo on its own.
+     */
+    class lut_memo {
+       public:
+        /// The table built for this q_max, if it is still on the device.
+        std::optional<asora::shortchar_lut> get(int q_max) const {
+            if (q_max != _q_max || !alive()) return std::nullopt;
+            return _lut;
+        }
+
+        /// Remember a freshly built table.
+        void put(int q_max, const asora::shortchar_lut& lut) {
+            _q_max = q_max;
+            _lut = lut;
+            _offsets = pool_offsets();
+        }
+
+       private:
+        /// The buffer the pool currently holds the cell offsets in, if any.
+        static const uint32_t* pool_offsets() {
+            using namespace asora;
+            if (!device::contains(buffer_tag::raylut_offsets)) return nullptr;
+            return device::get(buffer_tag::raylut_offsets).data<uint32_t>();
+        }
+
+        bool alive() const {
+            return _lut.is_set() && _offsets != nullptr && _offsets == pool_offsets();
+        }
+
+        int _q_max = -1;
+        const uint32_t* _offsets = nullptr;
+        asora::shortchar_lut _lut;
+    };
 
 }  // namespace
 
@@ -173,16 +213,6 @@ namespace asora {
 
     // This constructor if private.
     shortchar_lut::shortchar_lut(size_t n_cells) {
-        // Check if a re-allocation is necessary.
-        if (device::contains(buffer_tag::raylut_offsets)) {
-            auto existing_size =
-                device::get(buffer_tag::raylut_offsets).size<uint32_t>();
-            if (existing_size >= n_cells) {
-                // We can re-use the existing buffer; ensure becomes a no-op.
-                set_assigned();
-            }
-        }
-
         device::ensure<uint32_t>(buffer_tag::raylut_offsets, n_cells);
         device::ensure<float>(buffer_tag::raylut_dx, n_cells);
         device::ensure<float>(buffer_tag::raylut_dy, n_cells);
@@ -218,11 +248,15 @@ namespace asora {
             throw std::invalid_argument("q_max must be in the range [0, Q_MAX]");
         }
 
+        // The table only depends on q_max, so an identical one that is still on the
+        // device is handed straight back.
+        static lut_memo memo;
+        if (auto cached = memo.get(q_max)) {
+            return *cached;
+        }
+
         auto n_cells = asora::cells_to_shell(q_max);
         shortchar_lut lut_d(n_cells);
-        if (lut_d.is_set()) {
-            return lut_d;
-        }
 
 #ifdef NDEBUG
         constexpr int block_size = 1024;
@@ -236,6 +270,7 @@ namespace asora {
 
         // Mark the LUT as usable.
         lut_d.set_assigned();
+        memo.put(q_max, lut_d);
         return lut_d;
     }
 
