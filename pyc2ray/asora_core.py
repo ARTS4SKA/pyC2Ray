@@ -8,10 +8,9 @@ import numpy as np
 from pyc2ray.load_extensions import libasora
 
 __all__ = [
-    "average_fraction_to_device",
-    "average_fraction_to_host",
     "check_device_init",
-    "density_to_device",
+    "density_fraction_to_device",
+    "density_fraction_to_host",
     "device_close",
     "device_init",
     "device_trim",
@@ -104,10 +103,48 @@ def flat_contiguous(arr: np.ndarray, dtype: type | None = None) -> np.ndarray:
 
 
 @check_device_init
-def density_to_device(density: np.ndarray) -> None:
-    """Copy the density field to the GPU"""
+def density_fraction_to_device(ndens: np.ndarray, xh_av: np.ndarray) -> None:
+    """Copy the number density and average ionized fraction to the GPU.
+
+    The two are stored interleaved on the device, so that the raytracer reads
+    both of a cell's values from one 32-byte sector instead of two. Call once
+    per timestep to seed, and again on any rank that receives ``xh_av`` by
+    broadcast; in between, the chemistry pass updates the fraction in place on
+    the device.
+
+    Parameters
+    ----------
+    ndens : array of dtype float
+        Matter number density of each cell.
+    xh_av : array of dtype float
+        Average ionized fraction of each cell.
+    """
     assert libasora is not None
-    libasora.density_to_device(flat_contiguous(density))
+    cells = np.empty((ndens.size, 2), dtype=np.float64)
+    cells[:, 0] = flat_contiguous(ndens)
+    cells[:, 1] = flat_contiguous(xh_av)
+    libasora.density_fraction_to_device(cells)
+
+
+@check_device_init
+def density_fraction_to_host(ndens: np.ndarray, xh_av: np.ndarray) -> None:
+    """Copy the interleaved density/fraction field back from the GPU.
+
+    Both arrays are filled in place. Only the fraction changes on the device;
+    the density comes back unchanged.
+
+    Parameters
+    ----------
+    ndens : array of dtype float
+        Filled with the matter number density of each cell.
+    xh_av : array of dtype float
+        Filled with the average ionized fraction of each cell.
+    """
+    assert libasora is not None
+    cells = np.empty((xh_av.size, 2), dtype=np.float64)
+    libasora.density_fraction_to_host(cells)
+    ndens.flat[:] = cells[:, 0]
+    xh_av.flat[:] = cells[:, 1]
 
 
 @check_device_init
@@ -155,31 +192,3 @@ def timestep_data_to_device(
     libasora.timestep_data_to_device(
         flat_contiguous(xh), flat_contiguous(temp), flat_contiguous(clump)
     )
-
-
-@check_device_init
-def average_fraction_to_device(xh_av: np.ndarray) -> None:
-    """Copy the average ionized fraction to the GPU.
-
-    Only needed on ranks that do not run the chemistry pass themselves and
-    therefore receive the field by broadcast. Ranks that run chemistry already
-    hold the current values on the device.
-    """
-    assert libasora is not None
-    libasora.average_fraction_to_device(flat_contiguous(xh_av))
-
-
-@check_device_init
-def average_fraction_to_host(xh_av: np.ndarray) -> None:
-    """Copy the average ionized fraction back from the GPU into ``xh_av``.
-
-    Only needed on the rank that broadcasts the field to the others; otherwise
-    it never has to leave the device.
-    """
-    assert libasora is not None
-    xh_av_flat = flat_contiguous(xh_av)
-    libasora.average_fraction_to_host(xh_av_flat)
-
-    # If input was not a view, copy to original array.
-    if xh_av_flat.base is not xh_av:
-        xh_av.flat[:] = xh_av_flat
