@@ -226,20 +226,24 @@ namespace asora {
         _indices = device::get(buffer_tag::raylut_indices).data<index4>();
     }
 
-    // Performed by a single block for now
+    /* Every entry is written exactly once and none is ever read back, so the fill has
+     * no ordering between shells to respect. That is what the raytracing kernel needs
+     * its barrier for - it interpolates shell q from the column densities of the
+     * shells below it - and why this one needs none and can run as a flat grid-stride
+     * loop over the whole table.
+     */
     __global__ void fill_lut_kernel(shortchar_lut sclut, int q_max) {
-        auto bank_size = asora::cells_in_shell(q_max);
-        for (int q = 0; q <= q_max; ++q) {
-            size_t s = threadIdx.x;
-            while (s < cells_in_shell(q)) {
-                auto index = cells_to_shell(q - 1) + s;
-                auto pos = shell2cart(q, s);
-                auto info = make_shortchar_interpolation_info(pos, bank_size);
-                sclut.set(index, pos, info);
+        auto bank_size = cells_in_shell(q_max);
+        auto n_cells = cells_to_shell(q_max);
 
-                s += blockDim.x;
-            }
-            __syncthreads();
+        auto start = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        auto stride = static_cast<size_t>(blockDim.x) * gridDim.x;
+
+        for (auto index = start; index < n_cells; index += stride) {
+            auto&& [q, s] = index2shell(index);
+            auto pos = shell2cart(q, s);
+            auto info = make_shortchar_interpolation_info(pos, bank_size);
+            sclut.set(index, pos, info);
         }
     }
 
@@ -264,7 +268,8 @@ namespace asora {
         constexpr int block_size = 128;
 #endif
         // Launch kernel to fill lut
-        fill_lut_kernel<<<1, block_size>>>(lut_d, q_max);
+        auto grid_size = (n_cells + block_size - 1) / block_size;
+        fill_lut_kernel<<<grid_size, block_size>>>(lut_d, q_max);
         safe_cuda(cudaDeviceSynchronize());
         safe_cuda(cudaGetLastError());
 
