@@ -5,6 +5,12 @@ import astropy.units as u
 import numpy as np
 import pytest
 
+from pyc2ray.asora_core import (
+    density_fraction_to_device,
+    photo_table_to_device,
+    source_data_to_device,
+    timestep_data_to_device,
+)
 from pyc2ray.load_extensions import libasora
 from pyc2ray.radiation.blackbody import BlackBodySource
 from pyc2ray.radiation.common import make_tau_table
@@ -39,21 +45,18 @@ def setup_do_all_sources(
     )
 
     # Allocate tables to GPU device
-    assert libasora is not None
-    libasora.photo_table_to_device(photo_thin_table, photo_thick_table)
+    photo_table_to_device(photo_thin_table, photo_thick_table)
 
     size = mesh_size**3
     phi_ion = np.empty(size, dtype=np.float64)
     ndens = np.full(size, 1e-3, dtype=np.float64)
     xHII = np.full(size, 1e-4, dtype=np.float64)
 
-    # Copy density field to GPU device
-    libasora.density_to_device(ndens)
-
-    # The average ionized fraction is resident: seed it along with the other
-    # per-timestep fields, which this test does not otherwise exercise.
-    libasora.timestep_data_to_device(xHII, np.full(size, 1e4), np.ones(size))
-    libasora.average_fraction_to_device(xHII)
+    # The average ionized fraction is resident and travels interleaved with the
+    # density. Seed it along with the other per-timestep fields, which this test
+    # does not otherwise exercise.
+    timestep_data_to_device(xHII, np.full(size, 1e4), np.ones(size))
+    density_fraction_to_device(ndens, xHII)
 
     # Define some random sources
     rng = np.random.default_rng(918)
@@ -61,7 +64,7 @@ def setup_do_all_sources(
     src_flux = rng.uniform(1e4, 1e8, size=num_sources).astype(np.float64)
 
     # Copy source list to GPU device
-    libasora.source_data_to_device(src_pos, src_flux)
+    source_data_to_device(src_pos, src_flux)
 
     # Size of a cell
     box = 50.0 * u.pc
@@ -84,6 +87,7 @@ def setup_do_all_sources(
 
 def test_do_all_sources(data_dir, init_device):
     with setup_do_all_sources() as args:
+        assert libasora is not None
         libasora.do_all_sources(*args)
 
         phi_ion = args[3]

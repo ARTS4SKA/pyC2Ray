@@ -6,6 +6,11 @@ from astropy import constants as cst
 from astropy import units as u
 
 import pyc2ray.solver as pysolver
+from pyc2ray.asora_core import (
+    density_fraction_to_device,
+    density_fraction_to_host,
+    timestep_data_to_device,
+)
 from pyc2ray.load_extensions import libasora, libc2ray
 
 
@@ -89,18 +94,20 @@ def test_chemistry_python(data_dir):
 def test_chemistry_asora(data_dir, init_device):
     with setup_chemistry() as args:
         dt, ndens, temp, xh, xh_av, xh_int, phi_ion, clump, *consts = args
-        libasora.density_to_device(ndens)
 
         for _ in range(1000):
             # Each pass here acts as its own timestep, so the resident fields are
-            # refreshed. timestep_data_to_device reseeds the average fraction from
-            # xh; this loop carries it over instead, hence the explicit push.
-            libasora.timestep_data_to_device(xh, temp, clump)
-            libasora.average_fraction_to_device(xh_av)
+            # refreshed. The average fraction travels interleaved with the density,
+            # and this loop carries it over between passes rather than reseeding it
+            # from xh, hence the explicit push.
+            timestep_data_to_device(xh, temp, clump)
+            density_fraction_to_device(ndens, xh_av)
 
+            xh_int = xh_int.copy(order="C")
+            phi_ion = phi_ion.copy(order="C")
             conv = libasora.chemistry_global_pass(dt, xh_int, phi_ion, *consts)
 
-            libasora.average_fraction_to_host(xh_av)
+            density_fraction_to_host(ndens, xh_av)
             xh[:] = xh_int
 
         expected_xh = np.load(data_dir / "ionized_fraction_average.npy")
@@ -122,9 +129,9 @@ def test_benchmark_chemistry_python(benchmark):
 @pytest.mark.parametrize("block_size", [512, 640, 768, 896])
 def test_benchmark_chemistry_asora(benchmark, init_device, block_size):
     with setup_chemistry(200) as args:
-        dt, ndens, temp, xh, _, xh_int, phi_ion, clump, *consts = args
-        libasora.density_to_device(ndens)
-        libasora.timestep_data_to_device(xh, temp, clump)
+        dt, ndens, temp, xh, xh_av, xh_int, phi_ion, clump, *consts = args
+        timestep_data_to_device(xh, temp, clump)
+        density_fraction_to_device(ndens, xh_av)
 
         benchmark(
             libasora.chemistry_global_pass, dt, xh_int, phi_ion, *consts, block_size

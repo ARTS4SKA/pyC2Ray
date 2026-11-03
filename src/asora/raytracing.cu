@@ -18,7 +18,9 @@ namespace asora {
     }
 
     __device__ double density_maps::get(size_t index) const {
-        return ndens[index] * (1.0 - xHII[index]);
+        // Both fields share a 32-byte sector, so this is a single 16-byte load.
+        auto cell = cells[index];
+        return cell.x * (1.0 - cell.y);
     }
 
 }  // namespace asora
@@ -119,16 +121,15 @@ namespace asora {
         device::check_initialized();
 
         namespace tag = resident_tag;
-        const auto &number_density = device::resident<tag::number_density>();
+        const auto &density_cells = device::resident<tag::density_cell>();
         const auto &photo_ion_thin = device::resident<tag::photo_ion_thin>();
         const auto &photo_ion_thick = device::resident<tag::photo_ion_thick>();
         const auto &source_flux = device::resident<tag::source_flux>();
         const auto &source_position = device::resident<tag::source_position>();
-        const auto &fraction_HII_avg = device::resident<tag::fraction_HII_avg>();
-        if (!number_density)
+        if (!density_cells)
             throw std::runtime_error(
-                "number density array must be allocated on the device before calling "
-                "do_all_sources_gpu"
+                "interleaved number density and average fraction array must be "
+                "allocated on the device before calling do_all_sources_gpu"
             );
         if (!photo_ion_thin || !photo_ion_thick)
             throw std::runtime_error(
@@ -140,21 +141,15 @@ namespace asora {
                 "source data (flux, position) must be allocated on the device before "
                 "calling do_all_sources_gpu"
             );
-        if (!fraction_HII_avg)
-            throw std::runtime_error(
-                "average ionized fraction must be allocated on the device before "
-                "calling do_all_sources_gpu"
-            );
-
         // Size of grid data
         auto n_cells = m1 * m1 * m1;
 
         // The average ionized fraction is read but never written here. It is seeded
-        // once per timestep by timestep_data_to_device and thereafter updated in
-        // place by the chemistry pass, so no transfer is needed. Ranks that do not
-        // run chemistry refresh it with average_fraction_to_device after the
-        // broadcast.
-        density_maps densities{number_density.data(), fraction_HII_avg.data()};
+        // once per timestep, interleaved with the number density, and thereafter
+        // updated in place by the chemistry pass, so no transfer is needed. Ranks
+        // that do not run chemistry refresh it with density_fraction_to_device
+        // after the broadcast.
+        density_maps densities{density_cells.data()};
 
         // Allocate (if necessary) and zero the output array for the photoionization
         // rate

@@ -137,7 +137,7 @@ def test_evolve3D_no_gpu_root_rank(mock_c2ray: Mock, mock_asora: Mock) -> None:
     call_evolve3D(use_gpu=False, rank=0)
 
     mock_asora.source_data_to_device.assert_not_called()
-    mock_asora.density_to_device.assert_not_called()
+    mock_asora.density_fraction_to_device.assert_not_called()
     mock_asora.do_all_sources.assert_not_called()
     mock_asora.chemistry_global_pass.assert_not_called()
     mock_asora.device_trim.assert_not_called()
@@ -150,7 +150,7 @@ def test_evolve3D_yes_gpu_root_rank(mock_c2ray: Mock, mock_asora: Mock) -> None:
     call_evolve3D(use_gpu=True, rank=0)
 
     mock_asora.source_data_to_device.assert_called()
-    mock_asora.density_to_device.assert_called()
+    mock_asora.density_fraction_to_device.assert_called()
     mock_asora.do_all_sources.assert_called()
     mock_asora.chemistry_global_pass.assert_called()
     mock_asora.device_trim.assert_called()
@@ -183,7 +183,7 @@ def test_evolve3D_yes_gpu_domain_decomposition_root_rank(
     # The domain decomposition path must drive the GPU through ASORA and use
     # the per-group grid buffer setup, never the CPU C2Ray raytracer.
     mock_asora.source_data_to_device.assert_called()
-    mock_asora.density_to_device.assert_called()
+    mock_asora.density_fraction_to_device.assert_called()
     mock_asora.do_all_sources.assert_called()
     mock_asora.chemistry_global_pass.assert_called()
     mock_asora.device_trim.assert_called()
@@ -198,8 +198,10 @@ def test_evolve3D_yes_gpu_domain_decomposition_non_root_rank(mock_asora: Mock) -
     # Record the average fraction each raytracing call receives, copied because the
     # buffers are reused across groups and iterations.
     raytraced_local_xh_av: list[np.ndarray] = []
-    with patch("pyc2ray.evolve.average_fraction_to_device") as mock_xh_av:
-        mock_xh_av.side_effect = lambda xh_av: raytraced_local_xh_av.append(xh_av)
+    with patch("pyc2ray.evolve.density_fraction_to_device") as mock_xh_av:
+        mock_xh_av.side_effect = lambda ndens, xh_av: raytraced_local_xh_av.append(
+            xh_av
+        )
 
         with patch("pyc2ray.evolve.comm") as mock_mpi:
             mock_mpi.Allreduce.return_value = None
