@@ -166,6 +166,19 @@ PyObject *asora_cart2shell([[maybe_unused]] PyObject *self, PyObject *args) {
     }
 }
 
+PyObject *asora_index2shell([[maybe_unused]] PyObject *self, PyObject *args) {
+    Py_ssize_t index;
+    if (!PyArg_ParseTuple(args, "n", &index)) return nullptr;
+
+    if (index < 0) {
+        PyErr_SetString(PyExc_ValueError, "index must be non-negative");
+        return nullptr;
+    }
+
+    auto [q, s] = asora::index2shell(static_cast<size_t>(index));
+    return Py_BuildValue("ii", q, s);
+}
+
 PyObject *asora_create_shortchar_lut([[maybe_unused]] PyObject *self, PyObject *args) {
     int q_max = 0;
     if (!PyArg_ParseTuple(args, "i", &q_max)) return nullptr;
@@ -471,6 +484,8 @@ static PyMethodDef asora_methods[] = {
      "Convert shell indexing to cartesian coordinates"},
     {"cart2shell", asora_cart2shell, METH_VARARGS,
      "Convert cartesian coordinates to shell indexing"},
+    {"index2shell", asora_index2shell, METH_VARARGS,
+     "Convert a cumulative cell index to shell indexing"},
     {"create_shortchar_lut", asora_create_shortchar_lut, METH_VARARGS,
      "Create LUT for ASORA short-characteristic interpolation"},
     {"get_shortchar_lut", asora_get_shortchar_lut, METH_VARARGS,
