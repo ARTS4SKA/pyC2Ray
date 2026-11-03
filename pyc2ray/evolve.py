@@ -28,10 +28,9 @@ import numpy as np
 from mpi4py import MPI
 
 from pyc2ray.asora_core import (
-    average_fraction_to_device,
-    average_fraction_to_host,
     check_device_init,
-    density_to_device,
+    density_fraction_to_device,
+    density_fraction_to_host,
     device_trim,
     flat_contiguous,
     source_data_to_device,
@@ -200,9 +199,6 @@ Convergence Criterion (Number of points): {conv_criterion: n}
     # Copy positions & fluxes of sources to the GPU
     source_data_to_device(src_pos, src_flux)
 
-    # Copy density field to GPU once at the beginning of timestep (!! do_all_sources assumes this !!)
-    density_to_device(ndens)
-
     # Intermediate storage on host to allow communication between ranks.
     xh_av = flat_contiguous(xh).copy()
     xh_int = flat_contiguous(xh).copy()
@@ -210,8 +206,12 @@ Convergence Criterion (Number of points): {conv_criterion: n}
     # These global fields are needed only by chemistry (on rank 0 only) and do not change over the timestep.
     if rank == 0:
         timestep_data_to_device(xh, temp, clump)
-    # The average fraction is seeded from xh.
-    average_fraction_to_device(xh)
+
+    # Density and average fraction are stored interleaved on the device, since the
+    # raytracer reads both at the same cell index. Copied once at the beginning of
+    # the timestep (!! do_all_sources assumes this !!); the fraction is seeded from
+    # xh and updated in place by every chemistry pass thereafter.
+    density_fraction_to_device(ndens, xh)
 
     # Initialize ionization rate array.
     phi_ion = np.zeros(mesh_shape, dtype=np.float64)
@@ -281,8 +281,9 @@ Convergence Criterion (Number of points): {conv_criterion: n}
 
             # The average fraction stays on the device for the next raytracing pass;
             # it only needs to come back when the other ranks have to receive it.
+            # However, it is interleaved with the density, which comes back unchanged.
             if use_mpi:
-                average_fraction_to_host(xh_av)
+                density_fraction_to_host(ndens, xh_av)
 
             time_end = time.perf_counter()
             logger.info(f"  took {display_seconds(time_end - time_start)}")
@@ -319,9 +320,10 @@ Convergence Criterion (Number of points): {conv_criterion: n}
             comm.Bcast([xh_av, MPI.DOUBLE], root=0)
 
             # Ranks that do not run chemistry hold no up-to-date copy on the device,
-            # so they push the field they just received. Rank 0 already has it there.
+            # so they push the field they just received, interleaved with the
+            # unchanged density. Rank 0 already has it there.
             if rank != 0:
-                average_fraction_to_device(xh_av)
+                density_fraction_to_device(ndens, xh_av)
 
             # broadcast convergence
             converged = comm.bcast(converged, root=0)
@@ -370,16 +372,15 @@ def _subdomain_raytracing(
     local_mesh_size = len(local_ndens)  # assuming cubic subdomains
     local_ndens = flat_contiguous(local_ndens)
 
-    # Copy density field to GPU
-    density_to_device(local_ndens)
-    with allow_rank_logging(rank):
-        logger.info(f"{rank_prefix}Copied density data to device.")
-
     # Map the global density and ionized fraction fields to the local grid of the current subdomain.
     # Format input data for the CUDA extension module (flat arrays, C-types,etc).
     local_xh_av = np.array([], dtype=np.float64)
     subdomain.global_to_local_map(xh_av_grid, local_xh_av)
-    average_fraction_to_device(local_xh_av)
+
+    # Copy density and average fraction to the GPU, interleaved.
+    density_fraction_to_device(local_ndens, local_xh_av)
+    with allow_rank_logging(rank):
+        logger.info(f"{rank_prefix}Copied density data to device.")
 
     # Initialize local photoionization rate array for the current subdomain.
     # Start from explicit zeros to avoid stale values when one rank handles multiple groups.
@@ -581,9 +582,6 @@ Domain decomposition is active
         # End of loop over source groups assigned to the current rank.
 
         # Collect results from the different MPI processors
-        # TODO: flattening of phi_ion is not needed for the call to chemistry_global_pass which
-        # follows because phi_ion already has a C-contiguous array but we could make that explicit
-        # anyway just for code clarity.
         if use_mpi:
             comm.Allreduce(MPI.IN_PLACE, [phi_ion, MPI.DOUBLE], op=MPI.SUM)
 
@@ -595,11 +593,10 @@ Domain decomposition is active
 
             time_start = time.perf_counter()
 
-            # Raytracing resizes these shared ASORA buffers for each local grid and
-            # leaves the average fraction holding the last subdomain slice. Restore
-            # the global buffers, density field and average fraction for chemistry.
-            density_to_device(ndens)
-            average_fraction_to_device(xh_av)
+            # Raytracing resizes this shared ASORA buffer for each local grid and
+            # leaves it holding the last subdomain slice. Restore the global
+            # density and average fraction for chemistry.
+            density_fraction_to_device(ndens, xh_av)
 
             # Apply the global rates to compute the updated ionization fraction.
             # This function updates the resident average fraction and xh_int.
@@ -617,7 +614,8 @@ Domain decomposition is active
 
             # Raytracing overwrites the device copy with subdomain slices, so the
             # updated global field has to come back to the host to be broadcast.
-            average_fraction_to_host(xh_av)
+            # However, it is interleaved with the density, which comes back unchanged.
+            density_fraction_to_host(ndens, xh_av)
 
             time_end = time.perf_counter()
             logger.info(f"  took {display_seconds(time_end - time_start)}")
