@@ -108,27 +108,40 @@ class TestLibasora:
         assert libasora.is_device_init()
 
     @staticmethod
-    def create_density_data(size: int) -> np.ndarray:
-        dens = np.full(size**3, 0.5, dtype=np.float64)
-        return dens
+    def create_cell_data(size: int) -> np.ndarray:
+        """Interleaved {number density, average ionized fraction}, one pair per cell."""
+        cells = np.empty((size**3, 2), dtype=np.float64)
+        cells[:, 0] = 0.5
+        cells[:, 1] = 1e-4
+        return cells
 
-    def test_density_to_device_no_init(self):
+    def test_density_fraction_to_device_no_init(self):
         with pytest.raises(RuntimeError):
-            libasora.density_to_device(self.create_density_data(16))
+            libasora.density_fraction_to_device(self.create_cell_data(16))
 
-    def test_density_to_device(self, init_device):
+    def test_density_fraction_to_device(self, init_device):
         # One argument required
         with pytest.raises(TypeError):
-            libasora.density_to_device()
+            libasora.density_fraction_to_device()
 
         # np.float64 array required
         with pytest.raises(TypeError):
-            libasora.density_to_device(np.ones(10, dtype=np.int32))
+            libasora.density_fraction_to_device(np.ones(10, dtype=np.int32))
+
+        # One pair per cell, so an odd number of elements cannot be interleaved
+        with pytest.raises(ValueError):
+            libasora.density_fraction_to_device(np.ones(9, dtype=np.float64))
+
+        # A strided view does not have the interleaved layout
+        with pytest.raises(ValueError):
+            libasora.density_fraction_to_device(
+                np.ones((4, 4), dtype=np.float64)[:, ::2]
+            )
 
         assert libasora is not None
-        libasora.density_to_device(self.create_density_data(16))
-        libasora.density_to_device(self.create_density_data(64))
-        libasora.density_to_device(self.create_density_data(32))
+        libasora.density_fraction_to_device(self.create_cell_data(16))
+        libasora.density_fraction_to_device(self.create_cell_data(64))
+        libasora.density_fraction_to_device(self.create_cell_data(32))
 
     @staticmethod
     def create_photo_table_data(num_tau: int) -> tuple[np.ndarray, np.ndarray]:
@@ -214,72 +227,49 @@ class TestLibasora:
         libasora.timestep_data_to_device(*self.create_timestep_data(64))
         libasora.timestep_data_to_device(*self.create_timestep_data(32))
 
-    def test_average_fraction_to_device_no_init(self):
+    def test_density_fraction_to_host_no_init(self):
         with pytest.raises(RuntimeError):
-            libasora.average_fraction_to_device(self.create_density_data(8))
+            libasora.density_fraction_to_host(self.create_cell_data(8))
 
-    def test_average_fraction_to_device(self, init_device):
+    def test_density_fraction_to_host(self, init_device):
         # One argument required
         with pytest.raises(TypeError):
-            libasora.average_fraction_to_device()
+            libasora.density_fraction_to_host()
 
         # np.float64 array required
         with pytest.raises(TypeError):
-            libasora.average_fraction_to_device(np.ones(8, dtype=np.float32))
+            libasora.density_fraction_to_host(np.ones(8, dtype=np.float32))
 
-        assert libasora is not None
-        libasora.average_fraction_to_device(self.create_density_data(16))
-        libasora.average_fraction_to_device(self.create_density_data(64))
-        libasora.average_fraction_to_device(self.create_density_data(32))
+        # One pair per cell, so an odd number of elements cannot be interleaved
+        with pytest.raises(ValueError):
+            libasora.density_fraction_to_host(np.ones(9, dtype=np.float64))
 
-    def test_average_fraction_to_host_no_init(self):
-        with pytest.raises(RuntimeError):
-            libasora.average_fraction_to_host(self.create_density_data(8))
+        # A strided view does not have the interleaved layout
+        with pytest.raises(ValueError):
+            libasora.density_fraction_to_host(np.ones((4, 4), dtype=np.float64)[:, ::2])
 
-    def test_average_fraction_to_host(self, init_device):
-        # One argument required
-        with pytest.raises(TypeError):
-            libasora.average_fraction_to_host()
-
-        # np.float64 array required
-        with pytest.raises(TypeError):
-            libasora.average_fraction_to_host(np.ones(8, dtype=np.float32))
-
-    def test_average_fraction_to_host_unallocated(self, init_device):
-        """Nothing has pushed the average fraction yet, so there is nothing to read."""
+    def test_density_fraction_to_host_unallocated(self, init_device):
+        """Nothing has pushed the interleaved field yet, so there is nothing to read."""
         assert libasora is not None
         with pytest.raises(RuntimeError):
-            libasora.average_fraction_to_host(np.zeros(8, dtype=np.float64))
+            libasora.density_fraction_to_host(np.zeros((4, 2), dtype=np.float64))
 
-    def test_average_fraction_round_trip(self, init_device):
+    def test_density_fraction_round_trip(self, init_device):
         """The path of a rank that receives the field by broadcast.
 
         It pushes the values it was given, overwriting whatever the last chemistry
-        pass left on the device, and must read exactly those back.
+        pass left on the device, and must read exactly those back. Both halves of
+        the pair make the trip, even though only the fraction ever changes.
         """
         rng = np.random.default_rng(2024)
-        xh = rng.uniform(0.0, 1.0, size=512)
-        ones = np.ones_like(xh)
-
         assert libasora is not None
-        libasora.timestep_data_to_device(xh, 1e4 * ones, ones)
 
-        xh_av = rng.uniform(0.0, 1.0, size=512)
-        libasora.average_fraction_to_device(xh_av)
+        cells = np.empty((512, 2), dtype=np.float64)
+        cells[:, 0] = rng.uniform(1e-4, 1e-2, size=512)
+        cells[:, 1] = rng.uniform(0.0, 1.0, size=512)
+        libasora.density_fraction_to_device(cells)
 
-        received = np.zeros_like(xh_av)
-        libasora.average_fraction_to_host(received)
+        received = np.zeros_like(cells)
+        libasora.density_fraction_to_host(received)
 
-        assert np.array_equal(received, xh_av)
-        assert not np.array_equal(received, xh)
-
-    def test_average_fraction_to_device_allocates(self, init_device):
-        """to_device is enough on its own: it grows the array it writes into."""
-        assert libasora is not None
-        xh_av = np.linspace(0.0, 1.0, 64, dtype=np.float64)
-        libasora.average_fraction_to_device(xh_av)
-
-        received = np.zeros_like(xh_av)
-        libasora.average_fraction_to_host(received)
-
-        assert np.array_equal(received, xh_av)
+        assert np.array_equal(received, cells)

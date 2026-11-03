@@ -88,27 +88,28 @@ namespace {
 
     // Global pass kernel
     __global__ void evolve0D_gpu(
-        const double* __restrict__ xh, double* __restrict__ xh_avg,
+        const double* __restrict__ xh, double2* __restrict__ density,
         double* __restrict__ xh_int, const double* __restrict__ temp,
-        const double* __restrict__ ndens, const double* __restrict__ phi_ion,
-        const double* __restrict__ clump, bool* conv_flag, double dt, double bh00,
-        double albpow, double colh0, double temph0, double abu_c, size_t size
+        const double* __restrict__ phi_ion, const double* __restrict__ clump,
+        bool* conv_flag, double dt, double bh00, double albpow, double colh0,
+        double temph0, double abu_c, size_t size
     ) {
         auto idx = threadIdx.x + blockDim.x * blockIdx.x;
 
         // Thread can process more than one cell.
         while (idx < size) {
-            // Get average fraction value as a reference: it will be updated later.
-            auto& xh_avg_p = xh_avg[idx];
+            // One 16-byte load pulls in both the number density and the average
+            // fraction; only the fraction is written back.
+            auto cell = density[idx];
 
             auto&& [xh_int_new, xh_avg_new] = do_chemistry(
-                xh[idx], xh_avg_p, temp[idx], ndens[idx], phi_ion[idx], clump[idx], dt,
-                bh00, albpow, colh0, temph0, abu_c
+                xh[idx], cell.y, temp[idx], cell.x, phi_ion[idx], clump[idx], dt, bh00,
+                albpow, colh0, temph0, abu_c
             );
 
-            conv_flag[idx] = check_convergence_global(xh_avg_new, xh_avg_p);
+            conv_flag[idx] = check_convergence_global(xh_avg_new, cell.y);
             xh_int[idx] = xh_int_new;
-            xh_avg_p = xh_avg_new;
+            density[idx].y = xh_avg_new;
 
             idx += blockDim.x * gridDim.x;
         }
@@ -126,21 +127,21 @@ namespace asora {
         device::check_initialized();
 
         namespace tag = resident_tag;
-        const auto& number_density = device::resident<tag::number_density>();
+        // Non-const because the average fraction is updated in-place on the device.
+        auto& density_cells = device::resident<tag::density_cell>();
         const auto& temperature = device::resident<tag::temperature>();
         const auto& clumping = device::resident<tag::clumping>();
-        if (!number_density || !temperature || !clumping)
+        if (!density_cells || !temperature || !clumping)
             throw std::runtime_error(
-                "number density, temperature, and clumping arrays must be allocated on "
-                "the device before calling global_pass"
+                "interleaved density/fraction, temperature, and clumping arrays must "
+                "be allocated on the device before calling global_pass"
             );
 
         const auto& fraction_HII = device::resident<tag::fraction_HII>();
-        auto& fraction_HII_avg = device::resident<tag::fraction_HII_avg>();
-        if (!fraction_HII || !fraction_HII_avg)
+        if (!fraction_HII)
             throw std::runtime_error(
-                "initial and average fraction maps must be allocated on the device "
-                "before calling global_pass"
+                "initial fraction map must be allocated on the device before calling "
+                "global_pass"
             );
         auto fraction_HII_int = device::scratch<double>(n_cells);
 
@@ -152,9 +153,9 @@ namespace asora {
         // Launch kernel, divide by 2 so that threads do more work.
         size_t grid_size = std::ceil(static_cast<float>(n_cells) / block_size / 2);
         evolve0D_gpu<<<grid_size, block_size>>>(
-            fraction_HII.data(), fraction_HII_avg.data(), fraction_HII_int.data(),
-            temperature.data(), number_density.data(), phion_HI.data(), clumping.data(),
-            conv_flag.data(), dt, bh00, albpow, colh0, temph0, abu_c, n_cells
+            fraction_HII.data(), density_cells.data(), fraction_HII_int.data(),
+            temperature.data(), phion_HI.data(), clumping.data(), conv_flag.data(), dt,
+            bh00, albpow, colh0, temph0, abu_c, n_cells
         );
 
         // Check for errors.
@@ -168,7 +169,7 @@ namespace asora {
 
         // The average fraction stays on the device for the next raytracing pass. It
         // is only read back when an MPI rank has to broadcast it, through
-        // average_fraction_to_host.
+        // density_fraction_to_host.
         fraction_HII_int.copy_to_host(xh_int);
         return convergence;
     }

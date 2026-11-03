@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector_types.h>
+
 namespace asora {
 
     /// Typed-keys for resident storage. Construct resident arrays compile time using
@@ -13,9 +15,13 @@ namespace asora {
         };
 
         /// Common resident tags, used by both the raytracer and chemistry solver.
-        struct number_density : base<double> {};    ///< Matter number density
-        struct fraction_HII_avg : base<double> {};  ///< Average HII fraction
-        struct fraction_HII : base<double> {};      ///< HII fraction at timestep start
+
+        /// Per-cell {number density, average HII fraction}. Both are read at the
+        /// same scattered cell index, so pairing them into one double2 makes a cell
+        /// cost one 32-byte sector instead of two.
+        struct density_cell : base<double2> {};
+
+        struct fraction_HII : base<double> {};  ///< HII fraction at timestep start
 
     }  // namespace resident_tag
 
