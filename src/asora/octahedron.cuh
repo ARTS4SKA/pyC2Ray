@@ -30,6 +30,31 @@ namespace asora {
         return (1 + 2 * q) * (3 + 2 * q * (1 + q)) / 3;
     }
 
+    /* @brief Convert a cumulative index, counted over all shells, to octahedral
+     * (q, s) coordinates, i.e. split it at the q for which
+     * cells_to_shell(q - 1) <= index < cells_to_shell(q).
+     *
+     * @see cells_to_shell() and shell2cart() for the forward transformations.
+     *
+     * @param[in] index Cumulative index of a cell
+     * @return Array containing {q, s}
+     */
+    __host__ __device__ inline int2 index2shell(size_t index) {
+        // cells_to_shell(q) >= 4 q^3 / 3, so q ~ cbrt(3 index / 4).
+        // The estimate can only undershoot at most by one.
+        auto q = static_cast<int>(std::cbrt(0.75f * static_cast<float>(index)));
+
+        // Where the next shell starts.
+        auto base = cells_to_shell(q);
+        if (base <= index)
+            ++q;
+        else
+            base = cells_to_shell(q - 1);
+
+        assert(base <= index && index < cells_to_shell(q));
+        return {q, static_cast<int>(index - base)};
+    }
+
     /* @brief Convert octahedral (q,s) coordinates to Cartesian (i,j,k).
      *
      * The mapping is such that for a given q shell, the s-index enumerates the cells
