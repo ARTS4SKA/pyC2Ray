@@ -1,4 +1,4 @@
-exclude: examples|docs
+exclude: ^(examples|docs)/
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.16.1
@@ -18,3 +18,11 @@ repos:
     rev: v22.1.5
     hooks:
       - id: clang-format
+        types_or: [ c, c++, cuda ]
+  - repo: local
+    hooks:
+      - id: meson-format
+        name: meson format
+        language: python
+        entry: meson format -i
+        files: (^|/)meson(\.build|\.options|_options\.txt)$
