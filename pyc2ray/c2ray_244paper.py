@@ -6,11 +6,11 @@ import numpy as np
 import tools21cm as t2c
 
 import pyc2ray.constants as c
-
-from .c2ray_base import C2Ray
-from .utils import get_source_redshifts
-from .utils.other_utils import find_bins, get_redshifts_from_output
-from .utils.sourceutils import FloatArray, IntArray, PathType
+from pyc2ray.c2ray_base import C2Ray
+from pyc2ray.parameters import ConstantMfpParameters, FgammaSourceParameters
+from pyc2ray.utils import get_source_redshifts
+from pyc2ray.utils.other_utils import find_bins, get_redshifts_from_output
+from pyc2ray.utils.sourceutils import FloatArray, IntArray, PathType
 
 __all__ = ["C2Ray_244Test"]
 
@@ -156,8 +156,8 @@ class C2Ray_244Test(C2Ray):
         # self.dr = self.cosmology.scale_factor(self.zred_0) * self.dr_c
         self.dr = self.dr_c / (1 + self.zred_0)
 
-        H0 = 100 * self.cosmology_params.h
-        Om0 = self.cosmology_params.Omega0
+        H0 = 100 * self.parameters.cosmology.h
+        Om0 = self.parameters.cosmology.Omega0
         # H0 *= 1e5/c.Mpc
 
         # self.age_0 = 2.*(1.+self.zred_0)**(-1.5)/(3.*H0*np.sqrt(Om0))
@@ -273,7 +273,7 @@ class C2Ray_244Test(C2Ray):
         ]
 
         if high_z != self.prev_zdens:
-            file = self.inputs_basename / f"coarser_densities/{high_z:.3f}n_all.dat"
+            file = self.inputs_dir / f"coarser_densities/{high_z:.3f}n_all.dat"
             self.ndens = (
                 t2c.DensityFile(filename=file).cgs_density
                 / (self.mean_molecular * c.m_p)
@@ -305,13 +305,13 @@ class C2Ray_244Test(C2Ray):
         """
         suffix = f"_{z:.3f}.dat"
         t2c.save_cbin(
-            filename=self.results_basename / f"xfrac{suffix}",
+            filename=self.results_dir / f"xfrac{suffix}",
             data=self.xh,
             bits=64,
             order="F",
         )
         t2c.save_cbin(
-            filename=self.results_basename / f"IonRates{suffix}",
+            filename=self.results_dir / f"IonRates{suffix}",
             data=self.phi_ion,
             bits=32,
             order="F",
@@ -341,18 +341,16 @@ class C2Ray_244Test(C2Ray):
     def _redshift_init(self) -> None:
         """Initialize time and redshift counter"""
         self.zred_density = t2c.get_dens_redshifts(
-            self.inputs_basename / "coarser_densities/"
+            self.inputs_dir / "coarser_densities/"
         )[::-1]
-        # self.zred_sources = get_source_redshifts(self.inputs_basename / "sources/")[
+        # self.zred_sources = get_source_redshifts(self.inputs_dir / "sources/")[
         #     ::-1
         # ]
         # TODO: waiting for next tools21cm release
-        self.zred_sources = get_source_redshifts(self.inputs_basename / "sources/")[
-            ::-1
-        ]
+        self.zred_sources = get_source_redshifts(self.inputs_dir / "sources/")[::-1]
         if self.resume:
             # get the resuming redshift
-            self.zred = np.min(get_redshifts_from_output(self.results_basename))
+            self.zred = np.min(get_redshifts_from_output(self.results_dir))
             # self.age_0 = self.zred2time(self.zred_0)
             _, self.prev_zdens = find_bins(self.zred, self.zred_density)
             _, self.prev_zsourc = find_bins(self.zred, self.zred_sources)
@@ -370,7 +368,7 @@ class C2Ray_244Test(C2Ray):
             # get fields at the resuming redshift
             self.ndens = (
                 t2c.DensityFile(
-                    filename=self.inputs_basename
+                    filename=self.inputs_dir
                     / f"coarser_densities/{self.prev_zdens:.3f}n_all.dat"
                 ).cgs_density
                 / (self.mean_molecular * c.m_p)
@@ -378,14 +376,14 @@ class C2Ray_244Test(C2Ray):
             )
             # self.ndens = self.read_density(z=self.zred)
             self.xh = t2c.read_cbin(
-                filename="%sxfrac_%.3f.dat" % (self.results_basename, self.zred),
+                filename="%sxfrac_%.3f.dat" % (self.results_dir, self.zred),
                 bits=64,
                 order="F",
             )
             # TODO: implement heating
-            self.temp = np.full(self.shape, self.material_params.temp0, order="F")
+            self.temp = np.full(self.shape, self.parameters.material.temp0, order="F")
             self.phi_ion = t2c.read_cbin(
-                filename="%sIonRates_%.3f.dat" % (self.results_basename, self.zred),
+                filename="%sIonRates_%.3f.dat" % (self.results_dir, self.zred),
                 bits=32,
                 order="F",
             )
@@ -394,18 +392,15 @@ class C2Ray_244Test(C2Ray):
 
     @property
     def fgamma_hm(self) -> float:
-        assert self.sources_params.fgamma_hm is not None
-        return self.sources_params.fgamma_hm
+        assert isinstance(self.parameters.sources.fstar, FgammaSourceParameters)
+        assert self.parameters.sources.fstar.fgamma_hm is not None
+        return self.parameters.sources.fstar.fgamma_hm
 
     @property
     def fgamma_lm(self) -> float:
-        assert self.sources_params.fgamma_lm is not None
-        return self.sources_params.fgamma_lm
-
-    @property
-    def ts(self) -> float:
-        assert self.sources_params.ts is not None
-        return self.sources_params.ts * c.year2s * 1e6
+        assert isinstance(self.parameters.sources.fstar, FgammaSourceParameters)
+        assert self.parameters.sources.fstar.fgamma_lm is not None
+        return self.parameters.sources.fstar.fgamma_lm
 
     def _sources_init(self) -> None:
         """Initialize settings to read source files"""
@@ -417,7 +412,7 @@ class C2Ray_244Test(C2Ray):
     def _grid_init(self) -> None:
         """Set up grid properties"""
         # Comoving quantities
-        self.boxsize_c = self.boxsize * c.Mpc / self.cosmology_params.h
+        self.boxsize_c = self.boxsize * c.Mpc / self.parameters.cosmology.h
         self.dr_c = self.boxsize_c / self.N
 
         logger.info(f"Welcome! Mesh size is N = {self.N:n}.")
@@ -428,13 +423,13 @@ class C2Ray_244Test(C2Ray):
         self.dr = self.dr_c
 
         # Set R_max (LLS 3) in cell units
-        assert self.sinks_params.R_max_cMpc is not None
+        assert isinstance(self.parameters.sinks.mfp, ConstantMfpParameters)
+        R_max_cMpc = self.parameters.sinks.mfp.R_max_cMpc
         self.R_max_LLS = (
-            self.sinks_params.R_max_cMpc
+            R_max_cMpc
             * self.N
-            * self.cosmology_params.h
-            / self.grid_params.boxsize
+            * self.parameters.cosmology.h
+            / self.parameters.grid.boxsize
         )
         logger.info(f"""Maximum comoving distance for photons from source (type 3 LLS): 
-{self.sinks_params.R_max_cMpc: .3e} comoving Mpc
-This corresponds to {self.R_max_LLS: .3f} grid cells.""")
+{R_max_cMpc: .3e} comoving Mpc, corresponds to {self.R_max_LLS: .3f} grid cells.""")
