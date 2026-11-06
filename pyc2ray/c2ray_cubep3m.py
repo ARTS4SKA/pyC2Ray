@@ -4,13 +4,12 @@ from pathlib import Path
 import h5py
 import numpy as np
 import tools21cm as t2c
-from astropy import units as u
 
 import pyc2ray.constants as c
-
-from .c2ray_base import C2Ray
-from .utils.other_utils import find_bins, get_redshifts_from_output
-from .utils.sourceutils import FloatArray, IntArray, PathType
+from pyc2ray.c2ray_base import C2Ray
+from pyc2ray.parameters import FgammaSourceParameters
+from pyc2ray.utils.other_utils import find_bins, get_redshifts_from_output
+from pyc2ray.utils.sourceutils import FloatArray, IntArray, PathType
 
 __all__ = ["C2Ray_CubeP3M"]
 
@@ -37,9 +36,7 @@ class C2Ray_CubeP3M(C2Ray):
 
         self.prev_zdens: float
 
-    def read_sources(
-        self, file: PathType, mass: str = "hm"
-    ) -> tuple[IntArray, FloatArray]:
+    def read_sources(self, file: PathType, ts: float) -> tuple[IntArray, FloatArray]:
         """Read sources from a C2Ray-formatted file
 
         The way sources are dealt with is still open and will change significantly
@@ -61,7 +58,7 @@ class C2Ray_CubeP3M(C2Ray):
         Parameters
         ----------
         file : Filename to read
-        mass : ???
+        ts: Lifetime of the sources in Myr (used to compute the flux normalization)
 
         Returns
         -------
@@ -79,7 +76,7 @@ class C2Ray_CubeP3M(C2Ray):
             c.msun2g
             * self.fgamma_hm
             * self.cosmology.Ob0
-            / (self.mean_molecular * c.m_p * self.ts * self.cosmology.Om0)
+            / (self.mean_molecular * c.m_p * ts * self.cosmology.Om0)
         )
 
         if Path(file).suffix == ".hdf5":
@@ -90,7 +87,7 @@ class C2Ray_CubeP3M(C2Ray):
             f.close()
         else:
             # use original C2Ray source file
-            src = t2c.SourceFile(filename=file, mass=mass)
+            src = t2c.SourceFile(filename=file, mass="hm")
             srcpos = src.sources_list[:, :3].T
             normflux = src.sources_list[:, -1] * mass2phot / S_star_ref
 
@@ -140,7 +137,7 @@ class C2Ray_CubeP3M(C2Ray):
         ]
 
         if high_z != self.prev_zdens:
-            file = self.inputs_basename / f"coarser_densities/{high_z:.3f}n_all.dat"
+            file = self.inputs_dir / f"coarser_densities/{high_z:.3f}n_all.dat"
             self.ndens = (
                 t2c.DensityFile(filename=file).cgs_density
                 / (self.mean_molecular * c.m_p)
@@ -172,13 +169,13 @@ class C2Ray_CubeP3M(C2Ray):
         """
         suffix = f"_{z:.3f}.dat"
         t2c.save_cbin(
-            filename=self.results_basename / f"xfrac{suffix}",
+            filename=self.results_dir / f"xfrac{suffix}",
             data=self.xh,
             bits=64,
             order="F",
         )
         t2c.save_cbin(
-            filename=self.results_basename / f"IonRates{suffix}",
+            filename=self.results_dir / f"IonRates{suffix}",
             data=self.phi_ion,
             bits=32,
             order="F",
@@ -208,16 +205,14 @@ class C2Ray_CubeP3M(C2Ray):
     def _redshift_init(self) -> None:
         """Initialize time and redshift counter"""
         self.zred_density = t2c.get_dens_redshifts(
-            self.inputs_basename / "coarser_densities/"
+            self.inputs_dir / "coarser_densities/"
         )[::-1]
-        # self.zred_sources = get_source_redshifts(self.inputs_basename/'sources/')[::-1]
+        # self.zred_sources = get_source_redshifts(self.inputs_dir/'sources/')[::-1]
         # TODO: waiting for next tools21cm release
-        self.zred_sources = t2c.get_source_redshifts(self.inputs_basename / "sources/")[
-            ::-1
-        ]
+        self.zred_sources = t2c.get_source_redshifts(self.inputs_dir / "sources/")[::-1]
         if self.resume:
             # get the resuming redshift
-            self.zred_0 = np.min(get_redshifts_from_output(self.results_basename))
+            self.zred_0 = np.min(get_redshifts_from_output(self.results_dir))
             self.age_0 = self.zred2time(self.zred_0)
             _, self.prev_zdens = find_bins(self.zred_0, self.zred_density)
             _, self.prev_zsourc = find_bins(self.zred_0, self.zred_sources)
@@ -234,7 +229,7 @@ class C2Ray_CubeP3M(C2Ray):
             # get fields at the resuming redshift
             self.ndens = (
                 t2c.DensityFile(
-                    filename=self.inputs_basename
+                    filename=self.inputs_dir
                     / f"coarser_densities/{self.prev_zdens:%.3f}n_all.dat"
                 ).cgs_density
                 / (self.mean_molecular * c.m_p)
@@ -242,14 +237,14 @@ class C2Ray_CubeP3M(C2Ray):
             )
             # self.ndens = self.read_density(z=self.zred)
             self.xh = t2c.read_cbin(
-                filename="%sxfrac_%.3f.dat" % (self.results_basename, self.zred),
+                filename="%sxfrac_%.3f.dat" % (self.results_dir, self.zred),
                 bits=64,
                 order="F",
             )
             # TODO: implement heating
-            self.temp = np.full(self.shape, self.material_params.temp0, order="F")
+            self.temp = np.full(self.shape, self.parameters.material.temp0, order="F")
             self.phi_ion = t2c.read_cbin(
-                filename="%sIonRates_%.3f.dat" % (self.results_basename, self.zred),
+                filename="%sIonRates_%.3f.dat" % (self.results_dir, self.zred),
                 bits=32,
                 order="F",
             )
@@ -258,14 +253,12 @@ class C2Ray_CubeP3M(C2Ray):
 
     @property
     def fgamma_hm(self) -> float:
-        assert self.sources_params.fgamma_hm is not None
-        return self.sources_params.fgamma_hm
+        assert isinstance(self.parameters.sources.fstar, FgammaSourceParameters)
+        assert self.parameters.sources.fstar.fgamma_hm is not None
+        return self.parameters.sources.fstar.fgamma_hm
 
     @property
     def fgamma_lm(self) -> float:
-        assert self.sources_params.fgamma_lm is not None
-        return self.sources_params.fgamma_lm
-
-    @property
-    def ts(self) -> float:
-        return (self.sources_params.ts * u.Myr).cgs.value
+        assert isinstance(self.parameters.sources.fstar, FgammaSourceParameters)
+        assert self.parameters.sources.fstar.fgamma_lm is not None
+        return self.parameters.sources.fstar.fgamma_lm
