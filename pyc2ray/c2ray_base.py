@@ -16,6 +16,7 @@ from pyc2ray.asora_core import (
     device_close,
     device_init,
     is_periodic_mode_active,
+    max_q_shells,
     photo_table_to_device,
 )
 from pyc2ray.domain.domain_decomposition_handler import DomainDecompositionHandler
@@ -189,12 +190,6 @@ class C2Ray:
                     "(libasora compiled with PERIODIC)."
                 )
 
-        # Persistent domain decomposition handler holding the subdomains assigned to this
-        # rank. It is created on the first evolve3D call and reused across timesteps;
-        # the handler itself decides when to rebuild its decomposition (see
-        # DomainDecompositionHandler.update_decomposition). None until the first call.
-        self._decomposition_handler: DomainDecompositionHandler | None = None
-
         # Initialize output and logger. Waits for all ranks to reach this point.
         self._output_init()
 
@@ -209,7 +204,7 @@ class C2Ray:
 
         if self.gpu:
             # Print maximum shell size for info, based on LLS (qmax is s.t. Rmax fits inside of it)
-            q_max = np.ceil(np.sqrt(3) * min(self.R_max_LLS, np.sqrt(3) * self.N / 2))
+            q_max = max_q_shells(self.R_max_LLS, self.N)
             logger.info(f"Using ASORA Raytracing (q_max = {q_max})")
         else:
             # Print info about subbox algorithm
@@ -225,6 +220,14 @@ class C2Ray:
             logger.info(f"Using {self.nprocs} MPI Ranks")
         else:
             logger.info("Running in non-MPI (single-GPU/CPU) mode")
+
+        # Persistent domain decomposition handler holding the subdomains assigned to this
+        # rank. The handler itself decides when to rebuild its decomposition.
+        self._decomposition_handler: DomainDecompositionHandler | None = None
+        if self.domain_decomposition_params.enabled:
+            self._decomposition_handler = DomainDecompositionHandler(
+                MPI.COMM_WORLD, self.domain_decomposition_params
+            )
 
         logger.info("Starting simulation... \n\n")
 
@@ -300,22 +303,6 @@ class C2Ray:
             use_mpi = NumSrc >= self.nprocs and self.mpi
         else:
             use_mpi = self.mpi
-
-        # Update the persistent domain decomposition handler.
-        if self.domain_decomposition_params.enabled:
-            if self._decomposition_handler is None:
-                self._decomposition_handler = DomainDecompositionHandler(MPI.COMM_WORLD)
-            self._decomposition_handler.update_decomposition(
-                cell_size=self.dr,
-                src_pos=src_pos.T,
-                src_flux=src_flux,
-                N=self.N,
-                R_max=self.R_max_LLS,
-                src_batch_size=self.raytracing_params.source_batch_size,
-                num_tau=self.photo_thin_table.shape[0],
-                is_domain_periodic=bool(is_periodic_mode_active()),
-                domain_decomposition_params=self.domain_decomposition_params,
-            )
 
         self.xh, self.phi_ion = evolve3D(
             dt=dt,

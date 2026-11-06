@@ -9,7 +9,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from pyc2ray.domain.cost_model import pyC2RayCostModel
+from pyc2ray.domain.cost_model import ASORACostModel
 from pyc2ray.domain.domain_decomposition_handler import DomainDecompositionHandler
 from pyc2ray.domain.morton_grouping import MortonGroupingParams, MortonSourceGrouping
 from pyc2ray.domain.regular_grid import RegularGrid
@@ -37,6 +37,17 @@ class DummyComm:
         return data[self._rank]
 
 
+@pytest.fixture(autouse=True)
+def mock_device():
+    """The handler queries the device memory and occupancy when it builds the cost model."""
+    module = "pyc2ray.domain.domain_decomposition_handler"
+    with (
+        patch(f"{module}.available_memory", return_value=8 * (1 << 30)),  # 8 GiB
+        patch(f"{module}.max_resident_blocks", return_value=1024),
+    ):
+        yield
+
+
 def _source(sid: int) -> Source:
     return Source(
         id=sid,
@@ -61,7 +72,9 @@ def _group(gid: int, comp_cost: float) -> SourceGroup:
 
 
 def test_assign_groups_to_ranks_balances_by_comp_cost() -> None:
-    handler = DomainDecompositionHandler(comm=DummyComm(rank=0, size=2))
+    handler = DomainDecompositionHandler(
+        comm=DummyComm(rank=0, size=2), params=_dd_params()
+    )
     groups = [
         _group(0, 9.0),
         _group(1, 8.0),
@@ -81,7 +94,9 @@ def test_assign_groups_to_ranks_balances_by_comp_cost() -> None:
 
 
 def test_assign_groups_to_ranks_handles_empty_groups() -> None:
-    handler = DomainDecompositionHandler(comm=DummyComm(rank=0, size=3))
+    handler = DomainDecompositionHandler(
+        comm=DummyComm(rank=0, size=3), params=_dd_params()
+    )
 
     rank_groups, rank_costs = handler._assign_groups_to_ranks([])
 
@@ -98,17 +113,16 @@ def _dd_params(max_num_sources_per_group: int = 4) -> DomainDecompositionParamet
     )
 
 
-def _grouping_inputs() -> tuple[RegularGrid, list[Source], pyC2RayCostModel]:
+def _grouping_inputs() -> tuple[RegularGrid, list[Source], ASORACostModel]:
     grid = RegularGrid(cell_size=1.0, num_cells=64, is_periodic_mode_active=True)
     sources = [
         Source(id=i, pos=np.array(p, dtype=float), strength=1.0, radius=4.0)
         for i, p in enumerate([(1, 1, 1), (2, 2, 2), (40, 40, 40), (41, 41, 41)])
     ]
-    cost_model = pyC2RayCostModel(
-        max_memory_cost_per_group=50.0e9,
-        source_batch_size=1,
+    cost_model = ASORACostModel(
+        available_memory=8 * (1 << 30),  # 8 GiB
+        max_resident_blocks=1024,
         is_periodic_mode_active=True,
-        photo_ion_table_size=2000,
         num_column_density_banks=4,
     )
     return grid, sources, cost_model
@@ -138,7 +152,9 @@ def test_build_groups_dispatches_on_the_grouping_algorithm(
 ) -> None:
     """Each supported algorithm must reach its own MortonSourceGrouping entry point."""
     grid, sources, cost_model = _grouping_inputs()
-    handler = DomainDecompositionHandler(comm=DummyComm(rank=0, size=1))
+    handler = DomainDecompositionHandler(
+        comm=DummyComm(rank=0, size=1), params=_dd_params()
+    )
 
     groups = handler._build_groups(
         grid,
@@ -162,7 +178,9 @@ def test_build_groups_dispatches_on_the_grouping_algorithm(
 
 def test_build_groups_rejects_an_unknown_algorithm() -> None:
     grid, sources, cost_model = _grouping_inputs()
-    handler = DomainDecompositionHandler(comm=DummyComm(rank=0, size=1))
+    handler = DomainDecompositionHandler(
+        comm=DummyComm(rank=0, size=1), params=_dd_params()
+    )
 
     with pytest.raises(NotImplementedError, match="not implemented"):
         handler._build_groups(grid, sources, cost_model, grouping_algorithm="nope")
@@ -185,8 +203,9 @@ def test_update_decomposition_rebuilds_if_inputs_change() -> None:
     A rebuild reassigns the subdomains list; a reuse leaves it untouched. We use that
     identity to distinguish the two, since update_decomposition returns nothing.
     """
-    handler = DomainDecompositionHandler(comm=DummyComm(rank=0, size=1))
-    params = _dd_params()
+    handler = DomainDecompositionHandler(
+        comm=DummyComm(rank=0, size=1), params=_dd_params()
+    )
 
     def update(
         src_pos: np.ndarray, src_flux: np.ndarray, r_max: float = 2.0, dr: float = 1.0
@@ -197,10 +216,7 @@ def test_update_decomposition_rebuilds_if_inputs_change() -> None:
             src_flux=src_flux,
             N=16,
             R_max=r_max,
-            src_batch_size=8,
-            num_tau=100,
             is_domain_periodic=True,
-            domain_decomposition_params=params,
         )
 
     src_pos = np.array([[4, 4, 4], [6, 6, 6]], dtype=np.int32)
@@ -234,7 +250,9 @@ def test_every_source_survives_the_decomposition() -> None:
     every group is assigned locally, so the subdomains of this rank must between them hold
     each source exactly once, with its position intact.
     """
-    handler = DomainDecompositionHandler(comm=DummyComm(rank=0, size=1))
+    handler = DomainDecompositionHandler(
+        comm=DummyComm(rank=0, size=1), params=_dd_params(max_num_sources_per_group=2)
+    )
 
     cell_size = 1.0
     # Radius 0.6 cells: neighbouring cells along x intersect (centres 1.0 apart, radii sum
@@ -252,10 +270,7 @@ def test_every_source_survives_the_decomposition() -> None:
         src_flux=src_flux,
         N=16,
         R_max=r_max,
-        src_batch_size=8,
-        num_tau=100,
         is_domain_periodic=True,
-        domain_decomposition_params=_dd_params(max_num_sources_per_group=2),
     )
 
     subdomains = handler.get_subdomains()
