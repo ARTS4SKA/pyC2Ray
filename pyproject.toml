@@ -62,6 +62,9 @@ setup = [
 [tool.mypy]
 ignore_missing_imports = true
 
+[tool.ruff]
+output-format = "concise"
+
 [tool.ruff.lint]
 ignore = ["UP031", "PYI019"]
 extend-select = ["F403"]
