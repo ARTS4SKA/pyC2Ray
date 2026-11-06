@@ -17,6 +17,21 @@ namespace asora {
 
     }  // namespace resident_tag
 
+    /// Threads per block of the raytracing kernel when the caller does not set it.
+    constexpr size_t default_block_size = 256;
+
+    /* @brief Number of raytracing blocks the device can keep resident
+     *
+     * Each resident block raytraces one source at a time, so this is the maximum
+     * number of sources raytraced concurrently.
+     *
+     * @param block_size Threads per block, as passed to do_all_sources_gpu
+     * @return Resident blocks over the whole device, never zero
+     * @throw std::runtime_error if the device is not initialized, or if no block of
+     * block_size threads fits on a multiprocessor
+     */
+    size_t max_resident_blocks(size_t block_size = default_block_size);
+
     /* @brief Raytrace all sources and compute photoionization rates
      *
      * Performs GPU-accelerated raytracing for all radiation sources to calculate
@@ -31,13 +46,18 @@ namespace asora {
      * @param minlogtau Minimum log10(optical depth)
      * @param dlogtau Step size in log10(optical depth)
      * @param num_tau Number of optical depth bins
-     * @param grid_size GPU grid size for kernel launch
-     * @param block_size GPU block size for kernel launch (default: 256)
+     * @param block_size GPU block size for kernel launch (default: default_block_size)
+     *
+     * @note The number of blocks is not a parameter: it is resolved from the
+     * device occupancy of the kernel, the memory the per-block column density
+     * buffers need, and the number of sources. Every block then takes the next
+     * source from a shared counter, so a block that finishes early picks up the
+     * next source instead of waiting for the rest of the grid.
      */
     void do_all_sources_gpu(
         double R, double sig, double dr, double *phi_ion, size_t num_src, size_t m1,
-        double minlogtau, double dlogtau, size_t num_tau, size_t grid_size,
-        size_t block_size = 256
+        double minlogtau, double dlogtau, size_t num_tau,
+        size_t block_size = default_block_size
     );
 
     /* @brief Data structure for chemical element properties used in raytracing
@@ -86,11 +106,16 @@ namespace asora {
      * from all sources through the computational domain and computing photoionization
      * rates based on optical depth and cross sections.
      *
+     * The grid is persistent: each block owns one column density buffer for the
+     * whole launch, starts from the source with its own index and then takes the
+     * next source from a shared counter when it is done with the current one. The
+     * grid is sized to the device rather than to the source count, and the work is
+     * balanced dynamically between blocks.
+     *
      * @param m1 Grid dimension size
      * @param dr Co-moving dimension of a grid pixel
      * @param R_max Maximum propagation radius for photons from the source
      * @param q_max Maximum octahedral q-shell for raytracing
-     * @param ns_start Starting source index for this kernel invocation
      * @param num_src Number of sources to process
      * @param src_pos Array of source positions (integer grid coordinates)
      * @param src_flux Array of source luminosities/flux values
@@ -100,7 +125,7 @@ namespace asora {
      * @param logtau Logarithmically-spaced optical depth grid
      */
     __global__ void evolve0D_gpu(
-        size_t m1, double dr, double R_max, int q_max, size_t ns_start, size_t num_src,
+        size_t m1, double dr, double R_max, int q_max, size_t num_src,
         const int *src_pos, const double *src_flux, element_data data_HI,
         density_maps densities, photo_tables ion_tables, linspace<double> logtau
     );
