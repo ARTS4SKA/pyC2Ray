@@ -154,11 +154,11 @@ PyObject *asora_shell2cart([[maybe_unused]] PyObject *self, PyObject *args) {
 }
 
 PyObject *asora_cart2shell([[maybe_unused]] PyObject *self, PyObject *args) {
-    int i, j, k;
-    if (!PyArg_ParseTuple(args, "iii", &i, &j, &k)) return nullptr;
+    int3 pos;
+    if (!PyArg_ParseTuple(args, "iii", &pos.x, &pos.y, &pos.z)) return nullptr;
 
     try {
-        auto [q, s] = asora::cart2shell(i, j, k);
+        auto [q, s] = asora::cart2shell(pos);
         return Py_BuildValue("ii", q, s);
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_MemoryError, e.what());

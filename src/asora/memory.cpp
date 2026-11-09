@@ -79,6 +79,8 @@ namespace asora {
         return instance()._memory_pool.at(tag);
     }
 
+    void device::clear(buffer_tag tag) { instance()._memory_pool.erase(tag); }
+
     bool device::contains(buffer_tag tag) {
         return is_initialized() && instance()._memory_pool.contains(tag);
     }

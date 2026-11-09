@@ -78,6 +78,10 @@ class TestShortCharacteristicsInterpolation:
     def test_pack_offsets_out_of_bounds(self) -> None:
         assert libasora is not None
         with pytest.raises(RuntimeError):
+            libasora.pack_offset(0, 1, -512)
+        with pytest.raises(RuntimeError):
+            libasora.pack_offset(1, -512, 0)
+        with pytest.raises(RuntimeError):
             libasora.pack_offset(512, 1, -1)
         with pytest.raises(RuntimeError):
             libasora.pack_offset(0, 513, 0)
