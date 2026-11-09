@@ -156,6 +156,7 @@ namespace asora {
         temperature,             ///< Gas temperature array (22)
         clumping_factor,         ///< Clumping factor array (23)
         // Ray-tracing LUT arrays
+        raylut_shells,   ///< first LUT index of each q-shell
         raylut_offsets,  ///< di, dj, dk offsets
         raylut_dx,       ///< dx weight component
         raylut_dy,       ///< dy weight component

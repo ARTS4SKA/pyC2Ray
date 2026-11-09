@@ -1,5 +1,6 @@
 import itertools
 import math
+from collections import Counter
 
 import numpy as np
 import pytest
@@ -32,6 +33,34 @@ def geometric_factors(di: int, dj: int, dk: int) -> tuple[float, float, float]:
     xj = abs(dj / dk)
     path = math.sqrt(1 + xi**2 + xj**2)
     return xi, xj, path
+
+
+def expected_offsets(R: float, N: int, q_max: int) -> list[tuple[int, int, int]]:
+    """Cells kept in the LUT: inside the sphere and, if periodic, inside the box."""
+    assert libasora is not None
+    radius2 = int(R * R)
+    periodic = libasora.is_periodic_mode_active()
+
+    kept = []
+    for q in range(q_max + 1):
+        for s in range(libasora.cells_in_shell(q)):
+            pos = libasora.shell2cart(q, s)
+            if sum(x * x for x in pos) > radius2:
+                continue
+            if periodic and not libasora.in_domain((0, 0, 0), pos, N):
+                continue
+            kept.append(pos)
+    return kept
+
+
+def shell_starts(lut) -> list[int]:
+    """First LUT index of each shell, plus the total as sentinel."""
+    counts = Counter(abs(item.di) + abs(item.dj) + abs(item.dk) for item in lut)
+    return [0, *itertools.accumulate(counts[q] for q in range(max(counts) + 1))]
+
+
+# (R, N): sphere-limited, fractional radius, box-limited (even and odd), R < 1.
+LUT_CASES = [(10.0, 64), (7.5, 64), (30.0, 32), (30.0, 31), (0.5, 16)]
 
 
 class TestShortCharacteristicsInterpolation:
@@ -83,63 +112,81 @@ class TestShortCharacteristicsInterpolation:
         with pytest.raises(RuntimeError):
             libasora.get_shortchar_lut()
 
-    def test_shortchar_lut_created(self, init_device) -> None:
+    def test_shortchar_lut_invalid(self, init_device) -> None:
+        assert libasora is not None
+        with pytest.raises(ValueError):
+            libasora.create_shortchar_lut(10.0, 0)
+
+        # q_max = ceil(sqrt(3) * 400) > 512 cannot be packed.
+        with pytest.raises(RuntimeError):
+            libasora.create_shortchar_lut(400.0, 1024)
+
+    @pytest.mark.parametrize("R, N", LUT_CASES)
+    def test_shortchar_lut_created(self, init_device, R: float, N: int) -> None:
         assert libasora is not None
 
-        libasora.create_shortchar_lut(10)
-        lut = libasora.get_shortchar_lut()
-        assert len(lut) == libasora.cells_to_shell(10)
+        q_max = libasora.create_shortchar_lut(R, N)
+        assert q_max == math.ceil(min(math.sqrt(3) * R, 1.5 * N))
 
-    def test_shortchar_lut_check_items(self, init_device) -> None:
+        lut = libasora.get_shortchar_lut()
+        offsets = [(item.di, item.dj, item.dk) for item in lut]
+        assert offsets == expected_offsets(R, N, q_max)
+
+    @pytest.mark.parametrize("R, N", LUT_CASES)
+    def test_shortchar_lut_check_items(self, init_device, R: float, N: int) -> None:
         assert libasora is not None
 
-        bank_size = libasora.cells_in_shell(50)
-
-        libasora.create_shortchar_lut(50)
+        libasora.create_shortchar_lut(R, N)
         lut = libasora.get_shortchar_lut()
+        start = shell_starts(lut)
+        bank_size = max(b - a for a, b in itertools.pairwise(start))
 
-        for item in lut:
+        def corner(q: int, index: int) -> np.ndarray:
+            """Cell held in column-density slot index, as seen from a cell of shell q."""
+            n, s = divmod(index, bank_size)
+            other_q = q - (q - n) % 4
+            assert other_q < q
+            assert s < start[other_q + 1] - start[other_q]
+            other = lut[start[other_q] + s]
+            return np.array([other.di, other.dj, other.dk])
+
+        # The source cell (q = 0) is raytraced separately: its entry is unused.
+        for item in lut[1:]:
+            pos = (item.di, item.dj, item.dk)
+            q = sum(abs(x) for x in pos)
+
             # Check that the path and geometric factors match.
-            dx, dy, path = geometric_factors(item.di, item.dj, item.dk)
+            dx, dy, path = geometric_factors(*pos)
             assert item.dx == pytest.approx(dx)
             assert item.dy == pytest.approx(dy)
             assert item.path == pytest.approx(path)
 
+            # The ray from the source crosses the previous plane along the major axis
+            # at pos * (1 - 1 / |major|): the weighted corners must land on it.
             weights = [dx * dy, (1 - dx) * dy, (1 - dy) * dx, (1 - dx) * (1 - dy)]
+            crossing = sum(
+                ws * corner(q, index)
+                for ws, index in zip(weights, item.indices)
+                if ws > 0
+            )
+            expected = np.array(pos) * (1 - 1 / max(abs(x) for x in pos))
+            assert crossing == pytest.approx(expected)
 
-            # Check that the interpolation indices are correct.
-            q = abs(item.di) + abs(item.dj) + abs(item.dk)
-            for ws, index in zip(weights, item.indices):
-                if ws == 0:
-                    continue
-                n, s = divmod(index, bank_size)
-                other_q = q - (q - n) % 4
-                other_item = lut[libasora.cells_to_shell(other_q - 1) + s]
-                assert abs(item.di - other_item.di) <= 1
-                assert abs(item.dj - other_item.dj) <= 1
-                assert abs(item.dk - other_item.dk) <= 1
-
-    def test_shortchar_lut_check_order(self, init_device) -> None:
+    @pytest.mark.parametrize("R, N", LUT_CASES)
+    def test_shortchar_lut_check_order(self, init_device, R: float, N: int) -> None:
         assert libasora is not None
 
-        libasora.create_shortchar_lut(50)
+        libasora.create_shortchar_lut(R, N)
         lut = libasora.get_shortchar_lut()
+        start = shell_starts(lut)
 
-        # Entries are sorted in lexicographic order of (di, dj, dk)
-        # in each q-shell.
-        start = 0
-        for q in range(51):
-            ncells = libasora.cells_in_shell(q)
-            s = slice(start, start + ncells)
+        # Entries are sorted in lexicographic order of (di, dj, dk) in each q-shell.
+        for a, b in itertools.pairwise(start):
             ijk = np.array(
-                [(item.di, item.dj, item.dk) for item in lut[s]], dtype=np.int32
-            )
-
-            # Assert lexicographic order.
+                [(item.di, item.dj, item.dk) for item in lut[a:b]], dtype=np.int32
+            ).reshape(-1, 3)
             indices = np.lexsort(ijk.T[::-1])
             assert (ijk == ijk[indices]).all()
-
-            start += ncells
 
 
 class TestOctahedron:

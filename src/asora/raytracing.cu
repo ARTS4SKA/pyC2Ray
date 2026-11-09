@@ -8,7 +8,6 @@
 
 #include <cuda_runtime.h>
 
-#include <iostream>
 #include <stdexcept>
 
 namespace asora {
@@ -56,30 +55,32 @@ namespace {
     // cover the full q-shell.
     __device__ void raytrace(
         const shortchar_lut &lut, size_t index, int q, int s, const int3 &pos,
-        double scale, element_data &data_HI, double dr, double R_max, size_t bank_size,
+        double scale, element_data &data_HI, double dr, double R_max,
         const density_maps &densities, size_t m1, const photo_tables<> &ion_tables,
         const linspace<double> &logtau
     ) {
         // Early return conditions only need the cell offsets.
         auto offset = lut.is_set() ? lut.offset(index) : shell2cart(q, s);
-
-        // Check if the cell is within the simulated box.
-        if (!in_domain(pos, offset, m1)) return;
-
         const auto &[di, dj, dk] = offset;
+        auto dist2 = di * di + dj * dj + dk * dk;
+
+        // The LUT only holds cells within reach, inside the domain if periodic.
+        // Check if the cell is within the simulated box.
+        if (!lut.is_set() || !periodic_conditions)
+            if (!in_domain(pos, offset, m1)) return;
 
         // Using integers for threshold check as it is more consistent.
-        auto dist2 = di * di + dj * dj + dk * dk;
-        if (dist2 > static_cast<int>(R_max * R_max)) return;
+        if (!lut.is_set() && dist2 > static_cast<int>(R_max * R_max)) return;
 
         // Get the short-characteristic interpolation information.
-        auto info = lut.is_set() ? lut.params(index)
-                                 : make_shortchar_interpolation_info(offset, bank_size);
+        auto info = lut.is_set()
+                        ? lut.params(index)
+                        : make_shortchar_interpolation_info(offset, lut.bank_size());
 
         auto coldens_in = shortchar_interpolation(
             info, data_HI.column_density, data_HI.cross_section
         );
-        coldens_in *= shortchar_multiplier(di, dj, dk);
+        coldens_in *= shortchar_multiplier(offset);
 
         constexpr double max_coldens = 2e30;
         if (coldens_in > max_coldens) return;
@@ -91,7 +92,7 @@ namespace {
         auto vol_ph = dist2 * info.path;
 
         // Get local ionization fraction & neutral hydrogen density in the cell
-        const auto cd_index = bank_size * (q % num_banks) + s;
+        const auto cd_index = lut.bank_size() * (q % num_banks) + s;
         const auto ph_index = ravel_index(pos.x + di, pos.y + dj, pos.z + dk, m1);
         auto nHI = densities.get(ph_index);
 
@@ -139,15 +140,14 @@ namespace asora {
         auto phi_d = phi_buf.data<double>();
         safe_cuda(cudaMemset(phi_d, 0, phi_buf.size()));
 
-        // Determine how large the octahedron should be, based on the raytracing
-        // radius. The radius equals the distance from the source to the middle of the
-        // faces of the octahedron. To raytrace the whole volume, the octahedron must
-        // be 1.5*N in size. Allocate (if necessary) the column density array.
-        int q_max = std::ceil(std::min(c::sqrt3<> * R, m1 * 1.5));
-        auto bank_size = cells_in_shell(q_max);
+        // Collect the LUT for the raytracing kernel. If it cannot be built, it is
+        // unset and the interpolation parameters are computed on the fly.
+        auto lut_d = create_shortchar_interp_lut(R, m1);
 
+        // The LUT only keeps the cells within reach, so its banks can be smaller than
+        // the largest shell. Allocate (if necessary) the column density array.
         device::ensure<double>(
-            buffer_tag::column_density_HI, grid_size * bank_size * num_banks
+            buffer_tag::column_density_HI, grid_size * lut_d.bank_size() * num_banks
         );
 
         // Get device pointers for the kernel.
@@ -171,22 +171,12 @@ namespace asora {
 
         linspace<double> logtau{minlogtau, dlogtau, static_cast<size_t>(num_tau)};
 
-        // Collect the LUT for raytracing kernel.
-        shortchar_lut lut_d{};
-        try {
-            lut_d = create_shortchar_interp_lut(q_max);
-        } catch (const std::exception &e) {
-            // If the LUT cannot be created, lut_d below will be empty.
-            std::cerr << "Error creating raytracing lookup table: " << e.what()
-                      << "; calculating cinterp on the fly\n";
-        }
-
         // Loop over batches of sources
         for (size_t ns = 0; ns < num_src; ns += grid_size) {
             // Raytrace the current batch of sources in parallel
             // Consecutive kernel launches are in the same stream and so are serialized
             evolve0D_gpu<<<grid_size, block_size>>>(
-                lut_d, m1, dr, R, q_max, ns, num_src, src_pos_d, src_flux_d, data_HI,
+                lut_d, m1, dr, R, ns, num_src, src_pos_d, src_flux_d, data_HI,
                 densities, ion_tables, logtau
             );
 
@@ -203,8 +193,8 @@ namespace asora {
     // to the current cell and finds the photoionization rate
     // ========================================================================
     __global__ void evolve0D_gpu(
-        shortchar_lut lut, size_t m1, double dr, double R_max, int q_max,
-        size_t ns_start, size_t num_src, const int *__restrict__ src_pos,
+        shortchar_lut lut, size_t m1, double dr, double R_max, size_t ns_start,
+        size_t num_src, const int *__restrict__ src_pos,
         const double *__restrict__ src_flux, element_data data_HI,
         density_maps densities, photo_tables<> ion_tables, linspace<double> logtau
     ) {
@@ -230,8 +220,7 @@ namespace asora {
 
         // Offset pointer to the outgoing column density array used for
         // interpolation (each block works on its own array).
-        auto bank_size = cells_in_shell(q_max);
-        size_t cd_offset = blockIdx.x * bank_size * num_banks;
+        size_t cd_offset = blockIdx.x * lut.bank_size() * num_banks;
         data_HI.column_density += cd_offset;
 
         // Calculate column density and photoionization rate for the source cell.
@@ -249,17 +238,16 @@ namespace asora {
         // Cell-independent part of the photon volume 4*pi * dist2 * path * dr^2.
         scale /= 4 * c::pi<>;
 
-        for (int q = 1; q <= q_max; ++q) {
-            // Each thread can process multiple cells.
-            int s = threadIdx.x;
-            while (s < cells_in_shell(q)) {
-                auto index = cells_to_shell(q - 1) + s;
+        for (int q = 1; q <= lut.q_max(); ++q) {
+            // Each thread can process multiple cells. Only the cells kept in the LUT
+            // are visited; s is their position within the compacted shell.
+            auto begin = lut.shell_begin(q);
+            auto count = lut.shell_size(q);
+            for (size_t s = threadIdx.x; s < count; s += blockDim.x) {
                 raytrace(
-                    lut, index, q, s, {i0, j0, k0}, scale, data_HI, dr, R_max,
-                    bank_size, densities, m1, ion_tables, logtau
+                    lut, begin + s, q, s, {i0, j0, k0}, scale, data_HI, dr, R_max,
+                    densities, m1, ion_tables, logtau
                 );
-
-                s += blockDim.x;
             }
             __syncthreads();
         }
