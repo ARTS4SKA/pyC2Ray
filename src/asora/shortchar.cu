@@ -13,13 +13,6 @@
 #include <optional>
 #include <vector>
 
-#ifdef __CUDA_ARCH__
-#define assert_or_throw(condition, msg) assert(condition)
-#else
-#define assert_or_throw(condition, msg) \
-    if (!(condition)) throw std::runtime_error(msg);
-#endif
-
 namespace {
 
     // 2^10 = 1024 values per digit, [-512, 512); +512 carries into the next digit.
@@ -30,25 +23,26 @@ namespace {
     constexpr int Q_MAX = 512;
 
     __device__ cuda::std::array<float, 4> make_weights(float dx, float dy) {
-        auto dxdy = dx * dy;
-        return {dxdy, dy - dxdy, dx - dxdy, 1.f - dx - dy + dxdy};
+        // More precise formula for dx,dy = 0 or 1.
+        auto ex = 1.f - dx;
+        auto ey = 1.f - dy;
+        return {dx * dy, ex * dy, dx * ey, ex * ey};
     }
 
     /// Kept cells on host, laid out as in the LUT.
     struct kept_cells {
         /// Packed offsets, shell by shell, lexicographic within a shell.
         std::vector<uint32_t> offsets;
+
         /// First index of each shell, plus the total as sentinel.
         std::vector<uint32_t> start;
+
         /// Largest number of cells kept in a shell.
         size_t bank_size = 0;
     };
 
-    /* @brief Collect, shell by shell, the cells a source can actually reach: those
-     * inside the sphere of squared radius radius2 and, with periodic conditions, inside
-     * the domain. Without periodic conditions the domain depends on the source
-     * position and the check is done while raytracing.
-     */
+    /// Collect the octahedral cells inside the sphere of squared radius radius2 and
+    /// inside the domain (only periodic conditions).
     kept_cells find_shortchar_offsets(
         int radius2, [[maybe_unused]] size_t N, int q_max
     ) {
@@ -81,31 +75,35 @@ namespace {
         return kept;
     }
 
-    /// Column-density bank index q and position s in the bank of a cell.
-    /// Overall position is then bank_size * (q % asora::num_banks) + s;
-    __device__ int2 bank_indices(
-        const int3& pos, const uint32_t* __restrict__ shell_start = nullptr,
+    /// Bank index of a cell for interpolation.
+    __device__ size_t bank_index(
+        const int3& pos, size_t bank_size,
+        const uint32_t* __restrict__ shell_start = nullptr,
         const uint32_t* __restrict__ offsets = nullptr
     ) {
         assert(bool(shell_start) == bool(offsets));
-        if (!shell_start) return asora::cart2shell(pos.x, pos.y, pos.z);
+        int2 qs;
+        if (!shell_start) {
+            qs = asora::cart2shell(pos);
+        } else {
+            qs.x = abs(pos.x) + abs(pos.y) + abs(pos.z);
+            // Binary search where pos sits in the packed offsets.
+            // Codes are in lexicographic order within a shell.
+            auto key = asora::pack_offset(pos);
+            auto lo = shell_start[qs.x];
+            auto hi = shell_start[qs.x + 1];
+            while (lo < hi) {
+                auto mid = lo + (hi - lo) / 2;
+                if (offsets[mid] < key)
+                    lo = mid + 1;
+                else
+                    hi = mid;
+            }
 
-        auto q = abs(pos.x) + abs(pos.y) + abs(pos.z);
-        // Binary search where pos sits in the packed offsets.
-        // Codes are in lexicographic order within a shell.
-        auto key = asora::pack_offset(pos);
-        auto lo = shell_start[q];
-        auto hi = shell_start[q + 1];
-        while (lo < hi) {
-            auto mid = lo + (hi - lo) / 2;
-            if (offsets[mid] < key)
-                lo = mid + 1;
-            else
-                hi = mid;
+            assert(lo < shell_start[qs.x + 1] && offsets[lo] == key);
+            qs.y = lo - shell_start[qs.x];
         }
-
-        assert(lo < shell_start[q + 1] && offsets[lo] == key);
-        return make_int2(q, lo - shell_start[q]);
+        return bank_size * (qs.x % asora::num_banks) + qs.y;
     }
 
     __device__ asora::shortchar_info make_info(
@@ -124,7 +122,7 @@ namespace {
 
         assert(ai + aj + ak > 0);
 
-        // Compute geometric factors and interpolation indices using inverse_lut.
+        // Compute geometric factors and interpolation indices.
         int si = (di > 0) - (di < 0);
         int sj = (dj > 0) - (dj < 0);
         int sk = (dk > 0) - (dk < 0);
@@ -165,8 +163,7 @@ namespace {
         for (size_t k = 0; k < 4; ++k) {
             if (weights[k] > 0.0) {
                 const int3 corner{di - sx[0], dj - sx[1], dk - sx[2]};
-                auto&& [q, s] = bank_indices(corner, shell_start, offsets);
-                index = bank_size * (q % asora::num_banks) + s;
+                index = bank_index(corner, bank_size, shell_start, offsets);
             }
             indices[k] = index;
             sx += 3;
@@ -175,18 +172,20 @@ namespace {
         return {dd.x, dd.y, dd.z, std::move(indices)};
     }
 
-    /* @brief Host-side memo of the last look-up table built.
+    /* @brief Owner of the last look-up table built.
      *
      * The LUT is a pure function of the squared radius and the box size, so repeating
      * them hands the same one back. This memo holds the LUT and decides whether
-     * rebuilding is necessary: closing the device makes the pool hand out a different
-     * offsets buffer, so comparing that pointer invalidates the memo on its own.
+     * rebuilding is necessary.
      */
     class lut_memo {
        public:
         /// The table built for this radius and box, if it is still on the device.
-        std::optional<asora::shortchar_lut> get(int radius2, size_t N) const {
-            if (radius2 != _radius2 || N != _N || !alive()) return std::nullopt;
+        std::optional<asora::shortchar_lut> get(
+            int radius2, size_t N, int q_max
+        ) const {
+            if (radius2 != _radius2 || N != _N || q_max != _lut.q_max() || !alive())
+                return std::nullopt;
             return _lut;
         }
 
@@ -196,12 +195,6 @@ namespace {
             _N = N;
             _lut = lut;
             _offsets = pool_offsets();
-        }
-
-        /// Forget the table, if any.
-        void clear() {
-            _lut = {};
-            _offsets = nullptr;
         }
 
        private:
@@ -238,22 +231,18 @@ namespace asora {
     __host__ __device__ uint32_t pack_offset(const int3& pos) {
         auto&& [di, dj, dk] = pos;
 
-#ifdef __CUDA_ARCH__
-        [[maybe_unused]] constexpr const char* msg = "";
-#else
-        std::string msg = std::format("({}, {}, {}) is out of bounds", di, dj, dk);
-#endif
+        constexpr const char* msg = "({}, {}, {}) cannot be packed in 32 bits";
 
         if (di == Q_MAX || dj == Q_MAX || dk == Q_MAX) {
             // Only the tips of the octahedron reach +Q_MAX.
-            assert_or_throw(std::abs(di) + std::abs(dj) + std::abs(dk) == Q_MAX, msg);
+            check(std::abs(di) + std::abs(dj) + std::abs(dk) == Q_MAX, msg, di, dj, dk);
         } else {
-            assert_or_throw(-Q_MAX <= di && di < Q_MAX, msg);
-            assert_or_throw(-Q_MAX <= dj && dj < Q_MAX, msg);
-            assert_or_throw(-Q_MAX <= dk && dk < Q_MAX, msg);
+            check(-Q_MAX <= di && di < Q_MAX, msg, di, dj, dk);
+            check(-Q_MAX <= dj && dj < Q_MAX, msg, di, dj, dk);
+            check(-Q_MAX <= dk && dk < Q_MAX, msg, di, dj, dk);
             // These share their code with a carried tip.
-            assert_or_throw(!(di == 0 && dj == 1 && dk == -Q_MAX), msg);
-            assert_or_throw(!(di == 1 && dj == -Q_MAX && dk == 0), msg);
+            check(!(di == 0 && dj == 1 && dk == -Q_MAX), msg, di, dj, dk);
+            check(!(di == 1 && dj == -Q_MAX && dk == 0), msg, di, dj, dk);
         }
 
         auto pi = static_cast<uint32_t>(di + Q_MAX);
@@ -273,7 +262,6 @@ namespace asora {
         if (offset == K_TIP) return {0, 0, Q_MAX};
         if (offset == J_TIP) return {0, Q_MAX, 0};
 
-        // The top digit is unmasked: it reaches 2 Q_MAX for (Q_MAX, 0, 0).
         auto di = static_cast<int>(offset >> 2 * OFFSET_BITS) - Q_MAX;
         auto dj = static_cast<int>((offset >> OFFSET_BITS) & OFFSET_MASK) - Q_MAX;
         auto dk = static_cast<int>(offset & OFFSET_MASK) - Q_MAX;
@@ -282,7 +270,7 @@ namespace asora {
 
     // Return dx, dy, path
     __host__ __device__ float3 compute_shortchar_factors(int di, int dj, int dk) {
-        assert_or_throw(
+        check(
             std::abs(dk) >= std::abs(di) && std::abs(dk) >= std::abs(dj) && dk != 0,
             "Invalid short-characteristic offsets: |dk| must be the largest and "
             "non-zero"
@@ -315,9 +303,8 @@ namespace asora {
         _indices = device::get(buffer_tag::raylut_indices).data<index4>();
     }
 
-    /* Differently from raytracing, the LUT fill the fill has no ordering constraints
+    /* Differently from raytracing, the LUT fill has no ordering constraints
      * between shells: every entry is written exactly once and never read back.
-     * This kernel can run as a flat grid-stride loop over the whole table.
      */
     __global__ void fill_lut_kernel(
         shortchar_lut sclut, size_t n_cells, size_t bank_size,
@@ -342,11 +329,10 @@ namespace asora {
             // Same integer threshold as the raytracing kernel.
             auto radius2 = static_cast<int>(R * R);
 
-            // The table only depends on radius2 and N, so an identical one that is
-            // still on the device is handed straight back.
+            // The table only depends on radius2, N and q_max, so an identical one that
+            // is still on the device is handed straight back.
             static lut_memo memo;
-            if (auto cached = memo.get(radius2, N)) return *cached;
-            memo.clear();
+            if (auto cached = memo.get(radius2, N, q_max)) return *cached;
 
             auto&& [offsets, start, bank_size] =
                 find_shortchar_offsets(radius2, N, q_max);
@@ -381,6 +367,13 @@ namespace asora {
         } catch (const std::exception& e) {
             std::cerr << "Error creating raytracing lookup table: " << e.what()
                       << "; calculating cinterp on the fly\n";
+            // Clear memory
+            device::clear(buffer_tag::raylut_shells);
+            device::clear(buffer_tag::raylut_offsets);
+            device::clear(buffer_tag::raylut_dx);
+            device::clear(buffer_tag::raylut_dy);
+            device::clear(buffer_tag::raylut_path);
+            device::clear(buffer_tag::raylut_indices);
         }
 
         // Unset LUT over the full shells: the parameters are computed on the fly.
@@ -443,7 +436,10 @@ namespace asora {
 #pragma unroll 4
         for (size_t i = 0; i < 4; ++i) {
             auto c = column_dens[info.indices[i]];
-            auto w = weights[i] / max(tau_0, static_cast<float>(c * cross_section));
+            // Fast division: error cancels out in the weighted average.
+            auto w = __fdividef(
+                weights[i], max(tau_0, static_cast<float>(c * cross_section))
+            );
 
             cdens += w * c;
             wtot += w;

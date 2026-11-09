@@ -93,7 +93,7 @@ namespace {
 
         // Get local ionization fraction & neutral hydrogen density in the cell
         const auto cd_index = lut.bank_size() * (q % num_banks) + s;
-        const auto ph_index = ravel_index(pos.x + di, pos.y + dj, pos.z + dk, m1);
+        const auto ph_index = ravel_index(pos + offset, m1);
         auto nHI = densities.get(ph_index);
 
         // Compute photoionization rates from column density.
@@ -213,21 +213,20 @@ namespace asora {
         if (ns >= num_src) return;
 
         // Get source properties.
-        const auto i0 = src_pos[3 * ns + 0];
-        const auto j0 = src_pos[3 * ns + 1];
-        const auto k0 = src_pos[3 * ns + 2];
+        src_pos += 3 * ns;
+        const int3 pos0{src_pos[0], src_pos[1], src_pos[2]};
         auto scale = src_flux[ns] / (dr * dr * dr);
 
         // Offset pointer to the outgoing column density array used for
         // interpolation (each block works on its own array).
-        size_t cd_offset = blockIdx.x * lut.bank_size() * num_banks;
+        const size_t cd_offset = blockIdx.x * lut.bank_size() * num_banks;
         data_HI.column_density += cd_offset;
 
         // Calculate column density and photoionization rate for the source cell.
         // This is done separately from the main loop because to take advantage of
         // some simplifications.
         if (threadIdx.x == 0) {
-            const auto index = ravel_index(i0, j0, k0, m1);
+            const auto index = ravel_index(pos0, m1);
             auto nHI = densities.get(index);
             update_photo_rates(
                 data_HI, 0, index, 0.0, nHI, 0.5 * dr, scale, ion_tables, logtau
@@ -241,12 +240,12 @@ namespace asora {
         for (int q = 1; q <= lut.q_max(); ++q) {
             // Each thread can process multiple cells. Only the cells kept in the LUT
             // are visited; s is their position within the compacted shell.
-            auto begin = lut.shell_begin(q);
-            auto count = lut.shell_size(q);
+            const auto begin = lut.shell_begin(q);
+            const auto count = lut.shell_size(q);
             for (size_t s = threadIdx.x; s < count; s += blockDim.x) {
                 raytrace(
-                    lut, begin + s, q, s, {i0, j0, k0}, scale, data_HI, dr, R_max,
-                    densities, m1, ion_tables, logtau
+                    lut, begin + s, q, s, pos0, scale, data_HI, dr, R_max, densities,
+                    m1, ion_tables, logtau
                 );
             }
             __syncthreads();

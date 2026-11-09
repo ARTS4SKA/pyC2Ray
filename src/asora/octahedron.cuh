@@ -135,12 +135,11 @@ namespace asora {
      *
      * @see shell2cart() for the forward transformation.
      *
-     * @param[in] i X-offset
-     * @param[in] j Y-offset
-     * @param[in] k Z-offset
+     * @param[in] pos Cartesian offsets (i, j, k)
      * @return Array containing {q, s}
      */
-    __host__ __device__ inline int2 cart2shell(int i, int j, int k) {
+    __host__ __device__ inline int2 cart2shell(const int3 &pos) {
+        const auto &[i, j, k] = pos;
         int q = abs(i) + abs(j) + abs(k);
         if (q == 0) return {0, 0};
 

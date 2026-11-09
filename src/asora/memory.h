@@ -274,6 +274,11 @@ namespace asora {
          */
         static device_buffer &get(buffer_tag tag);
 
+        /* @brief Free a buffer from the device and remove it from the pool.
+         * @param[in] tag Buffer identifier
+         */
+        static void clear(buffer_tag tag);
+
         /// Check if the buffer identifier is in use (= a buffer exists in the pool).
         static bool contains(buffer_tag tag);
 

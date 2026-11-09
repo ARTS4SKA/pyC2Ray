@@ -4,7 +4,9 @@
 
 #include <cassert>
 #include <concepts>
+#include <format>
 #include <source_location>
+#include <stdexcept>
 
 /* @file utils.cuh
  * @brief Utility functions and constants for ASORA GPU raytracing
@@ -29,6 +31,35 @@ namespace asora {
         const std::source_location &loc = std::source_location::current()
     );
 
+    /* @brief Check a condition and throw an exception with formatted message if false.
+     *
+     * In device code, this will trigger an assertion failure. In host code, it will
+     * throw a std::runtime_error with the provided formatted message.
+     * Use this function if you want to throw on a condition in a host AND device
+     * function.
+     *
+     * @param condition The condition to check
+     * @param msg Format string for the error message
+     * @param args Arguments for the format string
+     * @throw std::runtime_error if condition is false (host code)
+     */
+#ifdef __CUDA_ARCH__
+    template <typename... Args>
+    __host__ __device__ void check(
+        [[maybe_unused]] bool condition, const char *, const Args &...
+    ) {
+        assert(condition);
+    }
+#else
+    template <typename... Args>
+    __host__ __device__ void check(
+        bool condition, std::format_string<const Args &...> msg, const Args &...args
+    ) {
+        if (!condition) [[unlikely]]
+            throw std::runtime_error(std::format(msg, args...));
+    }
+#endif
+
     /// Common mathematical constants
     namespace c {
 
@@ -46,42 +77,52 @@ namespace asora {
 
     }  // namespace c
 
-    /* @brief Fortran/Python-style modulo operation (always non-negative).
+    /* @brief Wrap an index into [0, N) with one compare-and-add per side.
      *
-     * Reminder: "%" in C is the remainder operator which preserves sign.
+     * Equivalent to Fortran module, but cheaper. Valid only for a in [-N, 2N).
      *
-     * @param a Dividend
-     * @param b Divisor
-     * @return Modulo result in range [0, b)
+     * @param a Index
+     * @param N Grid size
+     * @return Wrapped index in range [0, N)
      */
-    __device__ inline int modulo(int a, int b) { return (a % b + b) % b; }
+    __device__ inline int wrap(int a, size_t N) {
+        const auto n = static_cast<int>(N);
+        assert(-n <= a && a < 2 * n);
+        if (a < 0) return a + n;
+        if (a >= n) return a - n;
+        return a;
+    }
 
     /* @brief Convert 3D grid indices to flat array index.
      *
-     * @param i X-index
-     * @param j Y-index
-     * @param k Z-index
+     * @param pos Grid indices, in [-N, 2N) and wrapped periodically into [0, N)
      * @param N Grid size (assumed cubic)
      * @return Flat index into 1D array
      */
-    __device__ inline size_t ravel_index(int i, int j, int k, int N) {
-        return N * N * modulo(i, N) + N * modulo(j, N) + modulo(k, N);
+    __device__ inline size_t ravel_index(const int3 &pos, size_t N) {
+        auto i = static_cast<size_t>(wrap(pos.x, N));
+        auto j = static_cast<size_t>(wrap(pos.y, N));
+        auto k = static_cast<size_t>(wrap(pos.z, N));
+        return (i * N + j) * N + k;
+    }
+
+    /// Component-wise sum of two integer vectors.
+    __host__ __device__ inline int3 operator+(const int3 &a, const int3 &b) {
+        return {a.x + b.x, a.y + b.y, a.z + b.z};
     }
 
     /* @brief Check if the indices are strictly within the box.
      *
      * Negative values to unsigned wrap around and become >= N, so one unsigned compare
-     * checks both bounds, if i,j,k and N are small (less than 2^31).
+     * checks both bounds, if the indices and N are small (less than 2^31).
      *
-     * @param i X-index
-     * @param j Y-index
-     * @param k Z-index
+     * @param pos Grid indices
      * @param N Grid size
      * @return True if inside [0,N)^3
      */
-    __host__ __device__ inline bool in_box(int i, int j, int k, size_t N) {
-        return static_cast<size_t>(i) < N && static_cast<size_t>(j) < N &&
-               static_cast<size_t>(k) < N;
+    __host__ __device__ inline bool in_box(const int3 &pos, size_t N) {
+        return static_cast<size_t>(pos.x) < N && static_cast<size_t>(pos.y) < N &&
+               static_cast<size_t>(pos.z) < N;
     }
 
 #ifdef PERIODIC
@@ -108,10 +149,12 @@ namespace asora {
     __host__ __device__ inline bool in_domain(
         [[maybe_unused]] const int3 &pos, const int3 &off, size_t N
     ) {
-        if constexpr (periodic_conditions)
-            return in_box(off.x + N / 2, off.y + N / 2, off.z + N / 2, N);
-        else
-            return in_box(pos.x + off.x, pos.y + off.y, pos.z + off.z, N);
+        if constexpr (periodic_conditions) {
+            auto h = static_cast<int>(N / 2);
+            return in_box(off + make_int3(h, h, h), N);
+        } else {
+            return in_box(pos + off, N);
+        }
     }
 
 }  // namespace asora

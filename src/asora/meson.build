@@ -90,4 +90,5 @@ py.extension_module(
     subdir: 'pyc2ray/lib',
     cuda_args: nvcc_flags,
     link_args: nvlink_flags,
+    override_options: ['werror=true'],
 )

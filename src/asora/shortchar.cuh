@@ -15,12 +15,12 @@ namespace asora {
      * single 32bit value.
      *
      * The offsets are shifted by Q_MAX to make them non-negative and summed as the
-     * digits of a base-2^10 number, which covers the cube [-Q_MAX, Q_MAX)^3. A
-     * coordinate of +Q_MAX overflows its digit and carries into the next one, so
-     * (0, 0, Q_MAX) and (0, Q_MAX, 0) take the codes of (0, 1, -Q_MAX) and
-     * (1, -Q_MAX, 0), which have q = Q_MAX + 1 and cannot be packed. (Q_MAX, 0, 0)
-     * carries into bit 30. The packed values of the octahedron are therefore unique
-     * and in lexicographic order.
+     * digits of a base-2^10 number, which corresponds to the cube [-Q_MAX, Q_MAX)^3.
+     * A coordinate of +Q_MAX overflows and carries into the next one, so
+     * (0, 0, Q_MAX) is mapped to (0, 1, -Q_MAX) and (0, Q_MAX, 0) to (1, -Q_MAX, 0),
+     * which both have q = Q_MAX + 1 and cannot be packed. (Q_MAX, 0, 0) instead
+     * overflows to the 30th bit. The packed values of the octahedron are therefore
+     * unique and in lexicographic order.
      */
     __host__ __device__ uint32_t pack_offset(const int3 &pos);
     __host__ __device__ int3 unpack_offset(uint32_t offset);
@@ -141,15 +141,15 @@ namespace asora {
 
     /* @brief Create a lookup table for the cells a source can reach.
      *
-     * Only the cells of the q-shells up to get_q_max(R, N) that are inside the sphere
-     * of radius R (and inside the domain, with periodic conditions) are kept. Shells
-     * stay contiguous and their cells in lexicographic order.
+     * Only the cells of the octahedron up to get_q_max(R, N) that are inside the sphere
+     * of radius R (and inside the domain with periodic conditions) are kept. Shells are
+     * contiguous and cells are lexicographically sorted. If the LUT cannot be built,
+     * an unset LUT is returned and the interpolation parameters are computed on the
+     * fly.
      *
      * @param R Raytracing radius, in cells.
      * @param N Number of cells along a side of the box.
-     * @return The LUT, or the one already on the device for the same R and N. If the
-     * LUT cannot be built, an unset LUT spanning the full shells up to q_max is
-     * returned and the interpolation parameters are computed on the fly.
+     * @return The LUT, or the one already on the device for the same R and N.
      */
     shortchar_lut create_shortchar_interp_lut(double R, size_t N);
 
