@@ -4,11 +4,14 @@
 #include "octahedron.cuh"
 #include "utils.cuh"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cuda/std/array>
 #include <format>
+#include <iostream>
 #include <optional>
+#include <vector>
 
 #ifdef __CUDA_ARCH__
 #define assert_or_throw(condition, msg) assert(condition)
@@ -19,9 +22,10 @@
 
 namespace {
 
-    // 2^10 = 1024, possible values in range [-512, 512)
+    // 2^10 = 1024 values per digit, [-512, 512); +512 carries into the next digit.
     constexpr uint32_t OFFSET_BITS = 10;
     constexpr uint32_t OFFSET_MASK = (1u << OFFSET_BITS) - 1;
+
     /// Maximum allowed q-shell index, included.
     constexpr int Q_MAX = 512;
 
@@ -30,128 +34,87 @@ namespace {
         return {dxdy, dy - dxdy, dx - dxdy, 1.f - dx - dy + dxdy};
     }
 
-    /* @brief Host-side memo of the last look-up table built.
-     *
-     * The LUT is a pure function of q_max, so repeating a q_max hands the same one
-     * back. This memo holds the LUT and decides whether rebuilding is necessary:
-     * closing the device, or a different q_max, makes the pool hand out a different
-     * offsets buffer, so comparing that pointer invalidates the memo on its own.
-     */
-    class lut_memo {
-       public:
-        /// The table built for this q_max, if it is still on the device.
-        std::optional<asora::shortchar_lut> get(int q_max) const {
-            if (q_max != _q_max || !alive()) return std::nullopt;
-            return _lut;
-        }
-
-        /// Remember a freshly built table.
-        void put(int q_max, const asora::shortchar_lut& lut) {
-            _q_max = q_max;
-            _lut = lut;
-            _offsets = pool_offsets();
-        }
-
-       private:
-        /// The buffer the pool currently holds the cell offsets in, if any.
-        static const uint32_t* pool_offsets() {
-            using namespace asora;
-            if (!device::contains(buffer_tag::raylut_offsets)) return nullptr;
-            return device::get(buffer_tag::raylut_offsets).data<uint32_t>();
-        }
-
-        bool alive() const {
-            return _lut.is_set() && _offsets != nullptr && _offsets == pool_offsets();
-        }
-
-        int _q_max = -1;
-        const uint32_t* _offsets = nullptr;
-        asora::shortchar_lut _lut;
+    /// Kept cells on host, laid out as in the LUT.
+    struct kept_cells {
+        /// Packed offsets, shell by shell, lexicographic within a shell.
+        std::vector<uint32_t> offsets;
+        /// First index of each shell, plus the total as sentinel.
+        std::vector<uint32_t> start;
+        /// Largest number of cells kept in a shell.
+        size_t bank_size = 0;
     };
 
-}  // namespace
+    /* @brief Collect, shell by shell, the cells a source can actually reach: those
+     * inside the sphere of squared radius radius2 and, with periodic conditions, inside
+     * the domain. Without periodic conditions the domain depends on the source
+     * position and the check is done while raytracing.
+     */
+    kept_cells find_shortchar_offsets(
+        int radius2, [[maybe_unused]] size_t N, int q_max
+    ) {
+        kept_cells kept;
+        kept.start.reserve(q_max + 2);
+        kept.start.push_back(0);
 
-namespace asora {
+        for (int q = 0; q <= q_max; ++q) {
+            auto n_cells = asora::cells_in_shell(q);
+            size_t n_kept = 0;
 
-    // With OFFSET_BITS = 10 and Q_MAX = 512, not every point is representable. The
-    // maximum representable point is (511, 511, 511). The minimum representable point
-    // is (-512, -512, -512). We use the remaining 2 bits to represent the following 3
-    // missing points, which are valid octahedral offsets:
-    //
-    // di = Q_MAX, dj = 0, dk = 0 -> 11...
-    // di = 0, dj = Q_MAX, dk = 0 -> 10...
-    // di = 0, dj = 0, dk = Q_MAX -> 01...
-    //            everything else -> 00xxxxx
-    //
-    __host__ __device__ uint32_t pack_offset(const int3& pos) {
+            for (size_t s = 0; s < n_cells; ++s) {
+                auto pos = asora::shell2cart(q, static_cast<int>(s));
+
+                auto dist2 = pos.x * pos.x + pos.y * pos.y + pos.z * pos.z;
+                if (dist2 > radius2) continue;
+
+                if constexpr (asora::periodic_conditions) {
+                    if (!asora::in_domain(int3{}, pos, N)) continue;
+                }
+
+                kept.offsets.push_back(asora::pack_offset(pos));
+                ++n_kept;
+            }
+
+            kept.start.push_back(static_cast<uint32_t>(kept.offsets.size()));
+            kept.bank_size = std::max(kept.bank_size, n_kept);
+        }
+
+        return kept;
+    }
+
+    /// Column-density bank index q and position s in the bank of a cell.
+    /// Overall position is then bank_size * (q % asora::num_banks) + s;
+    __device__ int2 bank_indices(
+        const int3& pos, const uint32_t* __restrict__ shell_start = nullptr,
+        const uint32_t* __restrict__ offsets = nullptr
+    ) {
+        assert(bool(shell_start) == bool(offsets));
+        if (!shell_start) return asora::cart2shell(pos.x, pos.y, pos.z);
+
+        auto q = abs(pos.x) + abs(pos.y) + abs(pos.z);
+        // Binary search where pos sits in the packed offsets.
+        // Codes are in lexicographic order within a shell.
+        auto key = asora::pack_offset(pos);
+        auto lo = shell_start[q];
+        auto hi = shell_start[q + 1];
+        while (lo < hi) {
+            auto mid = lo + (hi - lo) / 2;
+            if (offsets[mid] < key)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+
+        assert(lo < shell_start[q + 1] && offsets[lo] == key);
+        return make_int2(q, lo - shell_start[q]);
+    }
+
+    __device__ asora::shortchar_info make_info(
+        const int3& pos, size_t bank_size,
+        const uint32_t* __restrict__ shell_start = nullptr,
+        const uint32_t* __restrict__ offsets = nullptr
+    ) {
         using namespace asora;
 
-        auto&& [di, dj, dk] = pos;
-
-#ifdef __CUDA_ARCH__
-        [[maybe_unused]] constexpr const char* msg = "";
-#else
-        std::string msg = std::format("({}, {}, {}) is out of bounds", di, dj, dk);
-#endif
-
-        if (di == Q_MAX) {
-            assert_or_throw(dj == 0 && dk == 0, msg);
-            return uint32_t(3) << (3 * OFFSET_BITS);
-        }
-
-        if (dj == Q_MAX) {
-            assert_or_throw(di == 0 && dk == 0, msg);
-            return uint32_t(2) << (3 * OFFSET_BITS);
-        }
-
-        if (dk == Q_MAX) {
-            assert_or_throw(di == 0 && dj == 0, msg);
-            return uint32_t(1) << (3 * OFFSET_BITS);
-        }
-
-        assert_or_throw(-Q_MAX <= di && di < Q_MAX, msg);
-        assert_or_throw(-Q_MAX <= dj && dj < Q_MAX, msg);
-        assert_or_throw(-Q_MAX <= dk && dk < Q_MAX, msg);
-
-        // 3 x 10 bits = 30 bits used, 2 bits spare in the uint32.
-        auto pi = static_cast<uint32_t>(di + Q_MAX) & OFFSET_MASK;
-        auto pj = static_cast<uint32_t>(dj + Q_MAX) & OFFSET_MASK;
-        auto pk = static_cast<uint32_t>(dk + Q_MAX) & OFFSET_MASK;
-        return (pi << 2 * OFFSET_BITS) | (pj << OFFSET_BITS) | pk;
-    }
-
-    __host__ __device__ int3 unpack_offset(uint32_t offset) {
-        switch (offset >> (3 * OFFSET_BITS)) {
-            case 3:
-                return {Q_MAX, 0, 0};
-            case 2:
-                return {0, Q_MAX, 0};
-            case 1:
-                return {0, 0, Q_MAX};
-            default:
-                break;
-        }
-        auto di = static_cast<int>((offset >> 2 * OFFSET_BITS) & OFFSET_MASK) - Q_MAX;
-        auto dj = static_cast<int>((offset >> OFFSET_BITS) & OFFSET_MASK) - Q_MAX;
-        auto dk = static_cast<int>(offset & OFFSET_MASK) - Q_MAX;
-        return {di, dj, dk};
-    }
-
-    // Return dx, dy, path
-    __host__ __device__ float3 compute_shortchar_factors(int di, int dj, int dk) {
-        assert_or_throw(
-            std::abs(dk) >= std::abs(di) && std::abs(dk) >= std::abs(dj) && dk != 0,
-            "Invalid short-characteristic offsets: |dk| must be the largest and "
-            "non-zero"
-        );
-        auto inv_dk = 1.f / dk;
-        auto xi = std::abs(di * inv_dk);
-        auto xj = std::abs(dj * inv_dk);
-        return {xi, xj, std::sqrt(1.f + xi * xi + xj * xj)};
-    }
-
-    __device__ shortchar_info
-    make_shortchar_interpolation_info(const int3& pos, size_t bank_size) {
         const auto& [di, dj, dk] = pos;
         if (di == 0 && dj == 0 && dk == 0) return {0.f, 0.f, 0.5f, {0, 0, 0, 0}};
 
@@ -201,8 +164,9 @@ namespace asora {
 #pragma unroll 4
         for (size_t k = 0; k < 4; ++k) {
             if (weights[k] > 0.0) {
-                auto&& [q, s] = cart2shell(di - sx[0], dj - sx[1], dk - sx[2]);
-                index = bank_size * (q % num_banks) + s;
+                const int3 corner{di - sx[0], dj - sx[1], dk - sx[2]};
+                auto&& [q, s] = bank_indices(corner, shell_start, offsets);
+                index = bank_size * (q % asora::num_banks) + s;
             }
             indices[k] = index;
             sx += 3;
@@ -211,14 +175,139 @@ namespace asora {
         return {dd.x, dd.y, dd.z, std::move(indices)};
     }
 
-    // This constructor if private.
-    shortchar_lut::shortchar_lut(size_t n_cells) {
+    /* @brief Host-side memo of the last look-up table built.
+     *
+     * The LUT is a pure function of the squared radius and the box size, so repeating
+     * them hands the same one back. This memo holds the LUT and decides whether
+     * rebuilding is necessary: closing the device makes the pool hand out a different
+     * offsets buffer, so comparing that pointer invalidates the memo on its own.
+     */
+    class lut_memo {
+       public:
+        /// The table built for this radius and box, if it is still on the device.
+        std::optional<asora::shortchar_lut> get(int radius2, size_t N) const {
+            if (radius2 != _radius2 || N != _N || !alive()) return std::nullopt;
+            return _lut;
+        }
+
+        /// Remember a freshly built table.
+        void put(int radius2, size_t N, const asora::shortchar_lut& lut) {
+            _radius2 = radius2;
+            _N = N;
+            _lut = lut;
+            _offsets = pool_offsets();
+        }
+
+        /// Forget the table, if any.
+        void clear() {
+            _lut = {};
+            _offsets = nullptr;
+        }
+
+       private:
+        /// The buffer the pool currently holds the cell offsets in, if any.
+        static const uint32_t* pool_offsets() {
+            using namespace asora;
+            if (!device::contains(buffer_tag::raylut_offsets)) return nullptr;
+            return device::get(buffer_tag::raylut_offsets).data<uint32_t>();
+        }
+
+        bool alive() const { return _lut.is_set() && _offsets == pool_offsets(); }
+
+        int _radius2 = -1;
+        size_t _N = 0;
+        const uint32_t* _offsets = nullptr;
+        asora::shortchar_lut _lut;
+    };
+
+}  // namespace
+
+namespace asora {
+
+    // The offsets are shifted by Q_MAX and summed as base-2^10 digits. Every point of
+    // the cube [-Q_MAX, Q_MAX)^3 fits. A coordinate of +Q_MAX overflows its digit
+    // and carries into the next:
+    //
+    // (0, 0, Q_MAX) -> code of (0, 1, -Q_MAX)
+    // (0, Q_MAX, 0) -> code of (1, -Q_MAX, 0)
+    // (Q_MAX, 0, 0) -> bit 30
+    //
+    // The two special codes have q = Q_MAX + 1, so they are never part of the
+    // octahedron. These codes are unique and lexicographically ordered over the
+    // octahedron and the cube.
+    __host__ __device__ uint32_t pack_offset(const int3& pos) {
+        auto&& [di, dj, dk] = pos;
+
+#ifdef __CUDA_ARCH__
+        [[maybe_unused]] constexpr const char* msg = "";
+#else
+        std::string msg = std::format("({}, {}, {}) is out of bounds", di, dj, dk);
+#endif
+
+        if (di == Q_MAX || dj == Q_MAX || dk == Q_MAX) {
+            // Only the tips of the octahedron reach +Q_MAX.
+            assert_or_throw(std::abs(di) + std::abs(dj) + std::abs(dk) == Q_MAX, msg);
+        } else {
+            assert_or_throw(-Q_MAX <= di && di < Q_MAX, msg);
+            assert_or_throw(-Q_MAX <= dj && dj < Q_MAX, msg);
+            assert_or_throw(-Q_MAX <= dk && dk < Q_MAX, msg);
+            // These share their code with a carried tip.
+            assert_or_throw(!(di == 0 && dj == 1 && dk == -Q_MAX), msg);
+            assert_or_throw(!(di == 1 && dj == -Q_MAX && dk == 0), msg);
+        }
+
+        auto pi = static_cast<uint32_t>(di + Q_MAX);
+        auto pj = static_cast<uint32_t>(dj + Q_MAX);
+        auto pk = static_cast<uint32_t>(dk + Q_MAX);
+        return (pi << 2 * OFFSET_BITS) + (pj << OFFSET_BITS) + pk;
+    }
+
+    __host__ __device__ int3 unpack_offset(uint32_t offset) {
+        /// Codes of (0, 0, Q_MAX) and (0, Q_MAX, 0), whose +Q_MAX carried over.
+        constexpr uint32_t uq_max = static_cast<uint32_t>(Q_MAX);
+        constexpr uint32_t K_TIP =
+            (uq_max << 2 * OFFSET_BITS) + (uq_max << OFFSET_BITS) + 2 * uq_max;
+        constexpr uint32_t J_TIP =
+            (uq_max << 2 * OFFSET_BITS) + (2 * uq_max << OFFSET_BITS) + uq_max;
+
+        if (offset == K_TIP) return {0, 0, Q_MAX};
+        if (offset == J_TIP) return {0, Q_MAX, 0};
+
+        // The top digit is unmasked: it reaches 2 Q_MAX for (Q_MAX, 0, 0).
+        auto di = static_cast<int>(offset >> 2 * OFFSET_BITS) - Q_MAX;
+        auto dj = static_cast<int>((offset >> OFFSET_BITS) & OFFSET_MASK) - Q_MAX;
+        auto dk = static_cast<int>(offset & OFFSET_MASK) - Q_MAX;
+        return {di, dj, dk};
+    }
+
+    // Return dx, dy, path
+    __host__ __device__ float3 compute_shortchar_factors(int di, int dj, int dk) {
+        assert_or_throw(
+            std::abs(dk) >= std::abs(di) && std::abs(dk) >= std::abs(dj) && dk != 0,
+            "Invalid short-characteristic offsets: |dk| must be the largest and "
+            "non-zero"
+        );
+        auto inv_dk = 1.f / dk;
+        auto xi = std::abs(di * inv_dk);
+        auto xj = std::abs(dj * inv_dk);
+        return {xi, xj, std::sqrt(1.f + xi * xi + xj * xj)};
+    }
+
+    __device__ shortchar_info
+    make_shortchar_interpolation_info(const int3& pos, size_t bank_size) {
+        return make_info(pos, bank_size);
+    }
+
+    // This constructor is private.
+    shortchar_lut::shortchar_lut(size_t n_cells, int q_max) : _q_max{q_max} {
+        device::ensure<uint32_t>(buffer_tag::raylut_shells, q_max + 2);
         device::ensure<uint32_t>(buffer_tag::raylut_offsets, n_cells);
         device::ensure<float>(buffer_tag::raylut_dx, n_cells);
         device::ensure<float>(buffer_tag::raylut_dy, n_cells);
         device::ensure<float>(buffer_tag::raylut_path, n_cells);
         device::ensure<index4>(buffer_tag::raylut_indices, n_cells);
 
+        _shells = device::get(buffer_tag::raylut_shells).data<uint32_t>();
         _offsets = device::get(buffer_tag::raylut_offsets).data<uint32_t>();
         _dxs = device::get(buffer_tag::raylut_dx).data<float>();
         _dys = device::get(buffer_tag::raylut_dy).data<float>();
@@ -226,63 +315,85 @@ namespace asora {
         _indices = device::get(buffer_tag::raylut_indices).data<index4>();
     }
 
-    /* Every entry is written exactly once and none is ever read back, so the fill has
-     * no ordering between shells to respect. That is what the raytracing kernel needs
-     * its barrier for - it interpolates shell q from the column densities of the
-     * shells below it - and why this one needs none and can run as a flat grid-stride
-     * loop over the whole table.
+    /* Differently from raytracing, the LUT fill the fill has no ordering constraints
+     * between shells: every entry is written exactly once and never read back.
+     * This kernel can run as a flat grid-stride loop over the whole table.
      */
-    __global__ void fill_lut_kernel(shortchar_lut sclut, int q_max) {
-        auto bank_size = cells_in_shell(q_max);
-        auto n_cells = cells_to_shell(q_max);
-
+    __global__ void fill_lut_kernel(
+        shortchar_lut sclut, size_t n_cells, size_t bank_size,
+        const uint32_t* __restrict__ shell_start, const uint32_t* __restrict__ offsets
+    ) {
         auto start = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
         auto stride = static_cast<size_t>(blockDim.x) * gridDim.x;
 
         for (auto index = start; index < n_cells; index += stride) {
-            auto&& [q, s] = index2shell(index);
-            auto pos = shell2cart(q, s);
-            auto info = make_shortchar_interpolation_info(pos, bank_size);
-            sclut.set(index, pos, info);
+            auto pos = sclut.offset(index);
+            auto info = make_info(pos, bank_size, shell_start, offsets);
+            sclut.set(index, info);
         }
     }
 
-    shortchar_lut create_shortchar_interp_lut(int q_max) {
-        if (q_max < 0 || q_max > Q_MAX) {
-            throw std::invalid_argument("q_max must be in the range [0, Q_MAX]");
-        }
+    shortchar_lut create_shortchar_interp_lut(double R, size_t N) {
+        auto q_max = get_q_max(R, N);
 
-        // The table only depends on q_max, so an identical one that is still on the
-        // device is handed straight back.
-        static lut_memo memo;
-        if (auto cached = memo.get(q_max)) {
-            return *cached;
-        }
+        try {
+            if (q_max < 0 || q_max > Q_MAX)
+                throw std::invalid_argument("q_max must be in the range [0, Q_MAX]");
+            // Same integer threshold as the raytracing kernel.
+            auto radius2 = static_cast<int>(R * R);
 
-        auto n_cells = asora::cells_to_shell(q_max);
-        shortchar_lut lut_d(n_cells);
+            // The table only depends on radius2 and N, so an identical one that is
+            // still on the device is handed straight back.
+            static lut_memo memo;
+            if (auto cached = memo.get(radius2, N)) return *cached;
+            memo.clear();
+
+            auto&& [offsets, start, bank_size] =
+                find_shortchar_offsets(radius2, N, q_max);
+            auto n_cells = offsets.size();
+
+            shortchar_lut lut_d(n_cells, q_max);
+            lut_d._bank_size = bank_size;
+
+            // The offsets are uploaded directly: the fill only computes the parameters.
+            device::get(buffer_tag::raylut_shells)
+                .copyFromHost(start.data(), sizeof(uint32_t) * start.size());
+            device::get(buffer_tag::raylut_offsets)
+                .copyFromHost(offsets.data(), sizeof(uint32_t) * n_cells);
 
 #ifdef NDEBUG
-        constexpr int block_size = 1024;
+            constexpr int block_size = 1024;
 #else
-        constexpr int block_size = 128;
+            constexpr int block_size = 128;
 #endif
-        // Launch kernel to fill lut
-        auto grid_size = (n_cells + block_size - 1) / block_size;
-        fill_lut_kernel<<<grid_size, block_size>>>(lut_d, q_max);
-        safe_cuda(cudaDeviceSynchronize());
-        safe_cuda(cudaGetLastError());
+            // Launch kernel to fill lut
+            auto grid_size = (n_cells + block_size - 1) / block_size;
+            fill_lut_kernel<<<grid_size, block_size>>>(
+                lut_d, n_cells, lut_d._bank_size, lut_d._shells, lut_d._offsets
+            );
+            safe_cuda(cudaDeviceSynchronize());
+            safe_cuda(cudaGetLastError());
 
-        // Mark the LUT as usable.
-        lut_d.set_assigned();
-        memo.put(q_max, lut_d);
-        return lut_d;
+            // Mark the LUT as usable.
+            lut_d.set_assigned();
+            memo.put(radius2, N, lut_d);
+            return lut_d;
+        } catch (const std::exception& e) {
+            std::cerr << "Error creating raytracing lookup table: " << e.what()
+                      << "; calculating cinterp on the fly\n";
+        }
+
+        // Unset LUT over the full shells: the parameters are computed on the fly.
+        shortchar_lut lut;
+        lut._q_max = q_max;
+        lut._bank_size = cells_in_shell(q_max);
+        return lut;
     }
 
     shortchar_entries copy_shortchar_lut_to_host() {
         if (!device::contains(buffer_tag::raylut_offsets)) {
             throw std::runtime_error(
-                "LUT not found on device. Call create_shortchar_interp_lut(q_max) first"
+                "LUT not found on device. Call create_shortchar_interp_lut(R, N) first"
             );
         }
 

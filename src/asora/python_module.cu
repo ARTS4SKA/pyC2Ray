@@ -167,8 +167,8 @@ PyObject *asora_cart2shell([[maybe_unused]] PyObject *self, PyObject *args) {
 }
 
 PyObject *asora_index2shell([[maybe_unused]] PyObject *self, PyObject *args) {
-    Py_ssize_t index;
-    if (!PyArg_ParseTuple(args, "n", &index)) return nullptr;
+    int index;
+    if (!PyArg_ParseTuple(args, "i", &index)) return nullptr;
 
     if (index < 0) {
         PyErr_SetString(PyExc_ValueError, "index must be non-negative");
@@ -180,18 +180,25 @@ PyObject *asora_index2shell([[maybe_unused]] PyObject *self, PyObject *args) {
 }
 
 PyObject *asora_create_shortchar_lut([[maybe_unused]] PyObject *self, PyObject *args) {
-    int q_max = 0;
-    if (!PyArg_ParseTuple(args, "i", &q_max)) return nullptr;
+    double R = 0.0;
+    int N = 0;
+    if (!PyArg_ParseTuple(args, "di", &R, &N)) return nullptr;
 
-    try {
-        // Initialize the device
-        asora::create_shortchar_interp_lut(q_max);
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+    if (N <= 0) {
+        PyErr_SetString(PyExc_ValueError, "N must be positive");
         return nullptr;
     }
 
-    Py_RETURN_NONE;
+    // Errors are reported by an unset LUT, not by exceptions.
+    auto lut = asora::create_shortchar_interp_lut(R, static_cast<size_t>(N));
+    if (!lut.is_set()) {
+        PyErr_SetString(
+            PyExc_RuntimeError, "Raytracing lookup table could not be built"
+        );
+        return nullptr;
+    }
+
+    return Py_BuildValue("i", lut.q_max());
 }
 
 PyObject *asora_get_shortchar_lut([[maybe_unused]] PyObject *self, PyObject *args) {
@@ -487,7 +494,7 @@ static PyMethodDef asora_methods[] = {
     {"index2shell", asora_index2shell, METH_VARARGS,
      "Convert a cumulative cell index to shell indexing"},
     {"create_shortchar_lut", asora_create_shortchar_lut, METH_VARARGS,
-     "Create LUT for ASORA short-characteristic interpolation"},
+     "Create LUT for ASORA short-characteristic interpolation; returns q_max"},
     {"get_shortchar_lut", asora_get_shortchar_lut, METH_VARARGS,
      "Create and copy short-characteristic interpolation LUT to Python"},
     {"pack_offset", asora_pack_offset, METH_VARARGS,

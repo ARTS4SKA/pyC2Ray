@@ -1,5 +1,7 @@
 #pragma once
 
+#include "octahedron.cuh"
+
 #include <cuda_runtime.h>
 #include <cassert>
 #include <cstdint>
@@ -12,14 +14,13 @@ namespace asora {
     /* @brief Pack the integer coordinates (di, dj, dk) of a cell in the q-shell into a
      * single 32bit value.
      *
-     * The coordinates are offset by Q_MAX to ensure they are non-negative. The packed
-     * value uses 30 bits to store the three coordinates, leaving 2 bits unused. The
-     * remaining 2 bits are used to represent the 3 missing points:
-     *
-     * di = Q_MAX, dj = 0, dk = 0 -> 11...
-     * di = 0, dj = Q_MAX, dk = 0 -> 10...
-     * di = 0, dj = 0, dk = Q_MAX -> 01...
-     *            everything else -> 00...
+     * The offsets are shifted by Q_MAX to make them non-negative and summed as the
+     * digits of a base-2^10 number, which covers the cube [-Q_MAX, Q_MAX)^3. A
+     * coordinate of +Q_MAX overflows its digit and carries into the next one, so
+     * (0, 0, Q_MAX) and (0, Q_MAX, 0) take the codes of (0, 1, -Q_MAX) and
+     * (1, -Q_MAX, 0), which have q = Q_MAX + 1 and cannot be packed. (Q_MAX, 0, 0)
+     * carries into bit 30. The packed values of the octahedron are therefore unique
+     * and in lexicographic order.
      */
     __host__ __device__ uint32_t pack_offset(const int3 &pos);
     __host__ __device__ int3 unpack_offset(uint32_t offset);
@@ -46,6 +47,7 @@ namespace asora {
         /// Offset indices for short-characteristic interpolation.
         index4 indices;
     };
+
     /* @brief Compute the geometric factors for short-characteristic interpolation.
      *
      * The geometric factors, namely dx, dy, and path, are symmetric under octahedral
@@ -90,40 +92,66 @@ namespace asora {
             return {_dxs[index], _dys[index], _paths[index], _indices[index]};
         }
 
-        /// Set the short-characteristic parameters.
-        __device__ void set(size_t index, const int3 &pos, const shortchar_info &info) {
-            _offsets[index] = pack_offset(pos);
+        /// Set the short-characteristic parameters. The offsets are uploaded by the
+        /// host beforehand.
+        __device__ void set(size_t index, const shortchar_info &info) {
             _dxs[index] = info.dx;
             _dys[index] = info.dy;
             _paths[index] = info.path;
             _indices[index] = info.indices;
         }
 
+        /// First LUT index of shell q. Without a LUT, the full shells are assumed.
+        __device__ size_t shell_begin(int q) const {
+            return _shells ? _shells[q] : cells_to_shell(q - 1);
+        }
+
+        /// Number of cells kept in shell q. Without a LUT, the full shells are assumed.
+        __device__ size_t shell_size(int q) const {
+            return _shells ? _shells[q + 1] - _shells[q] : cells_in_shell(q);
+        }
+
+        /// Stride between column-density banks, i.e. the largest shell kept.
+        __host__ __device__ size_t bank_size() const { return _bank_size; }
+
+        /// Outermost shell, included.
+        __host__ __device__ int q_max() const { return _q_max; }
+
        private:
+        const uint32_t *__restrict__ _shells = nullptr;
         uint32_t *__restrict__ _offsets = nullptr;
         float *__restrict__ _dxs = nullptr;
         float *__restrict__ _dys = nullptr;
         float *__restrict__ _paths = nullptr;
         index4 *__restrict__ _indices = nullptr;
 
+        size_t _bank_size = 0;
+        int _q_max = 0;
         bool _assigned = false;
 
         /// Construct a shortchar lut and allocate device memory if needed.
-        shortchar_lut(size_t n_cells);
+        shortchar_lut(size_t n_cells, int q_max);
 
         /// Mark the LUT as ready to use.
         void set_assigned() { _assigned = true; }
 
-        /// Helpfer function to create a shortchar_lut for a given q_max.
-        friend shortchar_lut create_shortchar_interp_lut(int q_max);
+        /// Helper function to create a shortchar_lut for a given radius.
+        friend shortchar_lut create_shortchar_interp_lut(double R, size_t N);
     };
 
-    /* @brief Create a lookup table for all cells in the q-shells up to q_max.
+    /* @brief Create a lookup table for the cells a source can reach.
      *
-     * @param q_max Maximum q-shell index, included.
-     * @return The number of cells in the q-shells up to q_max.
+     * Only the cells of the q-shells up to get_q_max(R, N) that are inside the sphere
+     * of radius R (and inside the domain, with periodic conditions) are kept. Shells
+     * stay contiguous and their cells in lexicographic order.
+     *
+     * @param R Raytracing radius, in cells.
+     * @param N Number of cells along a side of the box.
+     * @return The LUT, or the one already on the device for the same R and N. If the
+     * LUT cannot be built, an unset LUT spanning the full shells up to q_max is
+     * returned and the interpolation parameters are computed on the fly.
      */
-    shortchar_lut create_shortchar_interp_lut(int q_max);
+    shortchar_lut create_shortchar_interp_lut(double R, size_t N);
 
     // Array of structure for a short-characteristic interpolation LUT on host.
     struct shortchar_entry {
@@ -135,7 +163,7 @@ namespace asora {
 
     /* @brief Copy the short-characteristic interpolation LUT from device to host.
      *
-     * The user must call create_shortchar_interp_lut(q_max) first to allocate and fill
+     * The user must call create_shortchar_interp_lut(R, N) first to allocate and fill
      * the LUT on the device.
      *
      * @return A vector of shortchar_interp_lut::entry structures containing the lookup
@@ -143,13 +171,20 @@ namespace asora {
      */
     shortchar_entries copy_shortchar_lut_to_host();
 
-    __device__ inline float shortchar_multiplier(int di, int dj, int dk) {
-        auto ai = std::abs(di);
-        auto aj = std::abs(dj);
-        auto ak = std::abs(dk);
-        if (ai <= 1 && aj <= 1 && ak <= 1)
-            return std::sqrt(static_cast<float>(ai + aj + ak));
-        return 1.f;
+    /// Compute a multiplicative correction term for short-characteristic interpolation.
+    __device__ inline float shortchar_multiplier(const int3 &pos) {
+        auto ai = abs(pos.x);
+        auto aj = abs(pos.y);
+        auto ak = abs(pos.z);
+        if (ai > 1 || aj > 1 || ak > 1) return 1.f;
+        switch (ai + aj + ak) {
+            case 2:
+                return c::sqrt2<float>;
+            case 3:
+                return c::sqrt3<float>;
+            default:
+                return 1.f;
+        }
     }
 
     /* @brief Perform short-characteristic interpolation for a given cell.

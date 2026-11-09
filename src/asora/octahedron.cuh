@@ -1,7 +1,10 @@
 #pragma once
 
+#include "utils.cuh"
+
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 
@@ -28,6 +31,17 @@ namespace asora {
         // This formula comes from the series sum of cells_in_shell(p) for p = 0 to q.
         if (q < 0) return 0;
         return (1 + 2 * q) * (3 + 2 * q * (1 + q)) / 3;
+    }
+
+    /* @brief Outermost shell needed to raytrace a sphere of radius R in a box of N^3
+     * cells.
+     *
+     * The radius equals the distance from the source to the middle of the faces of
+     * the octahedron, so the octahedron must be sqrt(3) R in size. To raytrace the
+     * whole volume, the octahedron must be 1.5 N in size.
+     */
+    inline int get_q_max(double R, size_t N) {
+        return static_cast<int>(std::ceil(std::min(c::sqrt3<> * R, 1.5 * N)));
     }
 
     /* @brief Convert a cumulative index, counted over all shells, to octahedral
