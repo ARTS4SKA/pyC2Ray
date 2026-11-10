@@ -129,24 +129,22 @@ namespace asora {
         const auto& number_density = device::resident<tag::number_density>();
         const auto& temperature = device::resident<tag::temperature>();
         const auto& clumping = device::resident<tag::clumping>();
-        if (!number_density || !temperature || !clumping)
-            throw std::runtime_error(
-                "number density, temperature, and clumping arrays must be allocated on "
-                "the device before calling global_pass"
-            );
-
         const auto& fraction_HII = device::resident<tag::fraction_HII>();
         auto& fraction_HII_avg = device::resident<tag::fraction_HII_avg>();
-        if (!fraction_HII || !fraction_HII_avg)
-            throw std::runtime_error(
-                "initial and average fraction maps must be allocated on the device "
-                "before calling global_pass"
-            );
+        check_array(number_density, n_cells, "number density");
+        check_array(temperature, n_cells, "temperature");
+        check_array(clumping, n_cells, "clumping");
+        check_array(fraction_HII, n_cells, "initial fraction");
+        check_array(fraction_HII_avg, n_cells, "average fraction");
+
+        // Allocate output array.
         auto fraction_HII_int = device::scratch<double>(n_cells);
 
+        // Copy phi_ion to device memory.
         auto phion_HI = device::scratch<double>(n_cells);
         phion_HI.copy_from_host(phi_ion);
 
+        // Allocate convergence flag array.
         auto conv_flag = device::scratch<bool>(n_cells);
 
         // Launch kernel, divide by 2 so that threads do more work.

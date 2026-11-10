@@ -101,11 +101,8 @@ namespace asora {
          * @param[in] items Number of elements
          */
         explicit device_array(size_t items)
-            : _ptr(nullptr, deleter{allocation::device, nullptr}),
-              _items(items),
-              _capacity(items) {
-            if (_items == 0) return;
-            allocate();
+            : _ptr(nullptr, deleter{allocation::device, nullptr}) {
+            resize(items);
         }
 
         /* @brief Allocate `items` elements from the stream-ordered memory pool.
@@ -113,11 +110,8 @@ namespace asora {
          * @param[in] stream Stream the allocation and its release are ordered on
          */
         device_array(size_t items, cudaStream_t stream)
-            : _ptr(nullptr, deleter{allocation::pooled, stream}),
-              _items(items),
-              _capacity(items) {
-            if (_items == 0) return;
-            allocate();
+            : _ptr(nullptr, deleter{allocation::pooled, stream}) {
+            resize(items);
         }
 
         /// Device arrays own their allocation uniquely and cannot be copied.
@@ -142,7 +136,7 @@ namespace asora {
             return *this;
         }
 
-        /// True if the array owns an allocation
+        /// True if the array owns an allocation.
         explicit operator bool() const noexcept { return bool(_ptr); }
 
         /* @brief Get raw pointer to device memory.
@@ -168,6 +162,9 @@ namespace asora {
         /// Get the number of elements in the array
         size_t size() const noexcept { return _items; }
 
+        /// True if the array holds no elements
+        bool empty() const noexcept { return _items == 0; }
+
         /// Get the number of elements the allocation can hold
         size_t capacity() const noexcept { return _capacity; }
 
@@ -188,16 +185,17 @@ namespace asora {
          * device allocation. The capacity never shrinks.
          *
          * @param[in] items New number of elements
-         * @warning Reallocation does not preserve the existing contents.
+         * @warning The contents are unspecified afterwards. Growing past the
+         * capacity replaces the allocation and drops them; growing within it
+         * keeps the elements already there and leaves the new tail
+         * uninitialized. Callers must write every element they later read.
          */
         void resize(size_t items) {
             if (items > _capacity) {
-                // Release first: contents are not preserved, and this avoids
-                // holding the old and new allocations at the same time.
-                _ptr.reset();
-                _items = items;
-                _capacity = items;
-                allocate();
+                // The allocation about to be replaced takes its elements with
+                // it, so the array is empty until reserve() has succeeded.
+                clear();
+                reserve(items);
             }
             _items = items;
         }
@@ -205,7 +203,7 @@ namespace asora {
         /* @brief Copy data from host to device.
          * @param[in] src Host memory source pointer
          * @param[in] items Number of elements to copy
-         * @throw std::invalid_argument if the array is too small
+         * @throw std::invalid_argument if the array holds fewer elements
          */
         void copy_from_host(const T *src, size_t items) {
             check_fits(items, "copy_from_host");
@@ -220,7 +218,7 @@ namespace asora {
         /* @brief Copy data from device to host.
          * @param[out] dst Host memory destination pointer
          * @param[in] items Number of elements to copy
-         * @throw std::invalid_argument if the array is too small
+         * @throw std::invalid_argument if the array holds fewer elements
          */
         void copy_to_host(T *dst, size_t items) const {
             check_fits(items, "copy_to_host");
@@ -239,7 +237,7 @@ namespace asora {
          * than uploading the same host data twice.
          *
          * @param[in] src Device array to copy from
-         * @throw std::invalid_argument if this array is smaller than src
+         * @throw std::invalid_argument if this array holds fewer elements than src
          */
         void copy_from_device(const device_array &src) {
             check_fits(src.size(), "copy_from_device");
@@ -268,6 +266,9 @@ namespace asora {
         /// Set all elements of the array to zero.
         void zero() { safe_cuda(cudaMemset(data(), 0, bytes())); }
 
+        /// Drop the elements but keep the allocation and its capacity.
+        void clear() noexcept { _items = 0; }
+
         /// Release the device memory but keep the object alive.
         void reset() noexcept {
             _ptr.reset();
@@ -276,10 +277,17 @@ namespace asora {
         }
 
        private:
-        /// Allocate _items elements through the allocator recorded in the deleter
-        void allocate() {
+        /// Make room for `items` elements through the allocator recorded in the deleter
+        /// The capacity is updated.
+        void reserve(size_t items) {
+            if (items == 0) return;
+
+            // Release any existing allocation first to free up memory.
+            _ptr.reset();
+            _capacity = 0;
+
             auto [alloc, stream] = _ptr.get_deleter();
-            auto nbytes = _items * sizeof(T);
+            auto nbytes = items * sizeof(T);
 
             T *ptr = nullptr;
             if (alloc == allocation::pooled)
@@ -287,11 +295,11 @@ namespace asora {
             else
                 ptr = static_cast<T *>(device_malloc(nbytes));
 
-            // reset() keeps the deleter installed by the constructor.
             _ptr.reset(ptr);
+            _capacity = items;
         }
 
-        /// Throw if the array cannot hold `items` elements
+        /// Throw if the array holds fewer than `items` elements
         void check_fits(size_t items, const char *what) const {
             if (_items >= items) return;
             throw std::invalid_argument(
@@ -441,5 +449,20 @@ namespace asora {
         /// Stream-ordered pool for scratch allocations; null if unsupported
         cudaMemPool_t _pool = nullptr;
     };
+
+    /// Check that a device array is allocated and has the expected size.
+    template <typename T>
+    void check_array(
+        const device_array<T> &arr, size_t expected_size, const char *name
+    ) {
+        if (!arr || arr.size() != expected_size) {
+            throw std::runtime_error(
+                std::format(
+                    "{} array must be allocated on the device with size {}", name,
+                    expected_size
+                )
+            );
+        }
+    }
 
 }  // namespace asora

@@ -118,6 +118,9 @@ namespace asora {
     ) {
         device::check_initialized();
 
+        // Size of grid data
+        auto n_cells = m1 * m1 * m1;
+
         namespace tag = resident_tag;
         const auto &number_density = device::resident<tag::number_density>();
         const auto &photo_ion_thin = device::resident<tag::photo_ion_thin>();
@@ -125,29 +128,12 @@ namespace asora {
         const auto &source_flux = device::resident<tag::source_flux>();
         const auto &source_position = device::resident<tag::source_position>();
         const auto &fraction_HII_avg = device::resident<tag::fraction_HII_avg>();
-        if (!number_density)
-            throw std::runtime_error(
-                "number density array must be allocated on the device before calling "
-                "do_all_sources_gpu"
-            );
-        if (!photo_ion_thin || !photo_ion_thick)
-            throw std::runtime_error(
-                "photo ionization tables (thin, thick) must be allocated on the device "
-                "before calling do_all_sources_gpu"
-            );
-        if (!source_flux || !source_position)
-            throw std::runtime_error(
-                "source data (flux, position) must be allocated on the device before "
-                "calling do_all_sources_gpu"
-            );
-        if (!fraction_HII_avg)
-            throw std::runtime_error(
-                "average ionized fraction must be allocated on the device before "
-                "calling do_all_sources_gpu"
-            );
-
-        // Size of grid data
-        auto n_cells = m1 * m1 * m1;
+        check_array(number_density, n_cells, "number density");
+        check_array(photo_ion_thin, num_tau + 1, "photo ionization thin table");
+        check_array(photo_ion_thick, num_tau + 1, "photo ionization thick table");
+        check_array(source_flux, num_src, "source flux");
+        check_array(source_position, 3 * num_src, "source position");
+        check_array(fraction_HII_avg, n_cells, "average ionized fraction");
 
         // The average ionized fraction is read but never written here. It is seeded
         // once per timestep by timestep_data_to_device and thereafter updated in
