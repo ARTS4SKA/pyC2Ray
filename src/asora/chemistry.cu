@@ -129,8 +129,9 @@ namespace asora {
         size_t block_size
     ) {
         // Allocate (if necessary) and copy the average ionized fraction array to the
-        // device. This array is also used by raytracing.
-        device::transfer<double>(buffer_tag::fraction_HII, xh_av, n_cells);
+        // device. This array is also used by raytracing, so the buffer may hold a grid
+        // of a different size: it is grown if too small and reused if large enough.
+        device::ensure_transfer<double>(buffer_tag::fraction_HII, xh_av, n_cells);
         auto xh_av_buf = asora::device::get(buffer_tag::fraction_HII);
 
         // Initialize and copy non-const data.
@@ -174,8 +175,9 @@ namespace asora {
         auto convergence =
             thrust::count(thrust::device, conv_flag_d, conv_flag_d + n_cells, true);
 
-        xh_av_buf.copyToHost(xh_av, xh_av_buf.size());
-        xh_int_buf.copyToHost(xh_int, xh_int_buf.size());
+        // Copy back only the n_cells processed here.
+        xh_av_buf.copyToHost(xh_av, n_cells * sizeof(double));
+        xh_int_buf.copyToHost(xh_int, n_cells * sizeof(double));
         return convergence;
     }
 
