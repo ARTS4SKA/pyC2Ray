@@ -11,7 +11,12 @@ from typing import Any, Protocol, cast
 
 import numpy as np
 
-from pyc2ray.domain.cost_model import CostModel, pyC2RayCostModel
+from pyc2ray.asora_core import (
+    available_memory,
+    is_periodic_mode_active,
+    max_resident_blocks,
+)
+from pyc2ray.domain.cost_model import ASORACostModel, CostModel
 from pyc2ray.domain.grid import Grid
 from pyc2ray.domain.morton_grouping import MortonGroupingParams, MortonSourceGrouping
 from pyc2ray.domain.regular_grid import RegularGrid
@@ -37,7 +42,7 @@ class Comm(Protocol):
 # TODO: split this class into a generic base and a pyC2Ray-specific subclass. Most of the
 # class is grid-agnostic (grouping, rank assignment, scatter, caching, get_subdomains), but
 # update_decomposition and _build_inputs are coupled to pyC2Ray: their input types are raw
-# pyC2Ray simulation data and _build_inputs constructs RegularGrid / pyC2RayCostModel /
+# pyC2Ray simulation data and _build_inputs constructs RegularGrid / ASORACostModel /
 # MortonGroupingParams. The generic machinery (including a decompose(grid, sources, cost_model,
 # ..., key) entry point doing the caching + _run_decomposition) would stay in the base, while a
 # pyC2RayDomainDecompositionHandler subclass would provide update_decomposition (its raw-data
@@ -56,6 +61,8 @@ class DomainDecompositionHandler:
         Rank of the current process.
     comm : Comm
         MPI Communicator
+    params : DomainDecompositionParameters
+        Parameters for the domain decomposition and source grouping algorithm.
     global_grid : Grid
         The full grid of the simulation.
     subdomains : list[Subdomain]
@@ -67,8 +74,9 @@ class DomainDecompositionHandler:
         used by update_decomposition to decide when a rebuild is necessary.
     """
 
-    def __init__(self, comm: Comm) -> None:
+    def __init__(self, comm: Comm, params: DomainDecompositionParameters) -> None:
         self.comm = comm
+        self.params = params
         self.rank = self.comm.Get_rank()
         self.global_grid: Grid | None = None
         self.subdomains: list[Subdomain] = []
@@ -85,10 +93,7 @@ class DomainDecompositionHandler:
         src_flux: np.ndarray,
         N: int,
         R_max: float,
-        src_batch_size: int,
-        num_tau: int,
-        is_domain_periodic: bool,
-        domain_decomposition_params: DomainDecompositionParameters,
+        is_domain_periodic: bool | None = None,
     ) -> None:
         """Update the domain decomposition according to the specified parameters if needed.
         Rebuild the decomposition if it is the first time, or if the inputs have changed with respect to the last build.
@@ -97,15 +102,13 @@ class DomainDecompositionHandler:
         Parameters
         ----------
         cell_size : Size of the grid cells (assuming cubic cells).
-        src_pos : Array containing the 3D grid position of each source, in C-style indexing (a source in a cell at the origin
-        has position (0, 0, 0)).
+        src_pos : Array containing the 3D grid position of each source, in C-style indexing.
+            A source in a cell at the origin has position (0, 0, 0).
         src_flux : Array containing the total ionizing flux of each source.
         N : Number of cells per side of the (cubic) global grid.
         R_max : Mean free path of photons, in cell units.
-        src_batch_size : Number of sources processed per batch, used by the cost model.
-        num_tau : Size of the photoionization table, used by the cost model.
         is_domain_periodic : Whether the global domain uses periodic boundary conditions.
-        domain_decomposition_params : Parameters for the domain decomposition and source grouping algorithm.
+            If None, asora library is queried directly.
         """
         src_pos = src_pos.astype(np.int32)
         src_flux = src_flux.astype(np.float64)
@@ -125,10 +128,7 @@ class DomainDecompositionHandler:
             src_flux,
             N,
             R_max,
-            src_batch_size,
-            num_tau,
             is_domain_periodic,
-            domain_decomposition_params,
         )
 
         # TODO: grouping_algorithm could be retrieved from grouping_params instead of passing it separately
@@ -136,7 +136,7 @@ class DomainDecompositionHandler:
             global_grid,
             sources,
             cost_model=cost_model,
-            grouping_algorithm=domain_decomposition_params.grouping_algorithm,
+            grouping_algorithm=self.params.grouping_algorithm,
             grouping_params=grouping_params,
         )
         self._decomposition_key = decomposition_key
@@ -149,10 +149,7 @@ class DomainDecompositionHandler:
         src_flux: np.ndarray,
         N: int,
         R_max: float,
-        src_batch_size: int,
-        num_tau: int,
-        is_domain_periodic: bool,
-        domain_decomposition_params: DomainDecompositionParameters,
+        is_domain_periodic: bool | None = None,
     ) -> tuple[Grid, list[Source], CostModel, GroupingParams | None]:
         """Build the objects the grouping operates on from the raw simulation data.
 
@@ -164,6 +161,9 @@ class DomainDecompositionHandler:
         -------
         The global grid, the source list, the cost model and the grouping parameters.
         """
+        if is_domain_periodic is None:
+            is_domain_periodic = is_periodic_mode_active()
+
         num_src, *_ = src_flux.shape
 
         # Create source grouping grid and source ojects
@@ -183,21 +183,18 @@ class DomainDecompositionHandler:
         # Create grouping parameters
         # TODO: remove the if and create a factory function in the domain module
         grouping_params: GroupingParams | None = None
-        if domain_decomposition_params.grouping_algorithm in (
-            "morton",
-            "morton_incremental",
-        ):
+        if self.params.grouping_algorithm in ("morton", "morton_incremental"):
             grouping_params = MortonGroupingParams(
-                max_num_sources_per_group=domain_decomposition_params.max_num_sources_per_group,
-                morton_bits=domain_decomposition_params.morton_bits,
+                max_num_sources_per_group=self.params.max_num_sources_per_group,
+                morton_bits=self.params.morton_bits,
             )
 
-        # Set cost model
-        cost_model = pyC2RayCostModel(
-            max_memory_cost_per_group=domain_decomposition_params.max_memory_cost_per_group,
-            source_batch_size=src_batch_size,
+        # Set cost model. The device is queried once per build, so that every group is
+        # evaluated against the same budget and occupancy.
+        cost_model = ASORACostModel(
+            available_memory=available_memory(),
+            max_resident_blocks=max_resident_blocks(),
             is_periodic_mode_active=is_domain_periodic,
-            photo_ion_table_size=num_tau,
         )
 
         return global_grid, sources, cost_model, grouping_params
