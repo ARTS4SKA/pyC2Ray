@@ -164,6 +164,7 @@ def _evolve3D_asora(
     num_cells = np.prod(mesh_shape)
     num_src, *_ = src_flux.shape
     num_tau, *_ = photo_thin_table.shape
+    num_tau -= 1
 
     # Convergence Criteria
     conv_criterion = min(int(convergence_fraction * num_cells), (num_src - 1) / 3)
@@ -493,6 +494,7 @@ def _evolve3D_asora_domain_decomposition(
     num_cells = np.prod(mesh_shape)
     num_src, *_ = src_flux.shape
     num_tau, *_ = photo_thin_table.shape
+    num_tau -= 1
 
     # Convergence Criteria
     conv_criterion = min(int(convergence_fraction * num_cells), (num_src - 1) / 3)
