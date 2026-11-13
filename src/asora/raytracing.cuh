@@ -67,14 +67,15 @@ namespace asora {
         __device__ void partition_column_density(size_t bank_size);
     };
 
-    /* @brief Read-only maps of number and fractional densities
+    /* @brief Read-only map of number and fractional densities
+     *
+     * The two fields are stored interleaved, one pair per cell, because the
+     * raytracer reads both at the same scattered cell index. Pairing them means a
+     * cell costs one 32-byte sector instead of two.
      */
     struct density_maps {
-        /// Number density data
-        const double *__restrict__ ndens;
-
-        /// Ionized hydrogen fraction data
-        const double *__restrict__ xHII;
+        /// Interleaved {number density, ionized hydrogen fraction} per cell
+        const double2 *__restrict__ cells;
 
         /// Get hydrogen density value at the specified index
         __device__ double get(size_t index) const;

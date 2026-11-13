@@ -48,6 +48,10 @@ namespace {
             PyErr_SetString(PyExc_TypeError, msg.c_str());
             return false;
         }
+        if (!PyArray_IS_C_CONTIGUOUS(array)) {
+            PyErr_SetString(PyExc_ValueError, "array must be C-contiguous");
+            return false;
+        }
         return true;
     }
 
@@ -183,17 +187,36 @@ PyObject *asora_num_column_density_banks(
     return PyLong_FromSize_t(asora::num_banks);
 }
 
-/// Allocate and copy density grid to the device.
-PyObject *asora_density_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
+/// Allocate and copy the interleaved density/average-fraction grid to the device.
+PyObject *asora_density_fraction_to_device(
+    [[maybe_unused]] PyObject *self, PyObject *args
+) {
     SAFE_CHECK_INITIALIZED();
 
-    PyArrayObject *ndens;
-    if (!PyArg_ParseTuple(args, "O", &ndens)) return nullptr;
+    PyArrayObject *cells;
+    if (!PyArg_ParseTuple(args, "O", &cells)) return nullptr;
+
+    if (!numpy_check<double>(cells)) return nullptr;
+
+    auto data = static_cast<double2 *>(PyArray_DATA(cells));
+    auto size = static_cast<size_t>(PyArray_SIZE(cells));
+
+    if (size % 2 != 0) {
+        PyErr_SetString(
+            PyExc_ValueError, "interleaved array must have an even number of elements"
+        );
+        return nullptr;
+    }
 
     using namespace asora;
     namespace tag = resident_tag;
-    if (!load_array_to_device(ndens, device::resident<tag::number_density>()))
+    auto &device_array = device::resident<tag::density_cell>();
+    try {
+        device_array.assign(data, size / 2);
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_ValueError, e.what());
         return nullptr;
+    }
 
     Py_RETURN_NONE;
 }
@@ -248,47 +271,43 @@ PyObject *asora_timestep_data_to_device(
     Py_RETURN_NONE;
 }
 
-/// Copy the average ionized fraction to the device, for ranks that receive it.
-PyObject *asora_average_fraction_to_device(
+/// Copy the interleaved density/average-fraction grid back to the host.
+PyObject *asora_density_fraction_to_host(
     [[maybe_unused]] PyObject *self, PyObject *args
 ) {
     SAFE_CHECK_INITIALIZED();
-    PyArrayObject *xh_av;
-    if (!PyArg_ParseTuple(args, "O", &xh_av)) return nullptr;
 
-    using namespace asora;
-    namespace tag = resident_tag;
-    if (!load_array_to_device(xh_av, device::resident<tag::fraction_HII_avg>()))
+    PyArrayObject *cells;
+    if (!PyArg_ParseTuple(args, "O", &cells)) return nullptr;
+    if (!numpy_check<double>(cells)) return nullptr;
+
+    auto size = static_cast<size_t>(PyArray_SIZE(cells));
+    if (size % 2 != 0) {
+        PyErr_SetString(
+            PyExc_ValueError, "interleaved array must have an even number of elements"
+        );
         return nullptr;
-
-    Py_RETURN_NONE;
-}
-
-/// Copy the average ionized fraction back to the host, for ranks that broadcast it.
-PyObject *asora_average_fraction_to_host(
-    [[maybe_unused]] PyObject *self, PyObject *args
-) {
-    SAFE_CHECK_INITIALIZED();
-
-    PyArrayObject *xh_av;
-    if (!PyArg_ParseTuple(args, "O", &xh_av)) return nullptr;
-    if (!numpy_check<double>(xh_av)) return nullptr;
+    }
+    if (!PyArray_IS_C_CONTIGUOUS(cells)) {
+        PyErr_SetString(PyExc_ValueError, "interleaved array must be C-contiguous");
+        return nullptr;
+    }
 
     using namespace asora;
     namespace tag = resident_tag;
-    const auto &frac_HII_avg = device::resident<tag::fraction_HII_avg>();
-    if (!frac_HII_avg) {
+    const auto &density_cells = device::resident<tag::density_cell>();
+    if (!density_cells) {
         PyErr_SetString(
             PyExc_RuntimeError,
-            "average ionized fraction is not allocated on the device"
+            "interleaved density and average fraction array is not allocated on the "
+            "device"
         );
         return nullptr;
     }
 
     try {
-        frac_HII_avg.copy_to_host(
-            static_cast<double *>(PyArray_DATA(xh_av)),
-            static_cast<size_t>(PyArray_SIZE(xh_av))
+        density_cells.copy_to_host(
+            static_cast<double2 *>(PyArray_DATA(cells)), size / 2
         );
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_ValueError, e.what());
@@ -351,18 +370,16 @@ static PyMethodDef asoraMethods[] = {
      "Check if libasora was compiled with PERIODIC"},
     {"num_column_density_banks", asora_num_column_density_banks, METH_VARARGS,
      "Number of q-shells kept in the column density ring buffer"},
-    {"density_to_device", asora_density_to_device, METH_VARARGS,
-     "Copy density field to the device"},
+    {"density_fraction_to_device", asora_density_fraction_to_device, METH_VARARGS,
+     "Copy the interleaved density/average-fraction field to the device"},
     {"photo_table_to_device", asora_photo_table_to_device, METH_VARARGS,
      "Copy radiation tables to the device"},
     {"source_data_to_device", asora_source_data_to_device, METH_VARARGS,
      "Copy source data to the device"},
     {"timestep_data_to_device", asora_timestep_data_to_device, METH_VARARGS,
      "Copy the fields that stay constant over a timestep to the device"},
-    {"average_fraction_to_device", asora_average_fraction_to_device, METH_VARARGS,
-     "Copy the average ionized fraction to the device"},
-    {"average_fraction_to_host", asora_average_fraction_to_host, METH_VARARGS,
-     "Copy the average ionized fraction back to the host"},
+    {"density_fraction_to_host", asora_density_fraction_to_host, METH_VARARGS,
+     "Copy the interleaved density/average-fraction field back to the host"},
     {"chemistry_global_pass", asora_chemistry_global_pass, METH_VARARGS,
      "Solve chemistry ODE"},
     {NULL, NULL, 0, NULL} /* Sentinel */
