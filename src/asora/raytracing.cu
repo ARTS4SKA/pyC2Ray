@@ -6,8 +6,6 @@
 #include "shortchar.cuh"
 #include "utils.cuh"
 
-#include <cuda_runtime.h>
-
 #include <stdexcept>
 
 namespace asora {
@@ -21,11 +19,6 @@ namespace asora {
 namespace {
 
     using namespace asora;
-
-    template <typename T>
-    T *get_data_view(asora::buffer_tag tag) {
-        return asora::device::get(tag).data<T>();
-    }
 
     // Compute the photoionization rate for a given cell based on the incoming column
     // density and the pre-computed photoionization tables.
@@ -108,37 +101,41 @@ namespace {
 namespace asora {
 
     void do_all_sources_gpu(
-        double R, double sigma, double dr, const double *xh_av, double *phi_ion,
-        size_t num_src, size_t m1, double minlogtau, double dlogtau, size_t num_tau,
-        size_t grid_size, size_t block_size
+        double R, double sigma, double dr, double *phi_ion, size_t num_src, size_t m1,
+        double minlogtau, double dlogtau, size_t num_tau, size_t grid_size,
+        size_t block_size
     ) {
         device::check_initialized();
-
-        if (!device::contains(buffer_tag::number_density))
-            throw std::runtime_error(
-                "Number density array must be allocated on the device before calling "
-                "do_all_sources_gpu"
-            );
-
-        if (!device::contains(buffer_tag::source_flux) ||
-            !device::contains(buffer_tag::source_position))
-            throw std::runtime_error(
-                "Source properties must be allocated on the device before calling "
-                "do_all_sources_gpu"
-            );
 
         // Size of grid data
         auto n_cells = m1 * m1 * m1;
 
-        // Allocate (if necessary) and copy the ionized fraction array to the device
-        device::ensure_transfer<double>(buffer_tag::fraction_HII, xh_av, n_cells);
+        namespace tag = resident_tag;
+        const auto &number_density = device::resident<tag::number_density>();
+        const auto &photo_ion_thin = device::resident<tag::photo_ion_thin>();
+        const auto &photo_ion_thick = device::resident<tag::photo_ion_thick>();
+        const auto &source_flux = device::resident<tag::source_flux>();
+        const auto &source_position = device::resident<tag::source_position>();
+        const auto &fraction_HII_avg = device::resident<tag::fraction_HII_avg>();
+        check_array(number_density, n_cells, "number density");
+        // Tables hold num_tau log-spaced entries plus the leading tau = 0 entry.
+        // FIXME: Update when tau = 0 is dropped
+        check_array(photo_ion_thin, num_tau + 1, "photo ionization thin table");
+        check_array(photo_ion_thick, num_tau + 1, "photo ionization thick table");
+        check_array(source_flux, num_src, "source flux");
+        check_array(source_position, 3 * num_src, "source position");
+        check_array(fraction_HII_avg, n_cells, "average ionized fraction");
 
-        // Allocate (if necessary) and zero the output array for the photoionization
-        // rate
-        device::ensure<double>(buffer_tag::photo_ionization_HI, n_cells);
-        auto phi_buf = device::get(buffer_tag::photo_ionization_HI);
-        auto phi_d = phi_buf.data<double>();
-        safe_cuda(cudaMemset(phi_d, 0, phi_buf.size()));
+        // The average ionized fraction is read but never written here. It is seeded
+        // once per timestep by timestep_data_to_device and thereafter updated in
+        // place by the chemistry pass, so no transfer is needed. Ranks that do not
+        // run chemistry refresh it with average_fraction_to_device after the
+        // broadcast.
+        density_maps densities{number_density.data(), fraction_HII_avg.data()};
+
+        // Allocate and zero the output array for the photoionization rate
+        auto phion_HI = device::scratch<double>(n_cells);
+        phion_HI.zero();
 
         // Collect the LUT for the raytracing kernel. If it cannot be built, it is
         // unset and the interpolation parameters are computed on the fly.
@@ -146,38 +143,21 @@ namespace asora {
 
         // The LUT only keeps the cells within reach, so its banks can be smaller than
         // the largest shell. Allocate (if necessary) the column density array.
-        device::ensure<double>(
-            buffer_tag::column_density_HI, grid_size * lut_d.bank_size() * num_banks
-        );
+        auto column_density_HI =
+            device::scratch<double>(grid_size * lut_d.bank_size() * num_banks);
 
-        // Get device pointers for the kernel.
-
-        auto src_flux_d = get_data_view<double>(buffer_tag::source_flux);
-        auto src_pos_d = get_data_view<int>(buffer_tag::source_position);
-
-        density_maps densities{
-            get_data_view<double>(buffer_tag::number_density),
-            get_data_view<double>(buffer_tag::fraction_HII)
-        };
-
-        element_data data_HI{
-            phi_d, get_data_view<double>(buffer_tag::column_density_HI), sigma
-        };
-
-        photo_tables ion_tables{
-            get_data_view<double>(buffer_tag::photo_ion_thin_table),
-            get_data_view<double>(buffer_tag::photo_ion_thick_table)
-        };
-
+        element_data data_HI{phion_HI.data(), column_density_HI.data(), sigma};
+        photo_tables ion_tables{photo_ion_thin.data(), photo_ion_thick.data()};
         linspace<double> logtau{minlogtau, dlogtau, static_cast<size_t>(num_tau)};
 
         // Loop over batches of sources
         for (size_t ns = 0; ns < num_src; ns += grid_size) {
             // Raytrace the current batch of sources in parallel
-            // Consecutive kernel launches are in the same stream and so are serialized
+            // Consecutive kernel launches are in the same stream and so are
+            // serialized
             evolve0D_gpu<<<grid_size, block_size>>>(
-                lut_d, m1, dr, R, ns, num_src, src_pos_d, src_flux_d, data_HI,
-                densities, ion_tables, logtau
+                lut_d, m1, dr, R, ns, num_src, source_position.data(),
+                source_flux.data(), data_HI, densities, ion_tables, logtau
             );
 
             safe_cuda(cudaPeekAtLastError());
@@ -185,7 +165,7 @@ namespace asora {
 
         // Copy the accumulated ionization fraction back to the host.
         // Memcpy blocks until last kernel has finished.
-        phi_buf.copyToHost(phi_ion);
+        phion_HI.copy_to_host(phi_ion);
     }
 
     // ========================================================================

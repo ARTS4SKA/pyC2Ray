@@ -172,6 +172,37 @@ namespace {
         return {dd.x, dd.y, dd.z, std::move(indices)};
     }
 
+    /// Resize a resident array and hand back the device pointer to its storage.
+    template <typename Tag>
+    typename Tag::type* resize_resident(size_t items) {
+        auto& array = asora::device::resident<Tag>();
+        array.resize(items);
+        return array.data();
+    }
+
+    /// The buffer the pool currently holds the cell offsets in, if any.
+    const uint32_t* pool_offsets() {
+        using namespace asora;
+        return device::resident<resident_tag::lut::offsets>().data();
+    }
+
+    /* @brief Give back every resident array backing a LUT.
+     *
+     * Any shortchar_lut built from them dangles afterwards, which the memo detects
+     * through pool_offsets().
+     */
+    void release_lut() {
+        using namespace asora;
+        namespace taglut = resident_tag::lut;
+
+        device::resident<taglut::shells>().reset();
+        device::resident<taglut::offsets>().reset();
+        device::resident<taglut::dx>().reset();
+        device::resident<taglut::dy>().reset();
+        device::resident<taglut::path>().reset();
+        device::resident<taglut::indices>().reset();
+    }
+
     /* @brief Owner of the last look-up table built.
      *
      * The LUT is a pure function of the squared radius and the box size, so repeating
@@ -198,13 +229,7 @@ namespace {
         }
 
        private:
-        /// The buffer the pool currently holds the cell offsets in, if any.
-        static const uint32_t* pool_offsets() {
-            using namespace asora;
-            if (!device::contains(buffer_tag::raylut_offsets)) return nullptr;
-            return device::get(buffer_tag::raylut_offsets).data<uint32_t>();
-        }
-
+        /// Verifies that this LUT is still set and on the device.
         bool alive() const { return _lut.is_set() && _offsets == pool_offsets(); }
 
         int _radius2 = -1;
@@ -288,19 +313,14 @@ namespace asora {
 
     // This constructor is private.
     shortchar_lut::shortchar_lut(size_t n_cells, int q_max) : _q_max{q_max} {
-        device::ensure<uint32_t>(buffer_tag::raylut_shells, q_max + 2);
-        device::ensure<uint32_t>(buffer_tag::raylut_offsets, n_cells);
-        device::ensure<float>(buffer_tag::raylut_dx, n_cells);
-        device::ensure<float>(buffer_tag::raylut_dy, n_cells);
-        device::ensure<float>(buffer_tag::raylut_path, n_cells);
-        device::ensure<index4>(buffer_tag::raylut_indices, n_cells);
+        namespace taglut = resident_tag::lut;
 
-        _shells = device::get(buffer_tag::raylut_shells).data<uint32_t>();
-        _offsets = device::get(buffer_tag::raylut_offsets).data<uint32_t>();
-        _dxs = device::get(buffer_tag::raylut_dx).data<float>();
-        _dys = device::get(buffer_tag::raylut_dy).data<float>();
-        _paths = device::get(buffer_tag::raylut_path).data<float>();
-        _indices = device::get(buffer_tag::raylut_indices).data<index4>();
+        _shells = resize_resident<taglut::shells>(q_max + 2);
+        _offsets = resize_resident<taglut::offsets>(n_cells);
+        _dxs = resize_resident<taglut::dx>(n_cells);
+        _dys = resize_resident<taglut::dy>(n_cells);
+        _paths = resize_resident<taglut::path>(n_cells);
+        _indices = resize_resident<taglut::indices>(n_cells);
     }
 
     /* Differently from raytracing, the LUT fill has no ordering constraints
@@ -321,6 +341,8 @@ namespace asora {
     }
 
     shortchar_lut create_shortchar_interp_lut(double R, size_t N) {
+        namespace taglut = resident_tag::lut;
+
         auto q_max = get_q_max(R, N);
 
         try {
@@ -342,10 +364,8 @@ namespace asora {
             lut_d._bank_size = bank_size;
 
             // The offsets are uploaded directly: the fill only computes the parameters.
-            device::get(buffer_tag::raylut_shells)
-                .copyFromHost(start.data(), sizeof(uint32_t) * start.size());
-            device::get(buffer_tag::raylut_offsets)
-                .copyFromHost(offsets.data(), sizeof(uint32_t) * n_cells);
+            device::resident<taglut::shells>().copy_from_host(start.data());
+            device::resident<taglut::offsets>().copy_from_host(offsets.data());
 
 #ifdef NDEBUG
             constexpr int block_size = 1024;
@@ -367,13 +387,8 @@ namespace asora {
         } catch (const std::exception& e) {
             std::cerr << "Error creating raytracing lookup table: " << e.what()
                       << "; calculating cinterp on the fly\n";
-            // Clear memory
-            device::clear(buffer_tag::raylut_shells);
-            device::clear(buffer_tag::raylut_offsets);
-            device::clear(buffer_tag::raylut_dx);
-            device::clear(buffer_tag::raylut_dy);
-            device::clear(buffer_tag::raylut_path);
-            device::clear(buffer_tag::raylut_indices);
+            // Give the memory back: nothing reads a LUT that was not built.
+            release_lut();
         }
 
         // Unset LUT over the full shells: the parameters are computed on the fly.
@@ -384,19 +399,23 @@ namespace asora {
     }
 
     shortchar_entries copy_shortchar_lut_to_host() {
-        if (!device::contains(buffer_tag::raylut_offsets)) {
+        namespace taglut = resident_tag::lut;
+        auto& offsets = device::resident<taglut::offsets>();
+        if (offsets.empty())
             throw std::runtime_error(
                 "LUT not found on device. Call create_shortchar_interp_lut(R, N) first"
             );
-        }
 
-        auto offsets = device::get(buffer_tag::raylut_offsets);
-        auto dxs = device::get(buffer_tag::raylut_dx);
-        auto dys = device::get(buffer_tag::raylut_dy);
-        auto paths = device::get(buffer_tag::raylut_path);
-        auto indices = device::get(buffer_tag::raylut_indices);
+        auto& dxs = device::resident<taglut::dx>();
+        auto& dys = device::resident<taglut::dy>();
+        auto& paths = device::resident<taglut::path>();
+        auto& indices = device::resident<taglut::indices>();
 
-        auto n_cells = offsets.size<uint32_t>();
+        auto n_cells = offsets.size();
+        assert(
+            dxs.size() == n_cells && dys.size() == n_cells && paths.size() == n_cells &&
+            indices.size() == n_cells
+        );
 
         std::vector<uint32_t> offsets_h(n_cells);
         std::vector<float> dxs_h(n_cells);
@@ -404,11 +423,11 @@ namespace asora {
         std::vector<float> paths_h(n_cells);
         std::vector<index4> indices_h(n_cells);
 
-        offsets.copyToHost(offsets_h.data(), sizeof(uint32_t) * n_cells);
-        dxs.copyToHost(dxs_h.data(), sizeof(float) * n_cells);
-        dys.copyToHost(dys_h.data(), sizeof(float) * n_cells);
-        paths.copyToHost(paths_h.data(), sizeof(float) * n_cells);
-        indices.copyToHost(indices_h.data(), sizeof(index4) * n_cells);
+        offsets.copy_to_host(offsets_h.data());
+        dxs.copy_to_host(dxs_h.data());
+        dys.copy_to_host(dys_h.data());
+        paths.copy_to_host(paths_h.data());
+        indices.copy_to_host(indices_h.data());
 
         shortchar_entries lut;
         lut.reserve(n_cells);

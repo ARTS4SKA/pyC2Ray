@@ -1,6 +1,7 @@
 #pragma once
 
 #include "octahedron.cuh"
+#include "resident_tag.h"
 
 #include <cuda_runtime.h>
 #include <cassert>
@@ -38,15 +39,16 @@ namespace asora {
         __host__ __device__ uint32_t &operator[](size_t i) { return d[i]; }
     };
 
-    struct shortchar_info {
-        /// Geometric factors.
-        float dx;
-        float dy;
-        float path;
+    namespace resident_tag::lut {
 
-        /// Offset indices for short-characteristic interpolation.
-        index4 indices;
-    };
+        struct shells : base<uint32_t> {};   ///< first LUT index of each q-shell
+        struct offsets : base<uint32_t> {};  ///< di, dj, dk offsets
+        struct dx : base<float> {};          ///< dx weight component
+        struct dy : base<float> {};          ///< dy weight component
+        struct path : base<float> {};        ///< path length through each cell
+        struct indices : base<index4> {};    ///< interpolation indices
+
+    }  // namespace resident_tag::lut
 
     /* @brief Compute the geometric factors for short-characteristic interpolation.
      *
@@ -60,6 +62,16 @@ namespace asora {
      * @return A float3 containing {dx, dy, path} geometric factors.
      */
     __host__ __device__ float3 compute_shortchar_factors(int di, int dj, int dk);
+
+    struct shortchar_info {
+        /// Geometric factors.
+        float dx;
+        float dy;
+        float path;
+
+        /// Offset indices for short-characteristic interpolation.
+        index4 indices;
+    };
 
     /* @brief Create a shortchar_info structure from cell offsets already in hand.
      *

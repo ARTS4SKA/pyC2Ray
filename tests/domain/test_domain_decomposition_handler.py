@@ -90,11 +90,13 @@ def test_assign_groups_to_ranks_handles_empty_groups() -> None:
 
 
 def _dd_params(max_num_sources_per_group: int = 4) -> DomainDecompositionParameters:
-    return DomainDecompositionParameters(
-        enabled=True,
-        grouping_algorithm="morton",
-        max_num_sources_per_group=max_num_sources_per_group,
-        morton_bits=10,
+    return DomainDecompositionParameters.from_dict(
+        {
+            "enabled": True,
+            "grouping_algorithm": "morton",
+            "max_num_sources_per_group": max_num_sources_per_group,
+            "morton_bits": 10,
+        }
     )
 
 
@@ -170,13 +172,15 @@ def test_build_groups_rejects_an_unknown_algorithm() -> None:
 
 def test_domain_decomposition_parameters_accept_both_morton_variants() -> None:
     for algorithm in ("morton", "morton_incremental"):
-        params = DomainDecompositionParameters(
-            enabled=True, grouping_algorithm=algorithm
+        params = DomainDecompositionParameters.from_dict(
+            {"enabled": True, "grouping_algorithm": algorithm}
         )
         assert params.grouping_algorithm == algorithm
 
-    with pytest.raises(ValueError, match="not implemented"):
-        DomainDecompositionParameters(enabled=True, grouping_algorithm="nope")
+    with pytest.raises(ValueError):
+        DomainDecompositionParameters.from_dict(
+            {"enabled": True, "grouping_algorithm": "nope"}
+        )
 
 
 def test_update_decomposition_rebuilds_if_inputs_change() -> None:
@@ -196,7 +200,7 @@ def test_update_decomposition_rebuilds_if_inputs_change() -> None:
             src_pos=src_pos,
             src_flux=src_flux,
             N=16,
-            R_max_LLS=r_max,
+            R_max=r_max,
             src_batch_size=8,
             num_tau=100,
             is_domain_periodic=True,
@@ -239,7 +243,7 @@ def test_every_source_survives_the_decomposition() -> None:
     cell_size = 1.0
     # Radius 0.6 cells: neighbouring cells along x intersect (centres 1.0 apart, radii sum
     # to 1.2) while the clusters, 4 cells apart in y and z, do not.
-    r_max_lls = 0.6
+    r_max = 0.6
     src_pos = np.array(
         [[x, plane, plane] for plane in (1, 5, 9, 13) for x in (1, 2, 3, 4, 5)],
         dtype=np.int32,
@@ -251,7 +255,7 @@ def test_every_source_survives_the_decomposition() -> None:
         src_pos=src_pos,
         src_flux=src_flux,
         N=16,
-        R_max_LLS=r_max_lls,
+        R_max=r_max,
         src_batch_size=8,
         num_tau=100,
         is_domain_periodic=True,

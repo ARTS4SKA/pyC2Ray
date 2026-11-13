@@ -1,3 +1,4 @@
+#include <Python.h>
 
 #include "chemistry.h"
 #include "memory.h"
@@ -6,7 +7,6 @@
 #include "shortchar.cuh"
 #include "utils.cuh"
 
-#include <Python.h>
 #include <numpy/arrayobject.h>
 
 /* @file python_module.cu
@@ -16,6 +16,14 @@
  * library. Care has to be taken mostly with the numpy array arguments, since the
  * underlying raw C pointer is passed directly to the C++ functions with little checks.
  */
+
+#define SAFE_CHECK_INITIALIZED()                       \
+    try {                                              \
+        asora::device::check_initialized();            \
+    } catch (const std::exception &e) {                \
+        PyErr_SetString(PyExc_RuntimeError, e.what()); \
+        return nullptr;                                \
+    }
 
 namespace {
 
@@ -107,14 +115,16 @@ namespace {
 
     /// Load numpy array data to device buffer with error handling
     template <typename T>
-    bool load_array_to_device(const PyArrayObject *array, asora::buffer_tag tag) {
-        if (!numpy_check<T>(array)) return false;
+    bool load_array_to_device(
+        const PyArrayObject *np_array, asora::device_array<T> &array
+    ) {
+        if (!numpy_check<T>(np_array)) return false;
 
-        auto data = static_cast<T *>(PyArray_DATA(array));
-        auto size = static_cast<size_t>(PyArray_SIZE(array));
+        auto data = static_cast<T *>(PyArray_DATA(np_array));
+        auto size = static_cast<size_t>(PyArray_SIZE(np_array));
 
         try {
-            asora::device::ensure_transfer<T>(tag, data, size);
+            array.assign(data, size);
         } catch (const std::exception &e) {
             PyErr_SetString(PyExc_ValueError, e.what());
             return false;
@@ -268,7 +278,6 @@ PyObject *asora_device_init([[maybe_unused]] PyObject *self, PyObject *args) {
     if (!PyArg_ParseTuple(args, "|I", &mpi_rank)) return nullptr;
 
     try {
-        // Initialize the device
         asora::device::initialize(mpi_rank);
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_MemoryError, e.what());
@@ -286,6 +295,21 @@ PyObject *asora_device_close([[maybe_unused]] PyObject *self, PyObject *args) {
         asora::device::close();
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_MemoryError, e.what());
+        return nullptr;
+    }
+    Py_RETURN_NONE;
+}
+
+/// Expose asora::device::trim.
+PyObject *asora_device_trim([[maybe_unused]] PyObject *self, PyObject *args) {
+    SAFE_CHECK_INITIALIZED();
+
+    if (!PyArg_ParseTuple(args, "")) return nullptr;
+
+    try {
+        asora::device::trim();
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
         return nullptr;
     }
     Py_RETURN_NONE;
@@ -332,75 +356,124 @@ PyObject *asora_num_column_density_banks(
 
 /// Allocate and copy density grid to the device.
 PyObject *asora_density_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
+    SAFE_CHECK_INITIALIZED();
+
     PyArrayObject *ndens;
-    return PyArg_ParseTuple(args, "O", &ndens) &&  //
-                   load_array_to_device<double>(
-                       ndens, asora::buffer_tag::number_density
-                   )
-               ? Py_NewRef(Py_None)
-               : nullptr;
+    if (!PyArg_ParseTuple(args, "O", &ndens)) return nullptr;
+
+    using namespace asora;
+    namespace tag = resident_tag;
+    if (!load_array_to_device(ndens, device::resident<tag::number_density>()))
+        return nullptr;
+
+    Py_RETURN_NONE;
 }
 
 /// Allocate and copy radiation tables to the device.
 PyObject *asora_photo_table_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
+    SAFE_CHECK_INITIALIZED();
+
     PyArrayObject *thin_table, *thick_table;
-    return PyArg_ParseTuple(args, "OO", &thin_table, &thick_table) &&
-                   load_array_to_device<double>(
-                       thin_table, asora::buffer_tag::photo_ion_thin_table
-                   ) &&
-                   load_array_to_device<double>(
-                       thick_table, asora::buffer_tag::photo_ion_thick_table
-                   )
-               ? Py_NewRef(Py_None)
-               : nullptr;
+    if (!PyArg_ParseTuple(args, "OO", &thin_table, &thick_table)) return nullptr;
+
+    using namespace asora;
+    namespace tag = resident_tag;
+    if (!load_array_to_device(thin_table, device::resident<tag::photo_ion_thin>()) ||
+        !load_array_to_device(thick_table, device::resident<tag::photo_ion_thick>()))
+        return nullptr;
+
+    Py_RETURN_NONE;
 }
 
 /// Allocate and copy source properties to the device.
 PyObject *asora_source_data_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
+    SAFE_CHECK_INITIALIZED();
+
     PyArrayObject *src_pos, *src_flux;
-    return PyArg_ParseTuple(args, "OO", &src_pos, &src_flux) &&
-                   load_array_to_device<int>(
-                       src_pos, asora::buffer_tag::source_position
-                   ) &&
-                   load_array_to_device<double>(
-                       src_flux, asora::buffer_tag::source_flux
-                   )
-               ? Py_NewRef(Py_None)
-               : nullptr;
-}
+    if (!PyArg_ParseTuple(args, "OO", &src_pos, &src_flux)) return nullptr;
 
-/// Ensure mesh-dependent buffers exist with the expected size.
-PyObject *asora_prepare_grid_buffers([[maybe_unused]] PyObject *self, PyObject *args) {
-    size_t m1;
-    int force_matching_size = 0;
-    if (!PyArg_ParseTuple(args, "k|p", &m1, &force_matching_size)) return nullptr;
-
-    auto n_cells = m1 * m1 * m1;
-    try {
-        asora::device::ensure<double>(
-            asora::buffer_tag::number_density, n_cells,
-            static_cast<bool>(force_matching_size)
-        );
-        asora::device::ensure<double>(
-            asora::buffer_tag::fraction_HII, n_cells,
-            static_cast<bool>(force_matching_size)
-        );
-        asora::device::ensure<double>(
-            asora::buffer_tag::photo_ionization_HI, n_cells,
-            static_cast<bool>(force_matching_size)
-        );
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+    using namespace asora;
+    namespace tag = resident_tag;
+    if (!load_array_to_device(src_pos, device::resident<tag::source_position>()) ||
+        !load_array_to_device(src_flux, device::resident<tag::source_flux>()))
         return nullptr;
-    }
+
     Py_RETURN_NONE;
 }
 
+/// Allocate and copy the fields that stay constant for one timestep.
+PyObject *asora_timestep_data_to_device(
+    [[maybe_unused]] PyObject *self, PyObject *args
+) {
+    SAFE_CHECK_INITIALIZED();
+    PyArrayObject *xh, *temp, *clump;
+    if (!PyArg_ParseTuple(args, "OOO", &xh, &temp, &clump)) return nullptr;
+
+    using namespace asora;
+    namespace tag = resident_tag;
+    if (!load_array_to_device(xh, device::resident<tag::fraction_HII>()) ||
+        !load_array_to_device(temp, device::resident<tag::temperature>()) ||
+        !load_array_to_device(clump, device::resident<tag::clumping>()))
+        return nullptr;
+
+    Py_RETURN_NONE;
+}
+
+/// Copy the average ionized fraction to the device, for ranks that receive it.
+PyObject *asora_average_fraction_to_device(
+    [[maybe_unused]] PyObject *self, PyObject *args
+) {
+    SAFE_CHECK_INITIALIZED();
+    PyArrayObject *xh_av;
+    if (!PyArg_ParseTuple(args, "O", &xh_av)) return nullptr;
+
+    using namespace asora;
+    namespace tag = resident_tag;
+    if (!load_array_to_device(xh_av, device::resident<tag::fraction_HII_avg>()))
+        return nullptr;
+
+    Py_RETURN_NONE;
+}
+
+/// Copy the average ionized fraction back to the host, for ranks that broadcast it.
+PyObject *asora_average_fraction_to_host(
+    [[maybe_unused]] PyObject *self, PyObject *args
+) {
+    SAFE_CHECK_INITIALIZED();
+
+    PyArrayObject *xh_av;
+    if (!PyArg_ParseTuple(args, "O", &xh_av)) return nullptr;
+    if (!numpy_check<double>(xh_av)) return nullptr;
+
+    using namespace asora;
+    namespace tag = resident_tag;
+    const auto &frac_HII_avg = device::resident<tag::fraction_HII_avg>();
+    if (!frac_HII_avg) {
+        PyErr_SetString(
+            PyExc_RuntimeError,
+            "average ionized fraction is not allocated on the device"
+        );
+        return nullptr;
+    }
+
+    try {
+        frac_HII_avg.copy_to_host(
+            static_cast<double *>(PyArray_DATA(xh_av)),
+            static_cast<size_t>(PyArray_SIZE(xh_av))
+        );
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_ValueError, e.what());
+        return nullptr;
+    }
+
+    Py_RETURN_NONE;
+}
+
+/// Expose asora::do_all_sources
 PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) {
     double R;
     double sig;
     double dr;
-    PyArrayObject *xh_av;
     PyArrayObject *phi_ion;
     size_t num_src;
     size_t m1;
@@ -411,25 +484,24 @@ PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) 
     size_t block_size = 256;
 
     if (!PyArg_ParseTuple(
-            args, "dddOOkkddkk|k", &R, &sig, &dr, &xh_av, &phi_ion, &num_src, &m1,
-            &minlogtau, &dlogtau, &num_tau, &grid_size, &block_size
+            args, "dddOkkddkk|k", &R, &sig, &dr, &phi_ion, &num_src, &m1, &minlogtau,
+            &dlogtau, &num_tau, &grid_size, &block_size
         ))
         return nullptr;
 
     // Error checking
-    if (!numpy_check<double>(xh_av) || !numpy_check<double>(phi_ion)) return nullptr;
+    if (!numpy_check<double>(phi_ion)) return nullptr;
 
     // Get Array data
-    auto xh_av_data = static_cast<double *>(PyArray_DATA(xh_av));
     auto phi_ion_data = static_cast<double *>(PyArray_DATA(phi_ion));
 
     try {
         asora::do_all_sources_gpu(
-            R, sig, dr, xh_av_data, phi_ion_data, num_src, m1, minlogtau, dlogtau,
-            num_tau, grid_size, block_size
+            R, sig, dr, phi_ion_data, num_src, m1, minlogtau, dlogtau, num_tau,
+            grid_size, block_size
         );
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        PyErr_SetString(PyExc_ValueError, e.what());
         return nullptr;
     }
 
@@ -438,12 +510,8 @@ PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) 
 
 PyObject *asora_chemistry_global_pass([[maybe_unused]] PyObject *self, PyObject *args) {
     double dt;
-    PyArrayObject *temp;
-    PyArrayObject *xh;
-    PyArrayObject *xh_av;
     PyArrayObject *xh_int;
     PyArrayObject *phi_ion;
-    PyArrayObject *clump;
     double bh00;
     double albpow;
     double colh0;
@@ -452,24 +520,22 @@ PyObject *asora_chemistry_global_pass([[maybe_unused]] PyObject *self, PyObject 
     size_t block_size = 512;
 
     if (!PyArg_ParseTuple(
-            args, "dOOOOOOddddd|k", &dt, &temp, &xh, &xh_av, &xh_int, &phi_ion, &clump,
-            &bh00, &albpow, &colh0, &temph0, &abu_c, &block_size
+            args, "dOOddddd|k", &dt, &xh_int, &phi_ion, &bh00, &albpow, &colh0, &temph0,
+            &abu_c, &block_size
         ))
         return nullptr;
 
+    if (!numpy_check<double>(xh_int) || !numpy_check<double>(phi_ion)) return nullptr;
+
     // Get Array data
-    auto xh_data = static_cast<double *>(PyArray_DATA(xh));
-    auto xh_av_data = static_cast<double *>(PyArray_DATA(xh_av));
     auto xh_int_data = static_cast<double *>(PyArray_DATA(xh_int));
-    auto temp_data = static_cast<double *>(PyArray_DATA(temp));
     auto phi_ion_data = static_cast<double *>(PyArray_DATA(phi_ion));
-    auto clump_data = static_cast<double *>(PyArray_DATA(clump));
-    auto n_cells = static_cast<size_t>(PyArray_SIZE(xh));
+    auto n_cells = static_cast<size_t>(PyArray_SIZE(xh_int));
 
     try {
         auto conv_flag = asora::global_pass(
-            xh_data, xh_av_data, xh_int_data, temp_data, phi_ion_data, clump_data, dt,
-            bh00, albpow, colh0, temph0, abu_c, n_cells, block_size
+            xh_int_data, phi_ion_data, dt, bh00, albpow, colh0, temph0, abu_c, n_cells,
+            block_size
         );
         return Py_BuildValue("k", conv_flag);
     } catch (const std::exception &e) {
@@ -506,6 +572,8 @@ static PyMethodDef asora_methods[] = {
     {"device_init", asora_device_init, METH_VARARGS,
      "Initialize device and allocate memory"},
     {"device_close", asora_device_close, METH_VARARGS, "Close device and free memory"},
+    {"device_trim", asora_device_trim, METH_VARARGS,
+     "Return the memory cached by the scratch pool to the device"},
     {"is_device_init", asora_is_device_init, METH_VARARGS,
      "Check if the device is initialized"},
     {"in_domain", asora_in_domain, METH_VARARGS,
@@ -520,9 +588,13 @@ static PyMethodDef asora_methods[] = {
      "Copy radiation tables to the device"},
     {"source_data_to_device", asora_source_data_to_device, METH_VARARGS,
      "Copy source data to the device"},
-    {"prepare_grid_buffers", asora_prepare_grid_buffers, METH_VARARGS,
-     "Ensure grid buffers are allocated with exact size for mesh m1"},
     {"do_all_sources", asora_do_all_sources, METH_VARARGS, "Perform ASORA raytracing"},
+    {"timestep_data_to_device", asora_timestep_data_to_device, METH_VARARGS,
+     "Copy the fields that stay constant over a timestep to the device"},
+    {"average_fraction_to_device", asora_average_fraction_to_device, METH_VARARGS,
+     "Copy the average ionized fraction to the device"},
+    {"average_fraction_to_host", asora_average_fraction_to_host, METH_VARARGS,
+     "Copy the average ionized fraction back to the host"},
     {"chemistry_global_pass", asora_chemistry_global_pass, METH_VARARGS,
      "Solve chemistry ODE"},
     {NULL, NULL, 0, NULL}  // sentinel

@@ -112,7 +112,7 @@ namespace asora {
         auto residual = modf(interp, &integral);
 
         // Determine the table index for linear interpolation.
-        // FIXME: Remove idx == 1
+        // FIXME: update idx == 1 / idx == num() edge cases
         size_t idx = integral;
         return {residual, idx, idx == 1 || idx == logscale.num()};
     }
