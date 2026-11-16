@@ -48,8 +48,6 @@ namespace asora {
                 << "Warning: CUDA memory pools not supported on device " << gpu_id
                 << "; falling back to plain device allocations for scratch buffers\n";
 
-        setup_luts();
-
         // is_initialized() flips here, so a throw above leaves the
         // singleton untouched rather than half-initialized.
         self._gpu_id = gpu_id;

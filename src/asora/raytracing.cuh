@@ -1,6 +1,8 @@
 #pragma once
 
 #include "rates.cuh"
+#include "shortchar.cuh"
+
 #include "resident_tag.h"
 #include "utils.cuh"
 
@@ -51,20 +53,6 @@ namespace asora {
 
         /// Photoionization cross section
         double cross_section;
-
-        /// Shared memory banks for column density interpolation
-        cuda::std::array<const double *__restrict__, num_banks> shared_cdens = {};
-
-        /* @brief Prepare shared column density memory banks for cell interpolation
-         *
-         * Partitions the column density data into shared memory banks compatible with
-         * the asora::cell_interpolator class. The pointers are stored in the
-         * `shared_cdens` member.
-         *
-         * @see cell_interpolator::interpolate() for how these pointers are used in
-         *      interpolation
-         */
-        __device__ void partition_column_density(size_t bank_size);
     };
 
     /* @brief Read-only maps of number and fractional densities
@@ -89,7 +77,6 @@ namespace asora {
      * @param m1 Grid dimension size
      * @param dr Co-moving dimension of a grid pixel
      * @param R_max Maximum propagation radius for photons from the source
-     * @param q_max Maximum octahedral q-shell for raytracing
      * @param ns_start Starting source index for this kernel invocation
      * @param num_src Number of sources to process
      * @param src_pos Array of source positions (integer grid coordinates)
@@ -100,9 +87,10 @@ namespace asora {
      * @param logtau Logarithmically-spaced optical depth grid
      */
     __global__ void evolve0D_gpu(
-        size_t m1, double dr, double R_max, int q_max, size_t ns_start, size_t num_src,
-        const int *src_pos, const double *src_flux, element_data data_HI,
-        density_maps densities, photo_tables ion_tables, linspace<double> logtau
+        shortchar_lut lut, size_t m1, double dr, double R_max, size_t ns_start,
+        size_t num_src, const int *__restrict__ src_pos,
+        const double *__restrict__ src_flux, element_data data_HI,
+        density_maps densities, photo_tables<> ion_tables, linspace<double> logtau
     );
 
 }  // namespace asora

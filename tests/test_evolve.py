@@ -195,8 +195,6 @@ def test_evolve3D_yes_gpu_domain_decomposition_root_rank(
 
 
 def test_evolve3D_yes_gpu_domain_decomposition_non_root_rank(mock_asora: Mock) -> None:
-    # mock_asora = mock_asora_domain_decomposition
-
     # Record the average fraction each raytracing call receives, copied because the
     # buffers are reused across groups and iterations.
     raytraced_local_xh_av: list[np.ndarray] = []

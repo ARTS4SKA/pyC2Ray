@@ -191,12 +191,11 @@ namespace asora {
          * uninitialized. Callers must write every element they later read.
          */
         void resize(size_t items) {
-            if (items > _capacity) {
-                // The allocation about to be replaced takes its elements with
-                // it, so the array is empty until reserve() has succeeded.
-                clear();
-                reserve(items);
-            }
+            // An allocation that gets replaced takes its elements with it, so
+            // the array is empty until reserve() has returned. Where reserve()
+            // is a no-op this is undone on the next line.
+            clear();
+            reserve(items);
             _items = items;
         }
 
@@ -277,10 +276,15 @@ namespace asora {
         }
 
        private:
-        /// Make room for `items` elements through the allocator recorded in the deleter
-        /// The capacity is updated.
+        /* @brief Make room for at least `items` elements through the allocator
+         * recorded in the deleter.
+         *
+         * A no-op when the capacity already suffices, so the capacity only ever
+         * grows. Only the capacity is touched: the element count belongs to
+         * resize().
+         */
         void reserve(size_t items) {
-            if (items == 0) return;
+            if (items <= _capacity) return;
 
             // Release any existing allocation first to free up memory.
             _ptr.reset();

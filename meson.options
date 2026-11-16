@@ -5,3 +5,9 @@ option(
     value: '',
     description: 'Compute capability for target CUDA device',
 )
+option(
+    'periodic',
+    type: 'boolean',
+    value: true,
+    description: 'Use periodic boundary conditions in ASORA ray-tracing',
+)
