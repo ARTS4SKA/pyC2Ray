@@ -5,10 +5,9 @@ import numpy as np
 import pytest
 
 from pyc2ray.asora_core import (
-    average_fraction_to_device,
-    average_fraction_to_host,
     check_libasora,
-    density_to_device,
+    density_fraction_to_device,
+    density_fraction_to_host,
     device_close,
     device_init,
     flat_contiguous,
@@ -80,9 +79,9 @@ def test_flat_contiguous_aliases_c_contiguous_input() -> None:
 def test_flat_contiguous_copies_everything_else(array: np.ndarray) -> None:
     """Anything else is copied, so writes through the result are lost.
 
-    This is correct for arrays the GPU only reads, and the reason an array the GPU
-    writes into must already be flat, C-contiguous and float64 before it is passed
-    down: see average_fraction_to_host.
+    This is correct for arrays the GPU only reads. Wrappers that fill an array the
+    caller owns must therefore not route it through flat_contiguous: see
+    density_fraction_to_host, which assigns through ``.flat`` instead.
     """
     flat_contiguous(array, dtype=np.float64)[:] = 99.0
     assert np.all(array == 0.0)
@@ -139,23 +138,26 @@ def make_args(count: int) -> list[np.ndarray]:
 
 # Every wrapper that pushes arrays, with its entry point and arity.
 TRANSFERS = [
-    pytest.param(density_to_device, "density_to_device", 1, id="density"),
     pytest.param(source_data_to_device, "source_data_to_device", 2, id="source_data"),
     pytest.param(photo_table_to_device, "photo_table_to_device", 2, id="photo_table"),
     pytest.param(
         timestep_data_to_device, "timestep_data_to_device", 3, id="timestep_data"
     ),
+    # The following ones interleave their arguments into one packed array instead
+    # of passing them down one-for-one, so they are covered separately.
     pytest.param(
-        average_fraction_to_device, "average_fraction_to_device", 1, id="average_to_dev"
+        density_fraction_to_device,
+        "density_fraction_to_device",
+        2,
+        id="density_to_dev",
     ),
-    # The following ones require contiguous arrays as input.
     pytest.param(
-        average_fraction_to_host, "average_fraction_to_host", 1, id="average_to_host"
+        density_fraction_to_host, "density_fraction_to_host", 2, id="density_to_host"
     ),
 ]
 
 
-@pytest.mark.parametrize(("wrapper", "entry_point", "count"), TRANSFERS[:-1])
+@pytest.mark.parametrize(("wrapper", "entry_point", "count"), TRANSFERS[:-2])
 def test_transfer_flattens_arguments(
     mock_libasora, wrapper: Callable, entry_point: str, count: int
 ) -> None:
@@ -193,20 +195,56 @@ def test_transfer_requires_library(
         wrapper(*make_args(count))
 
 
+def test_density_fraction_to_device_interleaves(mock_libasora) -> None:
+    """Two logical arrays go down as one packed (n, 2) array, density first."""
+    ndens, xh_av = make_args(2)
+    density_fraction_to_device(ndens, xh_av)
+
+    (cells,) = mock_libasora.density_fraction_to_device.call_args.args
+    assert cells.shape == (ndens.size, 2)
+    assert cells.flags.c_contiguous
+    assert np.array_equal(cells[:, 0], ndens.ravel())
+    assert np.array_equal(cells[:, 1], xh_av.ravel())
+
+
+def test_density_fraction_to_host_unpacks(mock_libasora) -> None:
+    """The packed array is split back into the caller's own arrays, in place."""
+
+    def fill(cells: np.ndarray) -> None:
+        cells[:, 0] = np.arange(8, dtype=np.float64)
+        cells[:, 1] = np.arange(100, 108, dtype=np.float64)
+
+    mock_libasora.density_fraction_to_host.side_effect = fill
+
+    # The destination need not be contiguous, nor share the other one's shape.
+    ndens = np.zeros((2, 2, 2), dtype=np.float64, order="F")
+    xh_av = np.zeros(8, dtype=np.float64)
+    density_fraction_to_host(ndens, xh_av)
+
+    assert np.array_equal(ndens.ravel(), np.arange(8))
+    assert np.array_equal(xh_av, np.arange(100, 108))
+
+
 @requires_libasora
-def test_average_fraction_to_host_round_trip(init_device) -> None:
-    """timestep_data_to_device seeds the average from xh; reading it back into a
-    3D array must fill the caller's array, not a temporary."""
+def test_density_fraction_round_trip(init_device) -> None:
+    """Both halves survive the trip, and reading back into a non-contiguous 3D
+    array must fill the caller's array, not a temporary."""
     shape = (4, 4, 4)
-    xh = np.random.default_rng(0).random(shape)
-    average_fraction_to_device(xh)
+    rng = np.random.default_rng(0)
+    ndens = rng.random(shape)
+    xh = rng.random(shape)
+    density_fraction_to_device(ndens, xh)
 
-    # Contiguous array
-    xh_av = np.zeros(shape, dtype=np.float64, order="C")
-    average_fraction_to_host(xh_av)
-    assert np.array_equal(xh_av, xh)
+    # Contiguous arrays
+    received_ndens = np.zeros(shape, dtype=np.float64, order="C")
+    received_xh = np.zeros(shape, dtype=np.float64, order="C")
+    density_fraction_to_host(received_ndens, received_xh)
+    assert np.array_equal(received_ndens, ndens)
+    assert np.array_equal(received_xh, xh)
 
-    # Non-contiguous array
-    xh_av = np.zeros(shape, dtype=np.float64, order="F")
-    average_fraction_to_host(xh_av)
-    assert np.array_equal(xh_av, xh)
+    # Non-contiguous arrays
+    received_ndens = np.zeros(shape, dtype=np.float64, order="F")
+    received_xh = np.zeros(shape, dtype=np.float64, order="F")
+    density_fraction_to_host(received_ndens, received_xh)
+    assert np.array_equal(received_ndens, ndens)
+    assert np.array_equal(received_xh, xh)
