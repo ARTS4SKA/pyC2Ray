@@ -7,7 +7,7 @@ from typing import Literal
 import numpy as np
 from astropy import constants as cst
 from astropy import units as u
-from astropy.cosmology import FlatLambdaCDM, z_at_value
+from astropy.cosmology import z_at_value
 from mpi4py import MPI
 
 import pyc2ray.constants as c
@@ -32,6 +32,7 @@ from pyc2ray.radiation import (
 )
 from pyc2ray.raytracing import do_raytracing
 from pyc2ray.sinks_model import SinksPhysics
+from pyc2ray.utils.cosmology import PyC2Ray_Cosmology
 from pyc2ray.utils.logutils import PathType, configure_logger
 from pyc2ray.utils.other_utils import (
     find_closest_redshift_index,
@@ -584,6 +585,10 @@ This corresponds to %.3f grid cells.""",
         return self.parameters.cosmology.abu_he
 
     @property
+    def abu_he_mass(self) -> float:
+        return self.parameters.cosmology.abu_he_mass
+
+    @property
     def mean_molecular(self) -> float:
         return self.parameters.cosmology.mean_molecular
 
@@ -748,7 +753,15 @@ Simulation Box size (comoving Mpc): {self.boxsize:.3e}"""
         Ob0 = self.parameters.cosmology.Omega_B
         Tcmb0 = self.parameters.cosmology.cmbtemp
         H0 = 100 * h
-        self.cosmology = FlatLambdaCDM(H0, Om0, Tcmb0, Ob0=Ob0)
+
+        self.cosmology = PyC2Ray_Cosmology(
+            H0=H0,
+            Om0=Om0,
+            Tcmb0=Tcmb0,
+            Ob0=Ob0,
+            abu_h=self.parameters.cosmology.abu_h,
+            abu_he_mass=self.parameters.cosmology.abu_he_mass,
+        )
 
         # Scale quantities to the initial redshift
         if self.cosmological:

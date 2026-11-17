@@ -437,6 +437,7 @@ class CosmologyParameters(YmlParameters):
     cmbtemp: float = _field("Temperature of CMB in Kelvin", 2.726)
     abu_h: float = _field("Hydrogen abundance", 0.926)
     abu_he: float = _field("Helium abundance", 0.074)
+    abu_he_mass: float = _field("Helium mass abundance", 0.2486)
     abu_c: float = _field("Carbon abundance", 7.1e-7)
 
     def __post_init__(self, _build: object) -> None:
