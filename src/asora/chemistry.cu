@@ -4,6 +4,8 @@
 
 #include <thrust/count.h>
 #include <thrust/execution_policy.h>
+#include <cuda/std/array>
+#include <cuda/std/tuple>
 
 namespace {
 
