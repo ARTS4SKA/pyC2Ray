@@ -38,3 +38,12 @@ msun2g: Final[float] = (1 * u.Msun).cgs.value
 
 # proton mass to grams
 m_p: Final[float] = cst.m_p.cgs.value
+
+# frequncy of the 21-cm line in MHz
+nu0: Final[float] = (1420.405751768 * u.MHz).value
+
+# wavelength of the 21-cm line in cm
+lamb0: Final[float] = (cst.c / (1420.405751768 * u.MHz)).to("cm").value
+
+# Einstein A coefficient for the 21-cm line
+A10: Final[float] = (2.85e-15 / u.s).value

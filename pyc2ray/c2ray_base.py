@@ -32,7 +32,7 @@ from pyc2ray.radiation import (
 )
 from pyc2ray.raytracing import do_raytracing
 from pyc2ray.sinks_model import SinksPhysics
-from pyc2ray.utils.cosmology import PyC2Ray_Cosmology
+from pyc2ray.utils.cosmology import Cosmology21cm
 from pyc2ray.utils.logutils import PathType, configure_logger
 from pyc2ray.utils.other_utils import (
     find_closest_redshift_index,
@@ -754,7 +754,7 @@ Simulation Box size (comoving Mpc): {self.boxsize:.3e}"""
         Tcmb0 = self.parameters.cosmology.cmbtemp
         H0 = 100 * h
 
-        self.cosmology = PyC2Ray_Cosmology(
+        self.cosmology = Cosmology21cm(
             H0=H0,
             Om0=Om0,
             Tcmb0=Tcmb0,
