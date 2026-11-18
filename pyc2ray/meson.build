@@ -39,6 +39,7 @@ pyc2ray_sources = [
     'utils/other_utils.py',
     'utils/source_converter.py',
     'utils/sourceutils.py',
+    'utils/cosmology.py',
     'visualization/__init__.py',
     'visualization/common.py',
     'visualization/tomography.py',

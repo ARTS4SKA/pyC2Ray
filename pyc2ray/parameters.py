@@ -435,8 +435,11 @@ class CosmologyParameters(YmlParameters):
     Omega0: float = _field("Omega matter t=0", 0.30966)
     Omega_B: float = _field("Omega baryon t=0", 0.04897)
     cmbtemp: float = _field("Temperature of CMB in Kelvin", 2.726)
+    Neff: float = _field("Number of effective neutrino species", 3.046)
+    m_nu: float = _field("Mass of each neutrino species in eV", 0.0)
     abu_h: float = _field("Hydrogen abundance", 0.926)
     abu_he: float = _field("Helium abundance", 0.074)
+    abu_he_mass: float = _field("Helium mass abundance", 0.2486)
     abu_c: float = _field("Carbon abundance", 7.1e-7)
 
     def __post_init__(self, _build: object) -> None:
