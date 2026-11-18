@@ -20,6 +20,7 @@ class PyC2Ray_Cosmology(FlatLambdaCDM):
     def __init__(
         self,
         cosmo=None,
+        abu_h=0.926,
         abu_he=0.074,
         abu_he_mass=0.2486,
         *,
@@ -36,6 +37,8 @@ class PyC2Ray_Cosmology(FlatLambdaCDM):
         ------------
         cosmo: astropy.cosmology.FlatLambdaCDM
             The cosmology to use for calculations.
+        abu_h: float, optional
+            The primordial hydrogen abundance.
         abu_he: float, optional
             The primordial helium abundance.
         abu_he_mass: float, optional
@@ -81,7 +84,7 @@ class PyC2Ray_Cosmology(FlatLambdaCDM):
 
         # primordial nucleosynthesis quantities
         self.abu_he = abu_he
-        self.abu_h = 1.0 - self.abu_he
+        self.abu_h = abu_h
         self.abu_he_mass = abu_he_mass
         self.abu_h_mass = 1.0 - self.abu_he_mass
         self.mean_molecular = self.abu_h + 4.0 * self.abu_he

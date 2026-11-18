@@ -760,6 +760,7 @@ Simulation Box size (comoving Mpc): {self.boxsize:.3e}"""
             Tcmb0=Tcmb0,
             Ob0=Ob0,
             abu_h=self.parameters.cosmology.abu_h,
+            abu_he=self.parameters.cosmology.abu_he,
             abu_he_mass=self.parameters.cosmology.abu_he_mass,
         )
 
