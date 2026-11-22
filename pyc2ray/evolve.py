@@ -434,6 +434,10 @@ def _evolve3D_asora_domain_decomposition(
 ) -> tuple[FloatArray, FloatArray]:
     """Evolves the ionization fraction over one timestep for the whole grid
 
+    Raytracing runs per source group, on the subdomains assigned to this rank. Chemistry,
+    which is local to each cell, is split independently of the groups: every rank solves
+    it on its own slab of consecutive planes along the first axis.
+
     Warning: Calling this function assumes that the radiation tables have previously been
     copied to the GPU using photo_table_to_device()
 
@@ -519,10 +523,28 @@ Domain decomposition is active
     xh_av_grid = xh_av.reshape(mesh_shape)
     xh_int = xh_av.copy()
 
-    # These global fields are needed only by chemistry (on rank 0 only) and do not change over the timestep.
-    # The average fraction is copied by the subdomain raytracing step.
-    if rank == 0:
-        timestep_data_to_device(xh, temp, clump)
+    # Build grid slabs data for chemistry domain decomposition.
+    # TODO: the slabs are reused across timesteps, so we could move this to the caller and avoid rebuilding them every timestep.
+    N = mesh_shape[0]
+    num_slabs = comm.Get_size() if use_mpi else 1
+    chemistry_slabs = [distribute_jobs(N, num_slabs, r) for r in range(num_slabs)]
+    chemistry_slab_counts = [s.stop - s.start for s in chemistry_slabs]
+    chemistry_slab_displs = [s.start for s in chemistry_slabs]
+    local_chemistry_slab = chemistry_slabs[rank]
+    local_chemistry_cells = slice(
+        local_chemistry_slab.start * N * N, local_chemistry_slab.stop * N * N
+    )
+    has_chemistry_cells = local_chemistry_cells.stop > local_chemistry_cells.start
+    plane_type = MPI.DOUBLE.Create_contiguous(N * N).Commit()
+
+    # Prepare the local data slabs for the chemistry solver
+    local_ndens_slab = flat_contiguous(ndens[local_chemistry_slab])
+    if has_chemistry_cells:
+        timestep_data_to_device(
+            xh_av[local_chemistry_cells],
+            temp[local_chemistry_slab],
+            clump[local_chemistry_slab],
+        )
 
     # Initialize ionization rate array.
     phi_ion = np.zeros(mesh_shape, dtype=np.float64)
@@ -583,33 +605,33 @@ Domain decomposition is active
         # End of loop over source groups assigned to the current rank.
 
         # Collect results from the different MPI processors
-        # TODO: flattening of phi_ion is not needed for the call to chemistry_global_pass which
-        # follows because phi_ion already has a C-contiguous array but we could make that explicit
-        # anyway just for code clarity.
+        # TODO: chemistry only needs this rank's slab of the summed rates, so a Reduce_scatter
+        # (plus a final gather for the returned phi_ion) would move half the data.
         if use_mpi:
             comm.Allreduce(MPI.IN_PLACE, [phi_ion, MPI.DOUBLE], op=MPI.SUM)
 
+        # ---------------------
+        # (2): ODE Solving Step
+        # ---------------------
         if rank == 0:
-            # ---------------------
-            # (2): ODE Solving Step  TODO: Split this to MPI ranks
-            # ---------------------
             logger.info("Doing Chemistry...")
 
-            time_start = time.perf_counter()
+        time_start = time.perf_counter()
 
-            # Raytracing resizes these shared ASORA buffers for each local grid and
-            # leaves the average fraction holding the last subdomain slice. Restore
-            # the global buffers, density field and average fraction for chemistry.
-            density_to_device(ndens)
-            average_fraction_to_device(xh_av)
+        conv_flag = 0
+        if has_chemistry_cells:
+            # Raytracing leaves the density and average fraction of the last local grid
+            # on the device. Restore this rank's slab of both for chemistry.
+            density_to_device(local_ndens_slab)
+            average_fraction_to_device(xh_av[local_chemistry_cells])
 
-            # Apply the global rates to compute the updated ionization fraction.
-            # This function updates the resident average fraction and xh_int.
+            # Apply the rates to this rank's slab. This updates the resident average
+            # fraction and, through the view, this rank's slab of xh_int.
             assert libasora is not None
             conv_flag = libasora.chemistry_global_pass(
                 dt,
-                xh_int,
-                flat_contiguous(phi_ion),
+                xh_int[local_chemistry_cells],
+                flat_contiguous(phi_ion)[local_chemistry_cells],
                 chems.bh00,
                 chems.albpow,
                 chems.colh0,
@@ -617,18 +639,29 @@ Domain decomposition is active
                 chems.abu_c,
             )
 
-            # Raytracing overwrites the device copy with subdomain slices, so the
-            # updated global field has to come back to the host to be broadcast.
-            average_fraction_to_host(xh_av)
+            # Raytracing overwrites the device copy with subdomain slices, so this
+            # rank's slab of the updated average fraction comes back to be gathered.
+            average_fraction_to_host(xh_av[local_chemistry_cells])
 
-            time_end = time.perf_counter()
+        time_end = time.perf_counter()
+        if rank == 0:
             logger.info(f"  took {display_seconds(time_end - time_start)}")
 
-            # ----------------------------
-            # (3): Test Global Convergence
-            # ----------------------------
-            sum_xh1 = xh_int.sum()
-            sum_xh0 = xh_int.size - sum_xh1  # = np.sum(1 - xh_int)
+        # ----------------------------
+        # (3): Test Global Convergence
+        # ----------------------------
+        # Rank 0 decides from the totals over all slabs and broadcasts the decision, so
+        # every rank stops at the same iteration.
+        stats = np.array(
+            [conv_flag, xh_int[local_chemistry_cells].sum()], dtype=np.float64
+        )
+        if use_mpi:
+            comm.Reduce(MPI.IN_PLACE if rank == 0 else stats, stats, op=MPI.SUM, root=0)
+
+        if rank == 0:
+            conv_flag = int(stats[0])
+            sum_xh1 = stats[1]
+            sum_xh0 = num_cells - sum_xh1  # = np.sum(1 - xh_int)
 
             rel_change_xh1 = relative_change(prev_sum_xh1, sum_xh1)
             rel_change_xh0 = relative_change(prev_sum_xh0, sum_xh0)
@@ -652,17 +685,25 @@ Domain decomposition is active
             n_count += 1
 
         if use_mpi:
-            # Broadcast the updated ionization fraction field to all ranks for the next iteration of raytracing.
-            comm.Bcast([xh_av, MPI.DOUBLE], root=0)
-
             # Broadcast convergence to the other ranks.
             converged = comm.bcast(converged, root=0)
 
-    # Only rank 0 computes xh_int, but every rank returns it, and the caller feeds it
-    # back as the initial fraction of the next timestep. One broadcast here is enough:
-    # nothing off-rank reads it inside the loop.
+            # Every rank needs the whole updated average fraction for the next raytracing.
+            if not converged:
+                comm.Allgatherv(
+                    MPI.IN_PLACE,
+                    [xh_av, (chemistry_slab_counts, chemistry_slab_displs), plane_type],
+                )
+
+    # Every rank returns xh_int, and the caller feeds it back as the initial fraction of
+    # the next timestep. One gather here is enough: nothing reads other ranks' slabs
+    # inside the loop.
     if use_mpi:
-        comm.Bcast([xh_int, MPI.DOUBLE], root=0)
+        comm.Allgatherv(
+            MPI.IN_PLACE,
+            [xh_int, (chemistry_slab_counts, chemistry_slab_displs), plane_type],
+        )
+    plane_type.Free()
 
     if rank == 0:
         logger.info(
