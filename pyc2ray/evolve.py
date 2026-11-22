@@ -405,6 +405,49 @@ def _subdomain_raytracing(
     return local_phi_ion.reshape(local_shape)
 
 
+def _slab_chemistry(
+    dt: float,
+    ndens_slab: FloatArray,
+    xh_av_slab: FloatArray,
+    xh_int_slab: FloatArray,
+    phi_ion_slab: FloatArray,
+    chems: ChemistryParams,
+) -> int:
+    """Solve the chemistry on one rank's slab of cells.
+
+    The slabs of xh_av and xh_int must be contiguous views into the global flat arrays:
+    both are updated in place. The timestep data of the slab (initial fraction,
+    temperature, clumping) must already be on the device.
+
+    Returns
+    -------
+    The number of non-converged cells in the slab.
+    """
+    # Raytracing leaves the density and average fraction of the last local grid
+    # on the device. Restore this rank's slab of both for chemistry.
+    density_to_device(ndens_slab)
+    average_fraction_to_device(xh_av_slab)
+
+    # Apply the rates to this rank's slab. This updates the resident average
+    # fraction and, through the view, this rank's slab of xh_int.
+    assert libasora is not None
+    conv_flag = libasora.chemistry_global_pass(
+        dt,
+        xh_int_slab,
+        phi_ion_slab,
+        chems.bh00,
+        chems.albpow,
+        chems.colh0,
+        chems.temph0,
+        chems.abu_c,
+    )
+
+    # Raytracing overwrites the device copy with subdomain slices, so this
+    # rank's slab of the updated average fraction comes back to be gathered.
+    average_fraction_to_host(xh_av_slab)
+    return conv_flag
+
+
 @check_device_init
 def _evolve3D_asora_domain_decomposition(
     dt: float,
@@ -620,28 +663,14 @@ Domain decomposition is active
 
         conv_flag = 0
         if has_chemistry_cells:
-            # Raytracing leaves the density and average fraction of the last local grid
-            # on the device. Restore this rank's slab of both for chemistry.
-            density_to_device(local_ndens_slab)
-            average_fraction_to_device(xh_av[local_chemistry_cells])
-
-            # Apply the rates to this rank's slab. This updates the resident average
-            # fraction and, through the view, this rank's slab of xh_int.
-            assert libasora is not None
-            conv_flag = libasora.chemistry_global_pass(
+            conv_flag = _slab_chemistry(
                 dt,
+                local_ndens_slab,
+                xh_av[local_chemistry_cells],
                 xh_int[local_chemistry_cells],
                 flat_contiguous(phi_ion)[local_chemistry_cells],
-                chems.bh00,
-                chems.albpow,
-                chems.colh0,
-                chems.temph0,
-                chems.abu_c,
+                chems,
             )
-
-            # Raytracing overwrites the device copy with subdomain slices, so this
-            # rank's slab of the updated average fraction comes back to be gathered.
-            average_fraction_to_host(xh_av[local_chemistry_cells])
 
         time_end = time.perf_counter()
         if rank == 0:
