@@ -48,6 +48,7 @@ def call_evolve3D(
     use_mpi: bool = False,
     rank: int = 0,
     domain_decomposition_params: DomainDecompositionParameters | None = None,
+    fields: dict[str, np.ndarray] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     N = 32
 
@@ -70,6 +71,8 @@ def call_evolve3D(
     xh = np.full(shape, 1.2e-3, order="F")
     temp = np.full(shape, 1e4, order="F")
     clump = np.full(shape, 1.0, dtype=np.float64, order="F")
+    if fields is not None:
+        ndens, xh, temp, clump = (fields[k] for k in ("ndens", "xh", "temp", "clump"))
 
     minlogtau, maxlogtau, num_tau = -20.0, 4.0, 20000
     tau, dlogtau = make_tau_table(minlogtau, maxlogtau, num_tau)
@@ -195,15 +198,19 @@ def test_evolve3D_yes_gpu_domain_decomposition_root_rank(
 
 
 def test_evolve3D_yes_gpu_domain_decomposition_non_root_rank(mock_asora: Mock) -> None:
-    # Record the average fraction each raytracing call receives, copied because the
-    # buffers are reused across groups and iterations.
-    raytraced_local_xh_av: list[np.ndarray] = []
+    # Record the average fraction sent to the device, copied because the buffers are
+    # reused across groups and iterations. Raytracing sends each 3D local grid,
+    # chemistry the flat slab of this rank.
+    sent_xh_av: list[np.ndarray] = []
     with patch("pyc2ray.evolve.average_fraction_to_device") as mock_xh_av:
-        mock_xh_av.side_effect = lambda xh_av: raytraced_local_xh_av.append(xh_av)
+        mock_xh_av.side_effect = lambda xh_av: sent_xh_av.append(np.array(xh_av))
 
         with patch("pyc2ray.evolve.comm") as mock_mpi:
             mock_mpi.Allreduce.return_value = None
-            mock_mpi.Bcast.side_effect = lambda buf, root=0: buf[0].fill(0.3)
+            mock_mpi.Allgatherv.side_effect = lambda sendbuf, recvbuf: recvbuf[0].fill(
+                0.3
+            )
+            mock_mpi.Get_size.return_value = 8
             mock_mpi.bcast.side_effect = [False, True]
             call_evolve3D(
                 use_gpu=True,
@@ -221,16 +228,234 @@ def test_evolve3D_yes_gpu_domain_decomposition_non_root_rank(mock_asora: Mock) -
     # Rank 0's convergence decision ended the loop after two iterations.
     assert mock_mpi.bcast.call_count == 2
 
-    # Non-root ranks only allocate receive buffers for the average fraction, so they
-    # must never be read before rank 0's broadcast fills them: the first iteration
-    # raytraces the initial fraction, the second the broadcast one.
-    num_groups = len(raytraced_local_xh_av) // 2
-    assert num_groups > 0 and len(raytraced_local_xh_av) == 2 * num_groups
+    # Every rank solves chemistry on its own slab: with 8 ranks on the 32^3 grid, rank 1
+    # owns planes 4 to 7, i.e. 4 * 32 * 32 cells, in both iterations.
+    slab_cells = 4 * 32 * 32
+    assert mock_asora.chemistry_global_pass.call_count == 2
+    for call in mock_asora.chemistry_global_pass.call_args_list:
+        xh_int, phi_ion = call.args[1], call.args[2]
+        assert xh_int.size == slab_cells and phi_ion.size == slab_cells
+    chemistry_xh_av = [xh_av for xh_av in sent_xh_av if xh_av.ndim == 1]
+    assert [xh_av.size for xh_av in chemistry_xh_av] == [slab_cells, slab_cells]
+
+    # The average fraction is gathered once, after the first (non-converged) iteration,
+    # and the final fraction once after the loop.
+    assert mock_mpi.Allgatherv.call_count == 2
+
+    # The first iteration raytraces the initial fraction, the second the gathered one.
+    raytraced_xh_av = [xh_av for xh_av in sent_xh_av if xh_av.ndim == 3]
+    num_groups = len(raytraced_xh_av) // 2
+    assert num_groups > 0 and len(raytraced_xh_av) == 2 * num_groups
 
     # The initial ionized fraction set in call_evolve3D.
-    for local_xh_av in raytraced_local_xh_av[:num_groups]:
+    for local_xh_av in raytraced_xh_av[:num_groups]:
         np.testing.assert_array_equal(local_xh_av, 1.2e-3)
 
-    # The value broadcast by the mocked rank 0.
-    for local_xh_av in raytraced_local_xh_av[num_groups:]:
+    # The value gathered by the mocked Allgatherv.
+    for local_xh_av in raytraced_xh_av[num_groups:]:
         np.testing.assert_array_equal(local_xh_av, 0.3)
+
+
+def test_evolve3D_yes_gpu_domain_decomposition_root_rank_global_convergence(
+    mock_asora: Mock,
+) -> None:
+    # Rank 0 of 8 owns 4 * 32 * 32 cells. Its chemistry returns a non-converged count and
+    # fills its xh_int slab, while the Reduce stub adds the other ranks' totals. The values
+    # are chosen so that local-only and global totals give opposite decisions on both
+    # criteria (conv_criterion is 3 here):
+    # - iteration 1: local count 1 would converge, the global 6 must not;
+    # - iteration 2: the local sum changes by a third, but the global sum is unchanged, so
+    #   only the global totals converge on the relative change.
+    local_counts, local_fractions = iter([1, 4]), iter([0.5, 0.75])
+    other_ranks_counts, other_ranks_sums = iter([5, 5]), iter([10000.0, 8976.0])
+
+    def fake_chemistry(dt, xh_int, phi_ion, *constants):
+        xh_int.fill(next(local_fractions))
+        return next(local_counts)
+
+    def reduce_from_other_ranks(sendbuf, recvbuf, op, root):
+        recvbuf += (next(other_ranks_counts), next(other_ranks_sums))
+
+    # Record rank 0's decisions. The loop is ended after the two scripted iterations
+    # whatever rank 0 decided, so a wrong decision fails the assertion below instead of
+    # running out of scripted values.
+    decisions: list[bool] = []
+
+    def broadcast_decision(converged, root=0):
+        decisions.append(converged)
+        return converged or len(decisions) == 2
+
+    mock_asora.chemistry_global_pass.side_effect = fake_chemistry
+
+    with patch("pyc2ray.evolve.comm") as mock_mpi:
+        mock_mpi.Reduce.side_effect = reduce_from_other_ranks
+        mock_mpi.Get_size.return_value = 8
+        mock_mpi.bcast.side_effect = broadcast_decision
+        call_evolve3D(
+            use_gpu=True,
+            use_mpi=True,
+            rank=0,
+            domain_decomposition_params=DomainDecompositionParameters.from_dict(
+                {
+                    "enabled": True,
+                    "grouping_algorithm": "morton",
+                    "max_num_sources_per_group": 4,
+                }
+            ),
+        )
+
+    assert decisions == [False, True]
+
+
+def test_evolve3D_yes_gpu_domain_decomposition_uneven_slabs(mock_asora: Mock) -> None:
+    # 32 planes over 6 ranks do not divide evenly: ranks 0-3 get 5 planes, ranks 4-5
+    # get 6. This test runs as rank 4, which owns planes 20 to 25.
+    N = 32
+    planes_per_rank = [5, 5, 5, 5, 6, 6]
+    first_plane_of_rank = [0, 5, 10, 15, 20, 26]
+    my_planes = slice(20, 26)
+
+    # Every cell gets a different value, so the code sees different numbers whenever it
+    # looks at the wrong cells. The fields are stored in Fortran order, as in the
+    # simulation.
+    cell_number = np.arange(N**3, dtype=np.float64).reshape(N, N, N)
+    xh = np.asfortranarray(1e-3 + 1e-9 * cell_number)
+    ndens = np.asfortranarray(1e-4 + 1e-10 * cell_number)
+    temp = np.asfortranarray(1e4 + cell_number)
+    clump = np.asfortranarray(1.0 + 1e-6 * cell_number)
+    phi_ion = 1e-12 * (1.0 + cell_number)
+    my_xh = np.ravel(xh[my_planes])
+
+    # Raytracing is mocked, so the Allreduce writes the photoionization rates directly.
+    def fake_allreduce(sendbuf, recvbuf, op):
+        summed_phi_ion = recvbuf[0]
+        summed_phi_ion[:] = phi_ion
+
+    # Record what is sent. Raytracing sends each local grid's density (flat) and average
+    # fraction (3D); chemistry sends its flat slabs.
+    sent_timestep_data = []
+    sent_densities = []
+    sent_xh_av = []
+
+    # Copies flattened in C order, as the real wrapper sends them.
+    def fake_timestep_data_to_device(xh, temp, clump):
+        sent_timestep_data.append(
+            {
+                "xh": np.ravel(xh).copy(),
+                "temp": np.ravel(temp).copy(),
+                "clump": np.ravel(clump).copy(),
+            }
+        )
+
+    def fake_density_to_device(density):
+        sent_densities.append(np.array(density))
+
+    def fake_average_fraction_to_device(xh_av):
+        sent_xh_av.append(np.array(xh_av))
+
+    # Records the rates chemistry receives and writes results that depend on rank 4's cells:
+    # final fraction = 3 * xh, and average fraction = 2 * xh, which stays on the device
+    # until average_fraction_to_host brings it back.
+    chemistry_received_phi_ion = []
+
+    def fake_chemistry(dt, xh_int, phi_ion, *constants):
+        chemistry_received_phi_ion.append(np.array(phi_ion))
+        xh_int[:] = 3 * my_xh
+        return 1
+
+    def fake_average_fraction_to_host(xh_av):
+        xh_av[:] = 2 * my_xh
+
+    # Fake gather: plays the other five ranks: copies their planes of the result into the buffer, at
+    # the planes the code asks for, and leaves rank 4's planes alone (MPI_IN_PLACE).
+    # The first gather is the average fraction, the second the final fraction.
+    gathers = []
+
+    def fake_allgatherv(sendbuf, recvbuf):
+        buffer, (counts, first_planes), datatype = recvbuf
+        gathers.append(
+            {
+                "counts": counts,
+                "first_planes": first_planes,
+                "plane_bytes": datatype.Get_size(),
+            }
+        )
+        result = 2 * xh if len(gathers) == 1 else 3 * xh
+        buffer_planes = buffer.reshape(N, N, N)  # same memory as buffer
+        for other_rank in [0, 1, 2, 3, 5]:
+            planes = slice(
+                first_planes[other_rank], first_planes[other_rank] + counts[other_rank]
+            )
+            buffer_planes[planes] = result[planes]
+
+    mock_asora.chemistry_global_pass.side_effect = fake_chemistry
+
+    with (
+        patch("pyc2ray.evolve.timestep_data_to_device", fake_timestep_data_to_device),
+        patch("pyc2ray.evolve.density_to_device", fake_density_to_device),
+        patch(
+            "pyc2ray.evolve.average_fraction_to_device", fake_average_fraction_to_device
+        ),
+        patch("pyc2ray.evolve.average_fraction_to_host", fake_average_fraction_to_host),
+        patch("pyc2ray.evolve.comm") as mock_mpi,
+    ):
+        mock_mpi.Allreduce.side_effect = fake_allreduce
+        mock_mpi.Allgatherv.side_effect = fake_allgatherv
+        mock_mpi.Get_size.return_value = 6
+        # Not converged after the first iteration, converged after the second.
+        mock_mpi.bcast.side_effect = [False, True]
+        final_xh, _ = call_evolve3D(
+            use_gpu=True,
+            use_mpi=True,
+            rank=4,
+            domain_decomposition_params=DomainDecompositionParameters.from_dict(
+                {
+                    "enabled": True,
+                    "grouping_algorithm": "morton",
+                    "max_num_sources_per_group": 4,
+                }
+            ),
+            fields={"xh": xh, "ndens": ndens, "temp": temp, "clump": clump},
+        )
+
+    # Check 1: the gathers use every rank's planes
+    # One MPI element is one plane of N * N doubles.
+    assert len(gathers) == 2
+    for gather in gathers:
+        assert gather["counts"] == planes_per_rank
+        assert gather["first_planes"] == first_plane_of_rank
+        assert gather["plane_bytes"] == N * N * 8
+
+    # Check 2: chemistry works on exactly planes 20 to 25
+    # The fields that do not change over the timestep are sent once.
+    assert len(sent_timestep_data) == 1
+    np.testing.assert_array_equal(sent_timestep_data[0]["xh"], my_xh)
+    np.testing.assert_array_equal(
+        sent_timestep_data[0]["temp"], np.ravel(temp[my_planes])
+    )
+    np.testing.assert_array_equal(
+        sent_timestep_data[0]["clump"], np.ravel(clump[my_planes])
+    )
+    # In both iterations: the slab density, the slab average fraction (the initial one,
+    # then the gathered one, 2 * xh) and the slab rates.
+    assert any(np.array_equal(d, np.ravel(ndens[my_planes])) for d in sent_densities)
+    chemistry_xh_av = [xh_av for xh_av in sent_xh_av if xh_av.ndim == 1]
+    assert len(chemistry_xh_av) == 2
+    np.testing.assert_array_equal(chemistry_xh_av[0], my_xh)
+    np.testing.assert_array_equal(chemistry_xh_av[1], 2 * my_xh)
+    assert len(chemistry_received_phi_ion) == 2
+    for received in chemistry_received_phi_ion:
+        np.testing.assert_array_equal(received, np.ravel(phi_ion[my_planes]))
+
+    # Check 3: the gathered fields are complete and in the right place
+    # Each local grid is raytraced once per iteration: first with xh, then with the
+    # gathered average fraction, which must be 2 * xh everywhere.
+    raytraced_xh_av = [xh_av for xh_av in sent_xh_av if xh_av.ndim == 3]
+    half = len(raytraced_xh_av) // 2
+    assert half > 0 and len(raytraced_xh_av) == 2 * half
+    for first_iteration, second_iteration in zip(
+        raytraced_xh_av[:half], raytraced_xh_av[half:]
+    ):
+        np.testing.assert_array_equal(second_iteration, 2 * first_iteration)
+    # The returned final fraction must be 3 * xh on all 32 planes.
+    np.testing.assert_array_equal(final_xh, 3 * xh)
