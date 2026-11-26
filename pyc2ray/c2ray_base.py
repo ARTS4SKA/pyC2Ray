@@ -17,6 +17,7 @@ from pyc2ray.asora_core import (
     is_periodic_mode_active,
     photo_table_to_device,
 )
+from pyc2ray.cosmology import Cosmology21cm
 from pyc2ray.domain.domain_decomposition_handler import DomainDecompositionHandler
 from pyc2ray.evolve import ChemistryParams, evolve3D
 from pyc2ray.parameters import (
@@ -32,7 +33,6 @@ from pyc2ray.radiation import (
 )
 from pyc2ray.raytracing import do_raytracing
 from pyc2ray.sinks_model import SinksPhysics
-from pyc2ray.utils.cosmology import Cosmology21cm
 from pyc2ray.utils.logutils import PathType, configure_logger
 from pyc2ray.utils.other_utils import (
     find_closest_redshift_index,
@@ -577,22 +577,6 @@ This corresponds to %.3f grid cells.""",
         return self.parameters.chemistry.convergence_fraction
 
     @property
-    def abu_h(self) -> float:
-        return self.parameters.cosmology.abu_h
-
-    @property
-    def abu_he(self) -> float:
-        return self.parameters.cosmology.abu_he
-
-    @property
-    def abu_he_mass(self) -> float:
-        return self.parameters.cosmology.abu_he_mass
-
-    @property
-    def mean_molecular(self) -> float:
-        return self.parameters.cosmology.mean_molecular
-
-    @property
     def loss_fraction(self) -> float:
         return self.parameters.raytracing.loss_fraction
 
@@ -607,6 +591,10 @@ This corresponds to %.3f grid cells.""",
     @property
     def cosmological(self) -> bool:
         return self.parameters.cosmology.cosmological
+
+    @property
+    def mean_molecular(self) -> float:
+        return self.parameters.cosmology.mean_molecular
 
     @cached_property
     def chem_parms(self) -> ChemistryParams:
@@ -747,15 +735,14 @@ Simulation Box size (comoving Mpc): {self.boxsize:.3e}"""
         # TODO: need to give the index of start for the redshift loop in the main
 
     def _cosmology_init(self) -> None:
-        """Set up cosmology from parameters (H0, Omega,..)"""
+        """Set up cosmology from parameters"""
         h = self.parameters.cosmology.h
         Om0 = self.parameters.cosmology.Omega0
         Ob0 = self.parameters.cosmology.Omega_B
         Tcmb0 = self.parameters.cosmology.cmbtemp
-        H0 = 100 * h
 
         self.cosmology = Cosmology21cm(
-            H0=H0,
+            H0=100 * h,
             Om0=Om0,
             Tcmb0=Tcmb0,
             Ob0=Ob0,
@@ -827,8 +814,8 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}""")
             self.minlogtau, self.maxlogtau, self.num_tau
         )
 
-        ion_freq_HI = c.ev2fr * self.ion_energy_HI
-        ion_freq_HeII = c.ev2fr * self.ion_energy_HeII
+        ion_freq_HI = c.ev2hz * self.ion_energy_HI
+        ion_freq_HeII = c.ev2hz * self.ion_energy_HeII
         source_params = self.parameters.photo.source_type
 
         radsource: BlackBodyBase
@@ -846,7 +833,7 @@ Om0 = {Om0:.4f}, Ob0   = {Ob0:.4f}""")
 
             logger.info(f"""Using Black-Body sources with effective temperature T = {radsource.temp:.1e} K and Radius {(radsource.R_star / cst.R_sun.to("cm")).value: .3e} rsun
 Spectrum Frequency Range: {freq_min:.3e} to {freq_max:.3e} Hz
-This is Energy:           {freq_min / c.ev2fr:.3e} to {freq_max / c.ev2fr:.3e} eV""")
+This is Energy:           {freq_min / c.ev2hz:.3e} to {freq_max / c.ev2hz:.3e} eV""")
         elif self.source_type == "powerlaw":
             # TODO: power law spectra is already implemented in radiation folder
             pass
@@ -867,7 +854,7 @@ This is Energy:           {freq_min / c.ev2fr:.3e} to {freq_max / c.ev2fr:.3e} e
             logger.info(
                 """Using Yggdrasil Models for SED, Zackrisson et al ('11), for PopIII or PopII sources
 Spectrum Frequency Range: {freq_min:.3e} to {freq_max:.3e} Hz
-This is Energy:           {freq_min / c.ev2fr:.3e} to {freq_max / c.ev2fr:.3e} eV"""
+This is Energy:           {freq_min / c.ev2hz:.3e} to {freq_max / c.ev2hz:.3e} eV"""
             )
         else:
             raise NameError("Unknown source type : ", self.source_type)
