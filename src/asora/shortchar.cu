@@ -343,7 +343,7 @@ namespace asora {
     shortchar_lut create_shortchar_interp_lut(double R, size_t N) {
         namespace taglut = resident_tag::lut;
 
-        auto q_max = get_q_max(R, N);
+        auto q_max = max_q_shells(R, N);
 
         try {
             if (q_max < 0 || q_max > Q_MAX)

@@ -189,6 +189,125 @@ PyObject *asora_index2shell([[maybe_unused]] PyObject *self, PyObject *args) {
     return Py_BuildValue("ii", q, s);
 }
 
+/// Expose asora::device::initialize
+PyObject *asora_device_init([[maybe_unused]] PyObject *self, PyObject *args) {
+    unsigned int mpi_rank = 0;
+    if (!PyArg_ParseTuple(args, "|I", &mpi_rank)) return nullptr;
+
+    try {
+        asora::device::initialize(mpi_rank);
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_MemoryError, e.what());
+        return nullptr;
+    }
+
+    Py_RETURN_NONE;
+}
+
+/// Expose asora::device::close
+PyObject *asora_device_close([[maybe_unused]] PyObject *self, PyObject *args) {
+    if (!PyArg_ParseTuple(args, "")) return nullptr;
+
+    try {
+        asora::device::close();
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_MemoryError, e.what());
+        return nullptr;
+    }
+    Py_RETURN_NONE;
+}
+
+/// Expose asora::device::trim.
+PyObject *asora_device_trim([[maybe_unused]] PyObject *self, PyObject *args) {
+    SAFE_CHECK_INITIALIZED();
+
+    if (!PyArg_ParseTuple(args, "")) return nullptr;
+
+    try {
+        asora::device::trim();
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return nullptr;
+    }
+    Py_RETURN_NONE;
+}
+
+/// Expose asora::device::is_initialized.
+PyObject *asora_is_device_init([[maybe_unused]] PyObject *self, PyObject *args) {
+    if (!PyArg_ParseTuple(args, "")) return nullptr;
+
+    return Py_NewRef(asora::device::is_initialized() ? Py_True : Py_False);
+}
+
+/// Expose asora::device::available_memory.
+PyObject *asora_available_memory([[maybe_unused]] PyObject *self, PyObject *args) {
+    if (!PyArg_ParseTuple(args, "")) return nullptr;
+
+    size_t available_mem = 0;
+    try {
+        available_mem = asora::device::available_memory();
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return nullptr;
+    }
+
+    return Py_BuildValue("K", available_mem);
+}
+
+/// Expose asora::max_resident_blocks.
+PyObject *asora_max_resident_blocks([[maybe_unused]] PyObject *self, PyObject *args) {
+    size_t block_size = asora::default_block_size;
+    if (!PyArg_ParseTuple(args, "|k", &block_size)) return nullptr;
+
+    size_t blocks = 0;
+    try {
+        blocks = asora::max_resident_blocks(block_size);
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return nullptr;
+    }
+
+    return Py_BuildValue("k", blocks);
+}
+
+/// Expose asora::max_q_shells.
+PyObject *asora_max_q_shells([[maybe_unused]] PyObject *self, PyObject *args) {
+    double R;
+    size_t m1;
+    if (!PyArg_ParseTuple(args, "dk", &R, &m1)) return nullptr;
+
+    int q_max;
+    try {
+        q_max = asora::max_q_shells(R, m1);
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return nullptr;
+    }
+
+    return Py_BuildValue("i", q_max);
+}
+
+/// Expose the number of q-shells kept in the column density ring buffer.
+PyObject *asora_num_column_density_banks(
+    [[maybe_unused]] PyObject *self, [[maybe_unused]] PyObject *args
+) {
+    if (!PyArg_ParseTuple(args, "")) return nullptr;
+
+    return PyLong_FromSize_t(asora::num_banks);
+}
+
+/// Expose whether the extension was compiled with periodic boundary mode.
+PyObject *asora_is_periodic_mode_active(
+    [[maybe_unused]] PyObject *self, [[maybe_unused]] PyObject *args
+) {
+    if (!PyArg_ParseTuple(args, "")) return nullptr;
+
+    if constexpr (asora::periodic_conditions)
+        Py_RETURN_TRUE;
+    else
+        Py_RETURN_FALSE;
+}
+
 PyObject *asora_create_shortchar_lut([[maybe_unused]] PyObject *self, PyObject *args) {
     double R = 0.0;
     int N = 0;
@@ -272,56 +391,6 @@ PyObject *asora_compute_shortchar_factors(
     return Py_BuildValue("fff", factors.x, factors.y, factors.z);
 }
 
-/// Expose asora::device::initialize
-PyObject *asora_device_init([[maybe_unused]] PyObject *self, PyObject *args) {
-    unsigned int mpi_rank = 0;
-    if (!PyArg_ParseTuple(args, "|I", &mpi_rank)) return nullptr;
-
-    try {
-        asora::device::initialize(mpi_rank);
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_MemoryError, e.what());
-        return nullptr;
-    }
-
-    Py_RETURN_NONE;
-}
-
-/// Expose asora::device::close
-PyObject *asora_device_close([[maybe_unused]] PyObject *self, PyObject *args) {
-    if (!PyArg_ParseTuple(args, "")) return nullptr;
-
-    try {
-        asora::device::close();
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_MemoryError, e.what());
-        return nullptr;
-    }
-    Py_RETURN_NONE;
-}
-
-/// Expose asora::device::trim.
-PyObject *asora_device_trim([[maybe_unused]] PyObject *self, PyObject *args) {
-    SAFE_CHECK_INITIALIZED();
-
-    if (!PyArg_ParseTuple(args, "")) return nullptr;
-
-    try {
-        asora::device::trim();
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
-        return nullptr;
-    }
-    Py_RETURN_NONE;
-}
-
-/// Expose asora::device::is_initialized.
-PyObject *asora_is_device_init([[maybe_unused]] PyObject *self, PyObject *args) {
-    if (!PyArg_ParseTuple(args, "")) return nullptr;
-
-    return Py_NewRef(asora::device::is_initialized() ? Py_True : Py_False);
-}
-
 PyObject *asora_in_domain([[maybe_unused]] PyObject *self, PyObject *args) {
     int3 pos, off;
     size_t N;
@@ -331,42 +400,6 @@ PyObject *asora_in_domain([[maybe_unused]] PyObject *self, PyObject *args) {
         return nullptr;
 
     return Py_NewRef(asora::in_domain(pos, off, N) ? Py_True : Py_False);
-}
-
-/// Expose whether the extension was compiled with periodic boundary mode.
-PyObject *asora_is_periodic_mode_active(
-    [[maybe_unused]] PyObject *self, [[maybe_unused]] PyObject *args
-) {
-    if (!PyArg_ParseTuple(args, "")) return nullptr;
-
-    if constexpr (asora::periodic_conditions)
-        Py_RETURN_TRUE;
-    else
-        Py_RETURN_FALSE;
-}
-
-/// Expose the number of q-shells kept in the column density ring buffer.
-PyObject *asora_num_column_density_banks(
-    [[maybe_unused]] PyObject *self, [[maybe_unused]] PyObject *args
-) {
-    if (!PyArg_ParseTuple(args, "")) return nullptr;
-
-    return PyLong_FromSize_t(asora::num_banks);
-}
-
-/// Allocate and copy density grid to the device.
-PyObject *asora_density_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
-    SAFE_CHECK_INITIALIZED();
-
-    PyArrayObject *ndens;
-    if (!PyArg_ParseTuple(args, "O", &ndens)) return nullptr;
-
-    using namespace asora;
-    namespace tag = resident_tag;
-    if (!load_array_to_device(ndens, device::resident<tag::number_density>()))
-        return nullptr;
-
-    Py_RETURN_NONE;
 }
 
 /// Allocate and copy radiation tables to the device.
@@ -380,6 +413,21 @@ PyObject *asora_photo_table_to_device([[maybe_unused]] PyObject *self, PyObject 
     namespace tag = resident_tag;
     if (!load_array_to_device(thin_table, device::resident<tag::photo_ion_thin>()) ||
         !load_array_to_device(thick_table, device::resident<tag::photo_ion_thick>()))
+        return nullptr;
+
+    Py_RETURN_NONE;
+}
+
+/// Allocate and copy density grid to the device.
+PyObject *asora_density_to_device([[maybe_unused]] PyObject *self, PyObject *args) {
+    SAFE_CHECK_INITIALIZED();
+
+    PyArrayObject *ndens;
+    if (!PyArg_ParseTuple(args, "O", &ndens)) return nullptr;
+
+    using namespace asora;
+    namespace tag = resident_tag;
+    if (!load_array_to_device(ndens, device::resident<tag::number_density>()))
         return nullptr;
 
     Py_RETURN_NONE;
@@ -480,12 +528,11 @@ PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) 
     double minlogtau;
     double dlogtau;
     size_t num_tau;
-    size_t grid_size;
-    size_t block_size = 256;
+    size_t block_size = asora::default_block_size;
 
     if (!PyArg_ParseTuple(
             args, "dddOkkddkk|k", &R, &sig, &dr, &phi_ion, &num_src, &m1, &minlogtau,
-            &dlogtau, &num_tau, &grid_size, &block_size
+            &dlogtau, &num_tau, &block_size
         ))
         return nullptr;
 
@@ -498,7 +545,7 @@ PyObject *asora_do_all_sources([[maybe_unused]] PyObject *self, PyObject *args) 
     try {
         asora::do_all_sources_gpu(
             R, sig, dr, phi_ion_data, num_src, m1, minlogtau, dlogtau, num_tau,
-            grid_size, block_size
+            block_size
         );
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_ValueError, e.what());
@@ -559,6 +606,23 @@ static PyMethodDef asora_methods[] = {
      "Convert cartesian coordinates to shell indexing"},
     {"index2shell", asora_index2shell, METH_VARARGS,
      "Convert a cumulative cell index to shell indexing"},
+    {"device_init", asora_device_init, METH_VARARGS,
+     "Initialize device and allocate memory"},
+    {"device_close", asora_device_close, METH_VARARGS, "Close device and free memory"},
+    {"device_trim", asora_device_trim, METH_VARARGS,
+     "Return the memory cached by the scratch pool to the device"},
+    {"is_device_init", asora_is_device_init, METH_VARARGS,
+     "Check if the device is initialized"},
+    {"available_memory", asora_available_memory, METH_VARARGS,
+     "Get available device memory in bytes"},
+    {"max_resident_blocks", asora_max_resident_blocks, METH_VARARGS,
+     "Get the number of raytracing blocks the device can keep resident"},
+    {"max_q_shells", asora_max_q_shells, METH_VARARGS,
+     "Get the maximum number of shells for a given radius and grid size"},
+    {"num_column_density_banks", asora_num_column_density_banks, METH_VARARGS,
+     "Number of q-shells kept in the column density ring buffer"},
+    {"is_periodic_mode_active", asora_is_periodic_mode_active, METH_VARARGS,
+     "Check if libasora was compiled with PERIODIC"},
     {"create_shortchar_lut", asora_create_shortchar_lut, METH_VARARGS,
      "Create LUT for ASORA short-characteristic interpolation; returns q_max"},
     {"get_shortchar_lut", asora_get_shortchar_lut, METH_VARARGS,
@@ -569,32 +633,21 @@ static PyMethodDef asora_methods[] = {
      "Unpack cell offset from a single integer"},
     {"compute_shortchar_factors", asora_compute_shortchar_factors, METH_VARARGS,
      "Compute geometric factors for short-characteristic interpolation"},
-    {"device_init", asora_device_init, METH_VARARGS,
-     "Initialize device and allocate memory"},
-    {"device_close", asora_device_close, METH_VARARGS, "Close device and free memory"},
-    {"device_trim", asora_device_trim, METH_VARARGS,
-     "Return the memory cached by the scratch pool to the device"},
-    {"is_device_init", asora_is_device_init, METH_VARARGS,
-     "Check if the device is initialized"},
     {"in_domain", asora_in_domain, METH_VARARGS,
      "Check if a cell offset from a source is within the domain"},
-    {"is_periodic_mode_active", asora_is_periodic_mode_active, METH_VARARGS,
-     "Check if libasora was compiled with PERIODIC"},
-    {"num_column_density_banks", asora_num_column_density_banks, METH_VARARGS,
-     "Number of q-shells kept in the column density ring buffer"},
-    {"density_to_device", asora_density_to_device, METH_VARARGS,
-     "Copy density field to the device"},
     {"photo_table_to_device", asora_photo_table_to_device, METH_VARARGS,
      "Copy radiation tables to the device"},
+    {"density_to_device", asora_density_to_device, METH_VARARGS,
+     "Copy density field to the device"},
     {"source_data_to_device", asora_source_data_to_device, METH_VARARGS,
      "Copy source data to the device"},
-    {"do_all_sources", asora_do_all_sources, METH_VARARGS, "Perform ASORA raytracing"},
     {"timestep_data_to_device", asora_timestep_data_to_device, METH_VARARGS,
      "Copy the fields that stay constant over a timestep to the device"},
     {"average_fraction_to_device", asora_average_fraction_to_device, METH_VARARGS,
      "Copy the average ionized fraction to the device"},
     {"average_fraction_to_host", asora_average_fraction_to_host, METH_VARARGS,
      "Copy the average ionized fraction back to the host"},
+    {"do_all_sources", asora_do_all_sources, METH_VARARGS, "Perform ASORA raytracing"},
     {"chemistry_global_pass", asora_chemistry_global_pass, METH_VARARGS,
      "Solve chemistry ODE"},
     {NULL, NULL, 0, NULL}  // sentinel
