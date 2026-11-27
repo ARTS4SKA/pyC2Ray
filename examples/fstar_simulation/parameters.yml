@@ -110,6 +110,8 @@ Cosmology:
   abu_h: 0.926
   # Helium abundance
   abu_he: 0.074
+  # Helium mass abundance
+  abu_he_mass: 0.2486
   # Carbon abundance
   abu_c: 7.1e-07
 

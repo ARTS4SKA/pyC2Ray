@@ -2,12 +2,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 from astropy import units as u
 
-ev2fr = 0.241838e15 * u.Hz / u.eV
+ev2hz = 0.241838e15 * u.Hz / u.eV
 eth0, ethe0, ethe1 = 13.598 * u.eV, 24.587 * u.eV, 54.416 * u.eV
 
-ion_freq_HI = (ev2fr * eth0).to("Hz").value
-ion_freq_HeI = (ev2fr * ethe0).to("Hz").value
-ion_freq_HeII = (ev2fr * ethe1).to("Hz").value
+ion_freq_HI = (ev2hz * eth0).to("Hz").value
+ion_freq_HeI = (ev2hz * ethe0).to("Hz").value
+ion_freq_HeII = (ev2hz * ethe1).to("Hz").value
 
 NumBndin1, NumBndin2, NumBndin3 = 1, 26, 20
 NumFreqBnd = NumBndin1 + NumBndin2 + NumBndin3

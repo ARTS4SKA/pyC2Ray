@@ -19,10 +19,13 @@ TABLES_DIR: Final[Path] = Path(__file__).parent / "tables"
 year2s: Final[float] = (1 * u.yr).cgs.value
 
 # eV to Frequency (Hz)
-ev2fr: Final[float] = 1.0 / (cst.h * u.Hz).to("eV").value
+ev2hz: Final[float] = 1.0 / (cst.h * u.Hz).to("eV").value
 
 # eV to Kelvin
 ev2k: Final[float] = 1.0 / (cst.k_B * u.K).to("eV").value
+
+# Frequency (Hz) to K
+hz2k: Final[float] = (cst.h * u.Hz / cst.k_B).to("K").value
 
 # parsec in cm
 pc: Final[float] = (1 * u.pc).cgs.value

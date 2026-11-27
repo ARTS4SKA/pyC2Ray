@@ -9,6 +9,7 @@ pyc2ray_sources = [
     'c2ray_test.py',
     'c2ray_thesan.py',
     'constants.py',
+    'cosmology.py',
     'domain/__init__.py',
     'domain/cost_model.py',
     'domain/domain_decomposition_handler.py',
